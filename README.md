@@ -13,6 +13,13 @@ and shows how to **run the device against your own cloud** or **talk to the read
 > vendor's cloud; the goal is local ownership and interoperability.
 
 ---
+This repo is made together with these explanation videos:(click on the image)
+
+[![YoutubeVideo](https://img.youtube.com/vi/2jMEaRuSJ18/0.jpg)](https://www.youtube.com/watch?v=2jMEaRuSJ18)
+
+
+[![YoutubeVideo](https://img.youtube.com/vi/U4Vvf0kHnEk/0.jpg)](https://www.youtube.com/watch?v=U4Vvf0kHnEk)
+
 
 ### 👉 Just want your own cloud working? → **[QUICKSTART.md](QUICKSTART.md)** (1‑to‑Done, start to finish)
 
