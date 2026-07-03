@@ -37,8 +37,8 @@ flowchart LR
 
 ## Zwei Wege, das Gateway auf die eigene Cloud zu bringen
 Beide brauchen den **16‑Byte‑TEA‑Key** des Geräts (siehe [04 · Schritt 0](04-eigene-cloud.md)):
-1. **Aus der Cloud** (Gerät auf deinem Konto): Email + Passwort + BLE‑Name `OBI-XXXXXX` →
-   `python tools/fetch_tea_key.py` gibt den Key aus.
+1. **Aus der Cloud** (jedes OBI‑Login + BLE‑Name — das Gerät muss **nicht** auf deinem Konto sein):
+   Email + Passwort + BLE‑Name `OBI-XXXXXX` → `python tools/fetch_tea_key.py` gibt den Key aus.
 2. **Per UART** (physischer Zugang): cmd 49 auf der Konsole, oder ein Klick im
    [Web‑Tool](../06-tools/obi_uart_config.html).
 

@@ -44,8 +44,11 @@ Nur **prod** ist öffentlich erreichbar; stage/dev sind intern.
 | Energy‑Consumers | GET/POST/PUT/DELETE | `/energy-consumers/{id}` |
 
 ## Woher die Geräte‑Secrets kommen
-- **`/bluetooth-challenges`** gibt den **16‑Byte‑TEA‑Key** eines Geräts auf deinem Konto zurück (der
-  „Cloud‑Weg" in [04-eigene-cloud.md](04-eigene-cloud.md#schritt-0--tea-key-des-geräts-holen)).
+- **`/bluetooth-challenges`** gibt den **16‑Byte‑TEA‑Key** des Geräts zurück, das per
+  `btChallengeId = OBI-XXXXXX` (sein BLE‑Advertising‑Name) benannt wird. In der Praxis braucht das nur ein
+  gültiges OBI‑Login **plus den BLE‑Namen** — der Endpunkt prüft **nicht**, ob das Gerät auf deinem Konto
+  registriert ist (schwache Autorisierung, siehe [03-security.md](03-security.md)). Das ist der
+  „Cloud‑Weg" in [04-eigene-cloud.md](04-eigene-cloud.md#schritt-0--tea-key-des-geräts-holen).
 - **`/device-provisionings`** liefert die AWS‑IoT‑Fleet‑Provisioning‑Credentials, die die App ans Gerät
   pusht: `{caPem, certificatePem, privateKey, clusterEndpointUri, provisioningTemplateName}`. Für die
   eigene Cloud erzeugst du die stattdessen selbst mit `gen_certs.py`.
@@ -78,6 +81,39 @@ Alle Telemetrie ist **JSON** (nicht binär). Drei Formen:
 > Flashen einer Bridge auf 1.2.1: sie füllte auch **`negative_energy`** (Einspeisung), das unter 1.0.x
 > `null` war. Die `1.0.x`‑Form oben ist, was dieses Repo primär dokumentiert; Feldnamen auf `1.2.x`
 > gegenprüfen.
+
+#### Firmware‑1.2.x‑Telemetrie, reversed (schema_version 2)
+Dekodiert aus den 1.2.1‑Buildern `mqtt_build_bridge_state_v12`, `mqtt_build_outlet_state` und dem Sensor‑
+Publisher. Der Geräte‑Typ in `paired_devices[].device` ist `"meter"` (Typ `0x10`) oder `"outlet"` (`0x11`).
+
+**Bridge‑Heartbeat** → `$aws/rules/EnergyTrackingBridge/<UUID>/state` (cmd 3) und `…Heartbeat/…/state` (cmd 4):
+```json
+{ "uuid": "<bridge>", "hardware_version": "6.0.0", "firmware_version": "1.2.1", "ota": null,
+  "schema_version": 2,
+  "paired_devices": [
+    { "device": "meter",  "battery": 100, "uuid": "<sensor>", "hardware_version": "6.0.0",
+      "firmware_version": "57.0.0", "online": true, "ota": null, "upload_interval": 300 },
+    { "device": "outlet", "battery": null, "uuid": "<outlet>", "hardware_version": "…",
+      "firmware_version": "…", "online": true, "ota": null, "upload_interval": 300,
+      "relay": "on" | "off" | null } ] }
+```
+Ein `meter` trägt `battery`; ein `outlet` trägt `relay` (und `battery: null`). `online` = Last‑Seen‑Zähler ≥ 2.
+
+**Smart‑Outlet‑State** → `$aws/rules/EnergyTrackingOutlet/bridge/<UUID>/outlet/<UUID>/state` (cmd 6) und
+`dt/…/outlet/<UUID>/state/live` (cmd 8) — `mqtt_build_outlet_state`:
+```json
+{ "uuid": "<outlet>", "bridge_uuid": "<bridge>", "hardware_version": "…", "firmware_version": "…",
+  "online": true, "timestamp": 1700000000, "rssi": -70,
+  "relay": "on" | "off",
+  "voltage": 230000,        // mV
+  "current": 512,           // mA
+  "power": 118,             // W (signed)
+  "energy": 12345,          // kumulativer Bezug
+  "negative_energy": 0 }    // kumulative Einspeisung
+```
+Das Reader/Meter‑Energie‑Payload ist gegenüber 1.0.x unverändert, außer `sensor_upload_interval`→
+`upload_interval` im Bridge‑State; die Werte kommen aus `processMeterData` (`pos power / neg power / power /
+interval / time delta`, plus `softver, hardver, voltage, infrared, lowpower`).
 
 **Sensor‑Energie (die Zählerwerte)** → `$aws/rules/EnergyTrackingSensor/bridge/<UUID>/sensor/<UUID>/state`
 (periodisch, alle `sensor_upload_interval` s) und `dt/…/sensor/<UUID>/state/live` (live; jeder 6. Frame ist

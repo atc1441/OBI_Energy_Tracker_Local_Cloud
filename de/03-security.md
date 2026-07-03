@@ -9,6 +9,15 @@ Der UART0‑Config‑Kanal (`C5 5C …`) hat **keine Authentifizierung**. `cmd 4
 (GPIO20/21) kommt, besitzt den BLE‑Kanal und das WLAN. Zugleich der vorgesehene Self‑Host‑Einstieg. Siehe
 [03-uart-config.md](03-uart-config.md).
 
+## 1b. TEA‑Key per BLE‑Namen aus der Cloud abrufbar (schwache Autorisierung)
+Der Hersteller‑Endpunkt `POST /bluetooth-challenges` gibt den **16‑Byte‑TEA‑Key** eines Geräts allein anhand
+seines BLE‑Advertising‑Namens (`btChallengeId = OBI-XXXXXX`) und **irgendeinem gültigen OBI‑Login** zurück —
+er prüft **nicht**, ob das anfragende Konto das Gerät besitzt oder je eingebunden hat. Da der `OBI-XXXXXX`‑
+Name auf dem Aufkleber steht und in jedem BLE‑Advertisement gesendet wird, kann jeder, der das Gerät sieht
+(oder seinen Namen kennt) und ein OBI‑Konto hat, den Key des BLE‑Steuerkanals holen. Zusammen mit #1 ist der
+Per‑Device‑TEA‑Key faktisch wenig geheim. Für Besitzer: bevorzugt den UART‑Weg nutzen und den BLE‑Key als
+nicht‑geheim behandeln. Siehe [03-cloud-api.md](03-cloud-api.md#woher-die-geräte-secrets-kommen).
+
 ## 2. LoRa‑Link ohne echte Krypto
 Frames sind mit **1‑Byte‑XOR** obfuskiert, dessen Key die Byte‑Summe des Klartext‑Handles ist — aus jedem
 mitgeschnittenen Frame ableitbar. Der ECDH (cmd 32) gated den Datenfluss, sein Secret wird nie genutzt.

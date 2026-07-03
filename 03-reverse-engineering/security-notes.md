@@ -9,6 +9,15 @@ The UART0 config channel (`C5 5C …`) has **no authentication**. `cmd 49` retur
 the console pins (GPIO20/21) owns the BLE channel and the WiFi. This is also the intended self-host entry
 point. See [uart-config-protocol.md](uart-config-protocol.md).
 
+## 1b. TEA key retrievable from the cloud by BLE name (weak authorization)
+The vendor endpoint `POST /bluetooth-challenges` returns a device's **16-byte TEA key** given only its BLE
+advertising name (`btChallengeId = OBI-XXXXXX`) and **any valid OBI login** — it does **not** verify that
+the requesting account owns (or has ever enrolled) that device. Since the `OBI-XXXXXX` name is printed on
+the label and broadcast in every BLE advertisement, anyone who can see the device (or guess/observe its
+name) and holds any OBI account can pull the key that protects its BLE control channel. Combined with #1,
+the per-device TEA key is effectively low-secrecy. Owners: prefer the UART path and treat the BLE key as
+not-secret. See [cloud-api.md](cloud-api.md#where-the-device-secrets-come-from).
+
 ## 2. LoRa link has no real crypto
 Frames are obfuscated with a **single-byte XOR** whose key is the byte-sum of the cleartext 3-byte handle
 — derivable from any captured frame. The ECDH exchange (cmd 32) gates data flow but its shared secret is

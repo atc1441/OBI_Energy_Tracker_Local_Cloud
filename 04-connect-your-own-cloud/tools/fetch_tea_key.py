@@ -2,8 +2,9 @@
 """
 fetch_tea_key.py — get a bridge's 16-byte TEA key from the OBI cloud.
 
-For a device that is on YOUR OWN OBI account. Dead simple: run it and enter three things —
-your OBI account email, your password, and the device's BLE name (OBI-XXXXXX).
+Needs any valid OBI login + the device's BLE name (OBI-XXXXXX). The device does NOT have to be on
+your account -- the cloud endpoint returns the key for whatever OBI-XXXXXX you ask for (weak auth).
+Use it for your own device. Dead simple: run it and enter three things -- email, password, BLE name.
 
     python fetch_tea_key.py
 
@@ -54,14 +55,14 @@ def get_tea_key(email, password, ble_name):
 
 
 def main():
-    print("Fetch the TEA key for a bridge on YOUR OBI account.\n")
+    print("Fetch a device's TEA key via the OBI cloud (any login + the BLE name).\n")
     email    = (sys.argv[1] if len(sys.argv) > 1 else input("OBI account email:    ")).strip()
     password = (sys.argv[2] if len(sys.argv) > 2 else getpass.getpass("OBI account password: "))
     ble_name = (sys.argv[3] if len(sys.argv) > 3 else input("Device BLE name (OBI-XXXXXX): ")).strip()
 
     key = get_tea_key(email, password, ble_name)
     if not key:
-        sys.exit("no key returned (is the device on this account?)")
+        sys.exit("no key returned (check the BLE name OBI-XXXXXX and that the login succeeded)")
     print("\nTEA key for %s:\n  %s" % (ble_name, key))
 
 

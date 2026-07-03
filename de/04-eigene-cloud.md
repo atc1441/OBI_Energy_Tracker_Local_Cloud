@@ -10,10 +10,11 @@ bleiben und dir das Gerät gehört.
 Alles Weitere braucht den **16‑Byte‑TEA‑Key** (verschlüsselt den BLE‑Steuerkanal; einer pro Gerät). Zwei
 Wege — der Cloud‑Weg ist am einfachsten und braucht keinen Hardware‑Zugang.
 
-### Weg 1 — aus der Cloud (am einfachsten, Gerät auf deinem Konto)
-Du brauchst nur **drei Dinge, die du schon hast**: OBI‑Email, OBI‑Passwort und den **BLE‑Namen** — das
-`OBI-XXXXXX`, das das Gerät ausstrahlt (in jedem BLE‑Scanner / auf dem Aufkleber). Dieser Name *ist* die
-Challenge‑ID.
+### Weg 1 — aus der Cloud (am einfachsten — nur OBI‑Login + BLE‑Name nötig)
+Du brauchst nur **drei Dinge**: eine OBI‑Email, das Passwort und den **BLE‑Namen** — das `OBI-XXXXXX`, das
+das Gerät ausstrahlt (in jedem BLE‑Scanner / auf dem Aufkleber). Dieser Name *ist* die Challenge‑ID. Das
+Gerät muss **nicht** auf deinem Konto registriert sein — jedes gültige OBI‑Login funktioniert, und der
+Endpunkt gibt den Key für das angefragte `OBI-XXXXXX` zurück (siehe [03-security.md](03-security.md)).
 
 ```mermaid
 flowchart LR
@@ -46,7 +47,7 @@ TOKEN=$(curl -s https://www.obi.de/regi/auth/api/public/login \
   -H 'content-type: application/json' -H 'x-app-type: b2c' \
   -d '{"email":"deine@mail.de","password":"DEIN_PASSWORT","country":"DE"}' | jq -r .token)
 
-# ② Gerät-Key anfragen (Gerät muss auf deinem Konto sein)
+# ② Gerät-Key anfragen (jedes gültige Login + BLE-Name; keine Konto-Besitz-Prüfung)
 curl -s https://energy-tracking-backend.prod-eks.dbs.obi.solutions/bluetooth-challenges \
   -H "authorization: Bearer $TOKEN" \
   -H 'accept: application/vnd.obi.companion.energy-tracking.bluetooth-challenge.v1+json' \
@@ -54,7 +55,8 @@ curl -s https://energy-tracking-backend.prod-eks.dbs.obi.solutions/bluetooth-cha
   -d '{"btChallengeId":"OBI-XXXXXX"}'
 # → {"key":"<32 hex = dein 16-Byte-TEA-Key>"}
 ```
-Die Cloud gibt den Key nur für ein Gerät heraus, das deinem Konto gehört.
+Hinweis: der Endpunkt prüft **keinen** Geräte‑Besitz — ein gültiges Login plus der `OBI-XXXXXX`‑Name reicht,
+um den Key des Geräts zu bekommen. Nutze es für dein eigenes Gerät. (Der UART‑Weg unten braucht gar keine Cloud.)
 
 ### Weg 2 — per UART (physischer Zugang zum Gateway)
 Ohne Konto: `C5 5C 00 08 00 00 FE 31` (cmd 49) auf UART0 senden, oder im

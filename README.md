@@ -56,8 +56,8 @@ flowchart LR
 Both need the device's **16-byte TEA key** (per bridge, encrypts the BLE control channel). Getting it is
 easy — pick one:
 
-1. **From the cloud** (device on your account): enter **email + password + BLE name `OBI-XXXXXX`** →
-   `python tools/fetch_tea_key.py` prints the key. See
+1. **From the cloud** (any OBI login + the BLE name — the device need **not** be on your account): enter
+   **email + password + BLE name `OBI-XXXXXX`** → `python tools/fetch_tea_key.py` prints the key. See
    [04 · Step 0](04-connect-your-own-cloud/README.md#step-0--get-the-devices-tea-key).
 2. **From UART** (physical access): read it off the console — send cmd 49 or click one button in the
    [web tool](06-tools/obi_uart_config.html). See [03 · UART config](03-reverse-engineering/uart-config-protocol.md).

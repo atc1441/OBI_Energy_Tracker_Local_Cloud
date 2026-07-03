@@ -132,7 +132,8 @@ Stock‑Image zum Flashen holst du mit `tools/obi_ota_download.py`.
   Schritt 4 (BLE‑Push) **erneut** ausführen, **dann** den Server neu starten. Server‑Cert muss die IP
   enthalten, zu der das Gerät verbindet (macht `gen_certs.py --host` automatisch).
 - **Gerät verbindet nicht:** WLAN korrekt gesetzt? Firewall auf **8883** offen? Broker‑Host im selben Netz?
-- **Kein TEA‑Key aus der Cloud:** Gerät muss auf **deinem** Konto sein. Sonst Weg B (UART).
+- **Kein TEA‑Key aus der Cloud:** Login/Passwort korrekt? BLE‑Name exakt `OBI-XXXXXX`? Das Gerät muss
+  **nicht** auf deinem Konto sein — ein gültiges Login + der BLE‑Name reichen. Sonst Weg B (UART).
 - Chain prüfen: `openssl verify -CAfile pki/ca.pem pki/server.crt` → muss `OK` sagen.
 
 ---

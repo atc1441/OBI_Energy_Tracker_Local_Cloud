@@ -88,7 +88,8 @@ Details: [04 · Flash your own firmware](04-connect-your-own-cloud/README.md#fla
 - **`bad certificate` / mbedTLS `-0x2700`:** every `gen_certs.py` run makes a **new CA** → re‑run Step 4,
   then restart the server. Server cert must cover the IP the device connects to (`--host` handles it).
 - **No connect:** WiFi set? firewall on 8883? host on the same network?
-- **No key from cloud:** the device must be on **your** account; otherwise use the UART way.
+- **No key from cloud:** check your login and the exact BLE name (`OBI-XXXXXX`) — the device need **not**
+  be on your account. Otherwise use the UART way.
 - Verify chain: `openssl verify -CAfile pki/ca.pem pki/server.crt` → `OK`.
 
 Full docs: [04 · Connect your own cloud](04-connect-your-own-cloud/README.md).

@@ -8,8 +8,10 @@ explicitly authorized to test**.
 - **No real secrets.** Every key, certificate, UUID, device ID and MAC in this repo is a **placeholder**
   (for example `00112233445566778899AABBCCDDEEFF`). Generate your own PKI with the provided tools.
 - **No attack tooling against the vendor cloud.** The goal here is to run *your* device against *your*
-  own infrastructure. Where the vendor cloud is mentioned it is only to explain the device's behaviour;
-  obtaining a device key through the vendor is described as an *authorized-account* action.
+  own infrastructure. Where the vendor cloud is mentioned it is only to explain the device's behaviour.
+  Note the cloud's key endpoint only requires a valid OBI login plus the device's BLE name and does **not**
+  verify device ownership (documented as a security finding) — only use it to retrieve the key of a device
+  **you own**.
 - **Radio / RF law.** 868 MHz usage is region-regulated (e.g. EU ISM duty-cycle limits). Operate within
   your local rules and only with your own reader/bridge.
 - **Firmware images — not distributed.** For safety, **no vendor firmware binaries** (`.bin`/`.elf`) are

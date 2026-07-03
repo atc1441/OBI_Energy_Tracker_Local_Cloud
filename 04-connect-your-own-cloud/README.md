@@ -11,11 +11,12 @@ runs AWS-IoT-style fleet provisioning against your broker.
 Everything else needs the bridge's **16-byte TEA key** (it encrypts the BLE control channel; one key per
 device). There are two ways to get it — the cloud way is the easiest and needs no access to the hardware.
 
-### Way 1 — from the cloud (easiest, for a device on your own account)
+### Way 1 — from the cloud (easiest — just needs an OBI login + the BLE name)
 
-You only need **three things you already have**: your OBI account email, your OBI password, and the
-device's **BLE name** — the `OBI-XXXXXX` it advertises (visible in any BLE scanner or on the label). That
-name *is* the challenge id.
+You only need **three things**: an OBI account email, its password, and the device's **BLE name** — the
+`OBI-XXXXXX` it advertises (visible in any BLE scanner or on the label). That name *is* the challenge id.
+The device does **not** have to be registered to your account — any valid OBI login works and the endpoint
+returns the key for whatever `OBI-XXXXXX` you ask for (see [security notes](../03-reverse-engineering/security-notes.md)).
 
 ```mermaid
 flowchart LR
@@ -48,7 +49,7 @@ TOKEN=$(curl -s https://www.obi.de/regi/auth/api/public/login \
   -H 'content-type: application/json' -H 'x-app-type: b2c' \
   -d '{"email":"you@example.com","password":"YOUR_PASSWORD","country":"DE"}' | jq -r .token)
 
-# ② ask the cloud for this device's key (device must be on your account)
+# ② ask the cloud for this device's key (any valid login + the BLE name; no account-ownership check)
 curl -s https://energy-tracking-backend.prod-eks.dbs.obi.solutions/bluetooth-challenges \
   -H "authorization: Bearer $TOKEN" \
   -H 'accept: application/vnd.obi.companion.energy-tracking.bluetooth-challenge.v1+json' \
@@ -56,7 +57,8 @@ curl -s https://energy-tracking-backend.prod-eks.dbs.obi.solutions/bluetooth-cha
   -d '{"btChallengeId":"OBI-XXXXXX"}'
 # → {"key":"<32 hex = your 16-byte TEA key>"}
 ```
-The cloud gates the key by account, so this only returns a key for a bridge you own.
+Note: the endpoint does **not** check device ownership — a valid login plus the `OBI-XXXXXX` name is enough
+to get that device's key. Use it for your own device. (Physically, the UART path below needs no cloud at all.)
 
 ### Way 2 — from UART (physical access to the gateway)
 No account needed: send `C5 5C 00 08 00 00 FE 31` (cmd 49) on UART0, or click **"Read IDs & TEA key"** in
