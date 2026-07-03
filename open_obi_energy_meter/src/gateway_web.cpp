@@ -52,11 +52,20 @@ static const char *mqttStateText(int s) {
 static String jstr(const char *s) { String o = "\""; for (; *s; s++) { if (*s == '"' || *s == '\\') o += '\\'; o += *s; } return o + "\""; }
 
 static String readersJson() {
+  // Sort used readers by their 3-byte handle so the web UI always lists them in
+  // the same, stable order (matches the shown "id").
+  int order[MAX_READERS], n = 0;
+  for (int i = 0; i < MAX_READERS; i++) if (readers[i].used) order[n++] = i;
+  for (int a = 0; a < n - 1; a++)
+    for (int b = 0; b < n - 1 - a; b++)
+      if (memcmp(readers[order[b]].handle, readers[order[b + 1]].handle, 3) > 0) {
+        int t = order[b]; order[b] = order[b + 1]; order[b + 1] = t;
+      }
+
   String j = "[";
   bool first = true;
-  for (int i = 0; i < MAX_READERS; i++) {
-    Reader &r = readers[i];
-    if (!r.used) continue;
+  for (int k = 0; k < n; k++) {
+    Reader &r = readers[order[k]];
     if (!first) j += ",";
     first = false;
     uint32_t age = (millis() - r.lastSeenMs) / 1000;
