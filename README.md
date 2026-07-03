@@ -48,6 +48,7 @@ flowchart LR
 |---|---|---|
 | **Point the bridge at your own MQTTS server** | Get the bridge's TEA key → push your CA + certs + broker URL over BLE → run your own broker | [04 · Connect your own cloud](04-connect-your-own-cloud/) |
 | **Read the meter reader directly over 868 MHz** | Skip the cloud entirely; speak the LoRa protocol to the reader | [05 · LoRa direct (868 MHz)](05-lora-direct-868mhz/) |
+| **Replace the bridge with your own ESP32** ✅ | Full mini-gateway firmware: pair readers, decode energy, web + MQTT, set interval, flash readers over the air | [Open OBI Energy Meter](open_obi_energy_meter/) |
 | **Pair a reader to a bridge** ✅ | `SensorScan` (find) → `SensorBind` (pair) → `Sensor` (status) — verified on hardware | [07 · Add a reader](07-add-a-reader/) |
 | **Understand / extend the firmware** | Protocols, frame formats, memory maps + IDA setup (bring your own dump) | [03 · Reverse engineering](03-reverse-engineering/) · [firmware/](firmware/) |
 
@@ -78,6 +79,7 @@ bootloader) — see [04](04-connect-your-own-cloud/) and [03 · firmware layout]
 05-lora-direct-868mhz/      Talk to the reader over the air, no cloud
 06-tools/                   Web tools (UART config, BLE gateway) + BLE TEA codec
 07-add-a-reader/            Pair a meter reader over BLE (SensorScan / SensorBind / Sensor) — verified
+open_obi_energy_meter/      Standalone ESP32 + SX1262 firmware that REPLACES the bridge (web + MQTT + reader OTA)
 firmware/                   Loader script + IDA notes (no vendor binaries — dump your own)
 ```
 
@@ -106,8 +108,9 @@ firmware/                   Loader script + IDA notes (no vendor binaries — du
   `energy` **unit** still open. Roadmap in [STATUS.md](STATUS.md).
 
 ## Security posture (factual summary)
-The BLE control channel uses **TEA** (single 16-byte key per device); the **LoRa link is only obfuscated
-with a single-byte XOR** whose key is derivable from the cleartext frame header (an ECDH exchange exists
-but its shared secret is never used). The plaintext **UART config channel can read/write the TEA key and
-WiFi credentials**. Details and impact are in [03-reverse-engineering](03-reverse-engineering/). These
-notes exist so owners can secure and self-host their own units.
+The BLE control channel uses **TEA** (single 16-byte key per device, and that key is also retrievable from
+the vendor cloud with just a login + the BLE name — no ownership check). The **LoRa link is only obfuscated
+with a single-byte XOR on `1.0.x`/`3x.x`** (its ECDH shared secret goes unused) — but **`1.2.x` fixed this**:
+LoRa is TEA-encrypted with a per-device ECDH-derived key. The plaintext **UART config channel can read/write
+the TEA key and WiFi credentials**. Details and impact are in
+[03-reverse-engineering](03-reverse-engineering/). These notes exist so owners can secure and self-host their units.

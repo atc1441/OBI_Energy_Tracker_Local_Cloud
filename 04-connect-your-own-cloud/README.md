@@ -14,7 +14,7 @@ device). There are two ways to get it — the cloud way is the easiest and needs
 ### Way 1 — from the cloud (easiest — just needs an OBI login + the BLE name)
 
 You only need **three things**: an OBI account email, its password, and the device's **BLE name** — the
-`OBI-XXXXXX` it advertises (visible in any BLE scanner or on the label). That name *is* the challenge id.
+`OBI-XXXXXX` it advertises (read it with any BLE scanner — it is *not* printed on the device). That name *is* the challenge id.
 The device does **not** have to be registered to your account — any valid OBI login works and the endpoint
 returns the key for whatever `OBI-XXXXXX` you ask for (see [security notes](../03-reverse-engineering/security-notes.md)).
 
@@ -101,10 +101,11 @@ flowchart TD
    (Or use the web tool [../06-tools/obi_gateway_ble.html](../06-tools/obi_gateway_ble.html) and paste the
    `SetTMPCertificate` fields from `ble_config.json`.)
 
-   > ⚠️ **Pair the reader now, in this session.** BLE shuts off once the device goes operational, and there
-   > is **no MQTT way to add a reader** ([07](../07-add-a-reader/README.md)). `--pair-sensor` runs
-   > `SensorScan` → `SensorBind` before pushing the cloud config; a bound reader takes a few minutes to
-   > report. Add `--sensor-uuid <uuid>` to bind a specific one.
+   > ⚠️ **Pair the reader now, or re-open BLE later with the button.** BLE shuts off once the device goes
+   > operational, and there is **no MQTT way to add a reader** ([07](../07-add-a-reader/README.md)).
+   > `--pair-sensor` runs `SensorScan` → `SensorBind` before pushing the cloud config; a bound reader takes a
+   > few minutes to report. Add `--sensor-uuid <uuid>` to bind a specific one. If you'd rather add sensors (or
+   > reconfigure) later, **hold the gateway's button for ~5 s to re-activate BLE** and reconnect anytime.
 
 After step 3 the bridge joins your WiFi, connects `mqtts://<your-host>:8883`, runs
 `CreateKeysAndCertificate` + `RegisterThing`, gets your **permanent** cert back, reconnects with it, and

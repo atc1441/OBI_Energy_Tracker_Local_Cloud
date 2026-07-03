@@ -1,0 +1,4 @@
+.pio/
+build.log
+upload.log
+*.log

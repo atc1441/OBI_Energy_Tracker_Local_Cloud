@@ -15,7 +15,7 @@ Schritt für Schritt abarbeiten. Alle Keys/Zertifikate hier sind Platzhalter —
   pip install cryptography bleak paho-mqtt
   ```
 - Bluetooth am Rechner (für den BLE‑Push) **oder** ein Handy/Browser mit Web‑Bluetooth.
-- Den **BLE‑Namen** des Geräts: `OBI-XXXXXX` (steht auf dem Aufkleber / in jedem BLE‑Scanner).
+- Den **BLE‑Namen** des Geräts: `OBI-XXXXXX` (mit einem beliebigen BLE‑Scanner auslesen — er steht *nicht* auf dem Gerät).
 
 ---
 
@@ -82,9 +82,9 @@ eintragen, und die `SetTMPCertificate`‑Felder aus `pki/ble_config.json` einfü
 
 ---
 
-## Schritt 5 — Fertig ✅ — Zählerdaten ankommen sehen
+## Schritt 5 — Fertig ✅ — die eintreffenden Zählerdaten beobachten
 Nach Schritt 4 verbindet sich die Bridge in dein WLAN → zu `mqtts://<deine-ip>:8883` → macht
-`CreateKeysAndCertificate` + `RegisterThing` → bekommt dein festes Cert → reconnectet → published Telemetrie.
+`CreateKeysAndCertificate` + `RegisterThing` → bekommt dein festes Cert → verbindet neu → sendet Telemetrie.
 **Lass das `mqtts_server.py`‑Fenster offen und schau ins Log.** Der Reihe nach:
 
 ```text
@@ -93,7 +93,7 @@ PUBLISH   $aws/certificates/create/json        # Fleet-Provisioning
   -> reply .../accepted
 PUBLISH   $aws/rules/EnergyTrackingBridge/<BRIDGE>/state
             {"uuid":"<BRIDGE>", ... "paired_sensor":[{"sensor":{... "sensor_upload_interval":300}}]}
-...ein paar Minuten nachdem der Reader über LoRa gejoint ist...
+...ein paar Minuten nachdem sich der Reader per LoRa verbunden hat...
 PUBLISH   $aws/rules/EnergyTrackingSensor/bridge/<BRIDGE>/sensor/<SENSOR>/state
             {"uuid":"<SENSOR>","bridge_uuid":"<BRIDGE>", ... "timestamp":1700000000,
              "rssi":-83,"battery":100,"energy":12345678,"negative_energy":null,"power":null}

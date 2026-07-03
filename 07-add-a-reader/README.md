@@ -15,10 +15,14 @@ You need the device's TEA key first ([04 · Step 0](../04-connect-your-own-cloud
 > live capture. Two details are still open: whether `SensorScan` can return **multiple** readers in one
 > response (only one reader was present in the capture), and the exact units of `last_seen`.
 
-> ⚠️ **Pairing is BLE-only and time-limited.** There is **no MQTT/cloud command to add a reader**
-> (scan & bind exist only on the BLE JSON channel, proto 1). The bridge's BLE ("BleSwitch") is active only
-> during a **setup window** (~120 s / while connected) and shuts off once it is operational — so **pair in
-> the same BLE session as the cloud setup, or before it.** This is built into
+> ⚠️ **Pairing is BLE-only.** There is **no MQTT/cloud command to add a reader** (scan & bind exist only on
+> the BLE JSON channel, proto 1). The bridge's BLE ("BleSwitch") is only active during a **setup window**
+> (~120 s / while connected) and shuts off once the gateway is operational.
+>
+> 🔘 **Re-opening BLE anytime — hold the button ~5 s.** On the real gateway, **press and hold the button for
+> ~5 seconds to re-activate BLE**. This re-opens the setup window for both **general configuration** and
+> **adding more sensors** — so you do *not* have to pair in the very first setup session. Whenever you want to
+> add another reader (or reconfigure), hold the button, reconnect over BLE, then scan/bind. Built into
 > [`ble_provision.py --pair-sensor`](../04-connect-your-own-cloud/tools/ble_provision.py) — see the
 > [own-cloud flow](../04-connect-your-own-cloud/README.md).
 
@@ -118,8 +122,28 @@ Notes from the capture:
   send `SensorScanRequest` → pick a UUID → `SensorBindRequest {uuid}` → verify with `SensorRequest`.
 - Codec: [../06-tools/obi_ble_codec.py](../06-tools/obi_ble_codec.py) to build/parse the encrypted frames.
 
+## Firmware 1.2.x — the `Devices*` family and bind internals (reversed)
+`1.2.x` keeps the single-device `SensorScan`/`SensorBind`/`SensorRequest`/`Unbind` **and** adds a generic,
+multi-device family for its mixed sensor+**outlet** world: `DevicesScanRequest`, `DevicesBindRequest`,
+`DevicesUnbindRequest`, `DevicesRequest` (BLE cmds 9–12). The difference is just single vs **batch**:
+
+- `SensorBindRequest {uuid}` binds **one** device.
+- `DevicesBindRequest {devices:[{uuid},{uuid},…]}` binds **many** in one call and replies
+  `{"type":"DevicesBind","data":{"devices":[{uuid},…]}}` (only the ones that bound), logging
+  `dealBindDevices success, bind N/M devices`.
+
+Both go through the same core **`lora_scan_bind`** (firmware `ScanBind`):
+1. the `uuid` must already be in the **LoRa scan list** (populated by a prior `…ScanRequest` when the device
+   announced over LoRa) — else `bind device fail! uuid not in scan list`;
+2. not already bound (`device already bind`, treated as success);
+3. **at most 10 paired devices** (`bind device fail! devices num max`);
+4. then it is stored in the paired-device cache with its `id` + `type` (`0x10` meter / `0x11` outlet) and
+   persisted (`platsa save devices success`).
+
+So on 1.2.x, "add a reader" and "add an outlet" are the **same** scan→bind path — only the device type in the
+scan-list entry differs. Pairing is still BLE-only (no MQTT path), see [STATUS.md](../STATUS.md).
+
 ## To finish (reversing TODO)
-- Confirm whether **SensorScan** returns **multiple** readers (list) or the app polls per reader.
 - Nail the exact `SensorScanData` / `SensorData` schemas on a live device (units of rssi/battery, `last_seen` epoch).
 - Verify unbind/rebind edge cases and scan-window timing.
 

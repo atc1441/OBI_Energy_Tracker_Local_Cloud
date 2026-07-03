@@ -32,6 +32,7 @@ flowchart LR
 |---|---|---|
 | **Gateway auf eigenen MQTTS‑Server** | TEA‑Key holen → eigene CA+Certs+URL per BLE pushen → eigener Broker | [04 · Eigene Cloud](04-eigene-cloud.md) |
 | **Reader direkt per 868 MHz lesen** | Ohne Cloud: das LoRa‑Protokoll direkt sprechen | [05 · LoRa direkt](05-lora-direkt.md) |
+| **Bridge durch eigenen ESP32 ersetzen** ✅ | Vollständige Mini‑Gateway‑Firmware: Reader koppeln, Energie dekodieren, Web + MQTT, Intervall setzen, Reader per Funk flashen | [Open OBI Energy Meter](../open_obi_energy_meter/) |
 | **Reader an ein Gateway koppeln** ✅ | `SensorScan` (finden) → `SensorBind` (koppeln) → `Sensor` (Status) — an Hardware verifiziert | [07 · Reader koppeln](07-reader-koppeln.md) |
 | **Firmware verstehen/erweitern** | Protokolle, Frame‑Formate, Memory‑Maps, IDA‑fertige Images | [03 · Reversing](03-reverse-engineering.md) · [firmware/](../firmware/) |
 
@@ -54,6 +55,7 @@ Firmware nur über die eigene Cloud‑OTA (Bootloader per eFuse gesperrt).
 05-lora-direkt.md          Direkt per Funk mit dem Reader, ohne Cloud
 06-tools.md                Web-Tools (UART-Config, BLE-Gateway) + BLE-TEA-Codec
 07-reader-koppeln.md       Reader per BLE koppeln (SensorScan / SensorBind / Sensor) — verifiziert
+../open_obi_energy_meter/  Eigenständige ESP32+SX1262-Firmware, die die Bridge ERSETZT (Web + MQTT + Reader-OTA)
 ../firmware/               Loader-Script + IDA-Notizen (keine Vendor-Binaries — eigenes Dump)
 ```
 
@@ -76,8 +78,9 @@ Firmware nur über die eigene Cloud‑OTA (Bootloader per eFuse gesperrt).
   offen. Roadmap in [STATUS.md](STATUS.md).
 
 ## Sicherheits‑Kurzfassung
-BLE‑Steuerkanal nutzt **TEA** (ein 16‑Byte‑Key pro Gerät); der **LoRa‑Link ist nur mit 1‑Byte‑XOR
-obfuskiert**, dessen Schlüssel aus dem Klartext‑Header ableitbar ist (ein ECDH existiert, sein Secret wird
-aber nie genutzt). Der Klartext‑**UART‑Config‑Kanal kann TEA‑Key und WLAN‑Daten lesen/schreiben**. Details:
-[03 · Reversing](03-reverse-engineering.md). Diese Hinweise dienen dazu, eigene Geräte abzusichern/selbst
-zu hosten.
+BLE‑Steuerkanal nutzt **TEA** (ein 16‑Byte‑Key pro Gerät — der zudem mit nur Login + BLE‑Name aus der
+Hersteller‑Cloud abrufbar ist, ohne Besitz‑Prüfung). Der **LoRa‑Link ist auf `1.0.x`/`3x.x` nur mit
+1‑Byte‑XOR obfuskiert** (ECDH‑Secret ungenutzt) — **`1.2.x` hat das gefixt**: LoRa ist dort TEA‑verschlüsselt
+mit einem per‑Device‑ECDH‑Key. Der Klartext‑**UART‑Config‑Kanal kann TEA‑Key und WLAN‑Daten lesen/schreiben**.
+Details: [03 · Reversing](03-reverse-engineering.md). Diese Hinweise dienen dazu, eigene Geräte
+abzusichern/selbst zu hosten.

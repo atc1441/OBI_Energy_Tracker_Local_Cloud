@@ -12,7 +12,7 @@ Wege — der Cloud‑Weg ist am einfachsten und braucht keinen Hardware‑Zugang
 
 ### Weg 1 — aus der Cloud (am einfachsten — nur OBI‑Login + BLE‑Name nötig)
 Du brauchst nur **drei Dinge**: eine OBI‑Email, das Passwort und den **BLE‑Namen** — das `OBI-XXXXXX`, das
-das Gerät ausstrahlt (in jedem BLE‑Scanner / auf dem Aufkleber). Dieser Name *ist* die Challenge‑ID. Das
+das Gerät ausstrahlt (mit einem beliebigen BLE‑Scanner auslesen — er steht *nicht* auf dem Gerät). Dieser Name *ist* die Challenge‑ID. Das
 Gerät muss **nicht** auf deinem Konto registriert sein — jedes gültige OBI‑Login funktioniert, und der
 Endpunkt gibt den Key für das angefragte `OBI-XXXXXX` zurück (siehe [03-security.md](03-security.md)).
 
@@ -73,7 +73,7 @@ flowchart TD
     K["TEA-Key holen<br/>(Cloud oder UART cmd 49)"] --> G["gen_certs.py --host LAN-IP"]
     G --> S["mqtts_server.py :8883<br/>(Fleet-Provisioning + Logging)"]
     G --> P["ble_provision.py --unbind<br/>CA + Claim-Cert + Broker-URL + WLAN pushen"]
-    P --> D{Gateway reconnectet zu DEINEM Broker}
+    P --> D{Gateway verbindet neu zu DEINEM Broker}
     S --> D
     D --> T["Provision → permanentes Cert → Telemetrie/OTA über MQTTS"]
 ```

@@ -5,7 +5,9 @@ ble_provision.py -- BLE side: find an OBI-XXXXXX gateway and set it up in ONE se
 Why one session: the gateway's BLE ("BleSwitch") is only active during a setup window and
 goes away once it is operational/cloud-connected. Sensor pairing is BLE-only (there is NO
 MQTT/cloud command to add a reader), so it must be done here, together with (or before) the
-cloud config. This tool can, in a single connect:
+cloud config. (You can re-open BLE later at any time by holding the gateway's button for ~5 s,
+which re-activates it for general config and adding sensors -- then just run this tool again.)
+This tool can, in a single connect:
   1. scan for a device advertising OBI-XXXXXX (service ABF0), connect, enable notifications,
   2. StatusRequest,
   3. optional UnbindRequest (clear an existing operational cert),

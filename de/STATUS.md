@@ -49,8 +49,9 @@ Zwei große Teile sind **noch nicht fertig** — die Hauptarbeit:
 
 **Bekannte Einschränkung (kein Bug):** einen Reader hinzuzufügen/koppeln geht **nur über BLE** — es gibt
 kein MQTT/Cloud‑Kommando zum Scannen oder Binden, und das BLE des Gateways ist nur im Setup‑Fenster aktiv.
-Das Pairing muss also in der BLE‑Setup‑Session passieren (eingebaut in `ble_provision.py --pair-sensor`) —
-siehe [07-reader-koppeln.md](07-reader-koppeln.md).
+Dieses Fenster lässt sich jederzeit wieder öffnen, indem man den **Button des Gateways ~5 s gedrückt hält**
+(reaktiviert BLE für allgemeine Config und das Hinzufügen von Sensoren), dann per BLE koppeln (eingebaut in
+`ble_provision.py --pair-sensor`) — siehe [07-reader-koppeln.md](07-reader-koppeln.md).
 
 Ebenfalls offen (kleiner): die Mehr‑Reader‑`SensorScan`‑Enumeration bestätigen
 ([07-reader-koppeln.md](07-reader-koppeln.md)) und die exakten SX1262‑RF‑Parameter erfassen

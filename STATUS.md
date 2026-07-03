@@ -49,8 +49,9 @@ Two big pieces are **not done yet** — this is the main open work:
    Still open: the remaining command payloads (general status/config/control).
 
 **Known constraint (not a bug to fix):** adding/pairing a reader is **BLE-only** — there is no MQTT/cloud
-command to scan or bind a sensor, and the bridge's BLE is only active during a setup window. So pairing has
-to happen in the BLE setup session (built into `ble_provision.py --pair-sensor`) — see
+command to scan or bind a sensor, and the bridge's BLE is only active during a setup window. You can re-open
+that window anytime by **holding the gateway's button for ~5 s** (re-activates BLE for general config and
+adding sensors), then pair over BLE (built into `ble_provision.py --pair-sensor`) — see
 [07 · Add a reader](07-add-a-reader/README.md).
 
 Also open (smaller): confirm the multi-reader `SensorScan` enumeration ([07](07-add-a-reader/README.md)),

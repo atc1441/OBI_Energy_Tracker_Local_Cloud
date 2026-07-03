@@ -13,16 +13,25 @@ Der UART0‑Config‑Kanal (`C5 5C …`) hat **keine Authentifizierung**. `cmd 4
 Der Hersteller‑Endpunkt `POST /bluetooth-challenges` gibt den **16‑Byte‑TEA‑Key** eines Geräts allein anhand
 seines BLE‑Advertising‑Namens (`btChallengeId = OBI-XXXXXX`) und **irgendeinem gültigen OBI‑Login** zurück —
 er prüft **nicht**, ob das anfragende Konto das Gerät besitzt oder je eingebunden hat. Da der `OBI-XXXXXX`‑
-Name auf dem Aufkleber steht und in jedem BLE‑Advertisement gesendet wird, kann jeder, der das Gerät sieht
-(oder seinen Namen kennt) und ein OBI‑Konto hat, den Key des BLE‑Steuerkanals holen. Zusammen mit #1 ist der
+Name unverschlüsselt in jedem BLE‑Advertisement gesendet wird, kann jeder, der in Funkreichweite ist
+(oder den Namen sonst beobachtet/errät) und ein OBI‑Konto hat, den Key des BLE‑Steuerkanals holen. Zusammen mit #1 ist der
 Per‑Device‑TEA‑Key faktisch wenig geheim. Für Besitzer: bevorzugt den UART‑Weg nutzen und den BLE‑Key als
 nicht‑geheim behandeln. Siehe [03-cloud-api.md](03-cloud-api.md#woher-die-geräte-secrets-kommen).
 
-## 2. LoRa‑Link ohne echte Krypto
-Frames sind mit **1‑Byte‑XOR** obfuskiert, dessen Key die Byte‑Summe des Klartext‑Handles ist — aus jedem
-mitgeschnittenen Frame ableitbar. Der ECDH (cmd 32) gated den Datenfluss, sein Secret wird nie genutzt.
-Folge: LoRa‑Traffic lässt sich lesen, fälschen und einspeisen (z. B. Fake‑Zählerwerte, oder die
-gespeicherte Reader‑Firmware per ungebundenem cmd 21 ziehen). Siehe [03-lora-protokoll.md](03-lora-protokoll.md).
+## 2. LoRa‑Link ohne echte Krypto — **nur auf 1.0.x / 3x.x (in 1.2.x gefixt)**
+Auf `1.0.x` (und den `3x.x`‑Readern) sind Frames mit **1‑Byte‑XOR** obfuskiert, dessen Key die Byte‑Summe
+des Klartext‑Handles ist — aus jedem mitgeschnittenen Frame ableitbar. Der ECDH (cmd 32) gated den
+Datenfluss, sein Secret wird **nie genutzt**. Folge auf diesen Versionen: LoRa‑Traffic lässt sich lesen,
+fälschen und einspeisen (Fake‑Zählerwerte, oder die Reader‑Firmware per ungebundenem cmd 21 ziehen).
+
+> **In Firmware 1.2.x gefixt.** Die `1.2.1`‑Bridge **nutzt** das ECDH‑Ergebnis wirklich:
+> `lora_cmd32_key_exchange` nimmt den P‑256‑Public‑Key des Readers, berechnet ein 32‑Byte‑Shared‑Secret
+> (`ecdh_compute_shared_secret`) und speichert es per Gerät; `lora_decrypt_frame` / `lora_encrypt_frame`
+> laufen dann **TEA‑ECB** über den Payload mit diesem Key (Struct: `+78` key‑ready‑Flag, `+79` Reader‑Pubkey
+> 64 B, `+143` Shared‑Key 32 B). Auf `1.2.x` ist der LoRa‑Link also TEA‑verschlüsselt mit einem per‑Device‑
+> ECDH‑Key — das 1‑Byte‑XOR‑Lesen/Fälschen greift nicht mehr. (Die Schlüsselvereinbarung selbst ist weiterhin
+> unauthentifiziert, ein aktiver MITM während des Joins ist eine separate Frage.) Siehe
+> [03-lora-protokoll.md](03-lora-protokoll.md).
 
 ## 3. BLE‑Fragment‑Reassemblierung — Heap‑Overflow (Teil‑Fund)
 `ble_reassemble_frags` alloziert beim ersten Fragment einen **festen 5120‑Byte**‑Puffer und hängt jedes

@@ -19,9 +19,27 @@ the app requests MTU 180.
 `UnbindRequest`. Responses (RX) carry their data under `data`, e.g.
 `{"type":"WifiSet","data":{"ssid","connected","errorCode","errorDescription"}}`.
 
-Command id mapping (firmware `ble_json_type_to_cmd`): Status=1, WifiScan=2, WifiSet=3, SensorScan=4,
-SensorBind=5, Sensor=6, SetTMPCertificate=7, Unbind=8. Error codes for WifiSet: `0=OK`, `1=SSID Not
-Exist`, `2=Connect Failed`; SetTMPCertificate: `0=OK`, `1=Failed to retrieve persistent certificate`.
+Command id mapping (firmware `ble_type_to_cmd`): Status=1, WifiScan=2, WifiSet=3, SensorScan=4,
+SensorBind=5, Sensor=6, SetTMPCertificate=7, Unbind=8. **Firmware 1.2.x adds** DevicesScan=9,
+DevicesBind=10, DevicesUnbind=11, DevicesRequest=12, FactoryReset=13, BluetoothDisable=14 (the `Devices*`
+family is the generic multi-device / smart-outlet variant of `Sensor*`). Error codes for WifiSet: `0=OK`,
+`1=SSID Not Exist`, `2=Connect Failed`; SetTMPCertificate: `0=OK`, `1=Failed to retrieve persistent certificate`.
+
+**Status response (1.2.x, `ble_cmd_status`):**
+```json
+{ "type": "Status", "data": { "uuid": "<bridge>", "firmware_version": "1.2.1", "hardware_version": "6.0.0",
+    "connected_wifi": "<ssid>" | null, "wifi_set": false, "persistent_cert_set": false,
+    "ble_protocol_version": "2.2" } }
+```
+`connected_wifi` is the joined SSID (or `null`); `ble_protocol_version` is a version string only — the
+framing/crypto is unchanged (1-fragment messages interoperate fine).
+
+**WifiScan response (`ble_wifi_scan_response`)** — async; the device scans then replies:
+```json
+{ "type": "WifiScan", "data": { "wifi_list": [ { "ssid": "ATClan", "rssi": -45 },
+    { "ssid": "gigacube-…", "rssi": -88 } ] } }
+```
+Only `ssid` + `rssi` per AP (no BSSID in the BLE JSON).
 
 > **SensorScan / SensorBind** (adding a reader) have their own walkthrough — response shapes, timing and
 > the current reversing gaps — in [../07-add-a-reader/README.md](../07-add-a-reader/README.md).

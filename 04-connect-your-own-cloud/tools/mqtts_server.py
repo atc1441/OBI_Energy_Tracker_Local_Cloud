@@ -132,7 +132,7 @@ def handle(sock, addr, pki, push_shadow, set_interval=None, ota=None):
     v5 = False
     cid = "?"
     peer_cn = "?"
-    sent = {"interval": False, "ota": False}
+    sent = {"interval_uuids": set(), "ota": False}   # sensor uuids already sent the interval cmd
     try:
         cert = sock.getpeercert()
         if cert:
@@ -156,13 +156,15 @@ def handle(sock, addr, pki, push_shadow, set_interval=None, ota=None):
         # sensor "uuid" (else "get uuid failed"). Extra fields are ignored by whichever firmware.
         secs, sess = set_interval
         body = {"sensor_upload_interval": secs, "session_id": sess}
+        suid = None
         if "/sensor/" in topic:
             suid = topic.split("/sensor/", 1)[1].split("/", 1)[0]
             if suid and suid != "+":
                 body["uuid"] = suid
         publish(topic, json.dumps(body))
         log(f"  -> SET upload interval = {secs}s (session_id {sess}) on {topic}")
-        sent["interval"] = True
+        if suid:
+            sent["interval_uuids"].add(suid)   # sent to this sensor; others still get their own
 
     try:
         while True:
@@ -201,15 +203,17 @@ def handle(sock, addr, pki, push_shadow, set_interval=None, ota=None):
                     log(f"SUBSCRIBE  {t}")
                     # downlink: once the device subscribes to its upload-interval command
                     # topic, push the change request straight back to it (proto2 cmd6).
-                    if set_interval and "/sensor/" in t and "upload-interval-change-request" in t \
-                            and not sent["interval"]:
+                    if set_interval and "/sensor/" in t and "upload-interval-change-request" in t:
                         # (only the /sensor/ topic -- 1.2.x also has an /outlet/ one we ignore)
                         if "/sensor/+/" in t:
-                            # 1.2.x wildcard sub: defer until we learn the real sensor uuid (from telemetry)
+                            # 1.2.x wildcard sub: defer until we learn each sensor uuid (from telemetry).
+                            # The command is per-sensor, so we send it to EVERY paired meter (see below).
                             sent["interval_tmpl"] = t
-                            log("  (interval: waiting for a sensor uuid to target the wildcard topic)")
+                            log("  (interval: will target every paired sensor as its uuid appears in telemetry)")
                         else:
-                            send_interval(t)   # 1.0.x concrete topic: send now
+                            suid = t.split("/sensor/", 1)[1].split("/", 1)[0]
+                            if suid not in sent["interval_uuids"]:
+                                send_interval(t)   # 1.0.x concrete topic: send now
                     # OTA: when the device subscribes to its firmware-update-request topic,
                     # push the 23-byte update offer; the device then pulls chunks (below).
                     if ota and not ota.get("done") and t.endswith("/ota/firmware-update-request") and not sent["ota"]:
@@ -235,20 +239,23 @@ def handle(sock, addr, pki, push_shadow, set_interval=None, ota=None):
                 if qos == 1 and pid is not None:
                     sock.sendall(pkt(4, 0, pid.to_bytes(2, "big")))  # PUBACK
 
-                # ---- deferred interval command: 1.2.x wildcard needs a concrete sensor uuid ----
-                if set_interval and not sent["interval"] and sent.get("interval_tmpl"):
-                    suid = None
+                # ---- deferred interval command: 1.2.x wildcard -> send to EVERY paired sensor ----
+                if set_interval and sent.get("interval_tmpl"):
+                    uuids = []
                     if "/sensor/" in topic and "/state" in topic:          # a sensor state topic
-                        suid = topic.split("/sensor/", 1)[1].split("/", 1)[0]
+                        s = topic.split("/sensor/", 1)[1].split("/", 1)[0]
+                        if s and s != "+":
+                            uuids.append(s)
                     else:                                                   # or a bridge heartbeat payload
                         try:
                             for dev in (json.loads(payload).get("paired_devices") or []):
                                 if dev.get("device") in (None, "meter") and dev.get("uuid"):
-                                    suid = dev["uuid"]; break
+                                    uuids.append(dev["uuid"])              # all meters, not just the first
                         except Exception:
                             pass
-                    if suid and suid != "+":
-                        send_interval(sent["interval_tmpl"].replace("/sensor/+/", f"/sensor/{suid}/"))
+                    for suid in uuids:
+                        if suid and suid != "+" and suid not in sent["interval_uuids"]:
+                            send_interval(sent["interval_tmpl"].replace("/sensor/+/", f"/sensor/{suid}/"))
 
                 # ---- OTA: serve firmware chunks the device asks for ----
                 if ota and topic.endswith("/ota/firmware-data-request"):
