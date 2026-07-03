@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OBI Gateway BLE Console</title>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--border:#30363d;--fg:#e6edf3;--muted:#8b949e;
+        --tx:#58a6ff;--rx:#3fb950;--err:#f85149;--accent:#d29922;}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg)}
+  header{padding:14px 18px;border-bottom:1px solid var(--border);display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+  header h1{font-size:16px;margin:0;font-weight:600}
+  .status{font-size:12px;color:var(--muted)}
+  .status.on{color:var(--rx)} .status.off{color:var(--err)}
+  main{display:grid;grid-template-columns:360px 1fr;gap:0;height:calc(100vh - 53px)}
+  @media(max-width:800px){main{grid-template-columns:1fr;height:auto}}
+  .side{border-right:1px solid var(--border);padding:16px;overflow:auto}
+  .log{padding:16px;overflow:auto;background:#010409}
+  h2{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:18px 0 8px}
+  h2:first-child{margin-top:0}
+  label{display:block;font-size:12px;color:var(--muted);margin:8px 0 3px}
+  input,textarea,select{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--fg);
+        border-radius:6px;padding:7px 9px;font:13px/1.4 ui-monospace,Consolas,monospace}
+  textarea{resize:vertical;min-height:52px}
+  button{background:#21262d;border:1px solid var(--border);color:var(--fg);border-radius:6px;
+        padding:7px 11px;font-size:13px;cursor:pointer;margin:3px 3px 3px 0}
+  button:hover{border-color:#8b949e}
+  button.primary{background:#238636;border-color:#2ea043;color:#fff}
+  button.primary:hover{background:#2ea043}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  .row{display:flex;gap:8px} .row>*{flex:1}
+  .card{border:1px solid var(--border);border-radius:8px;padding:11px;margin-bottom:10px;background:var(--panel)}
+  .card h3{margin:0 0 6px;font-size:13px}
+  .entry{margin-bottom:10px;border-left:3px solid var(--border);padding-left:9px}
+  .entry.tx{border-color:var(--tx)} .entry.rx{border-color:var(--rx)} .entry.err{border-color:var(--err)}
+  .entry .meta{font-size:11px;color:var(--muted)}
+  .entry .meta b{color:var(--fg)}
+  pre{margin:4px 0 0;white-space:pre-wrap;word-break:break-word;font:12px/1.45 ui-monospace,Consolas,monospace}
+  .tx pre{color:var(--tx)} .rx pre{color:var(--rx)} .err pre{color:var(--err)}
+  .hex{color:var(--muted);font-size:11px}
+  small{color:var(--muted)}
+  .clear{float:right}
+</style>
+</head>
+<body>
+<header>
+  <h1>OBI Gateway · BLE Console</h1>
+  <button id="btnConnect" class="primary">Connect</button>
+  <button id="btnDisconnect" disabled>Disconnect</button>
+  <span id="status" class="status off">disconnected</span>
+</header>
+<main>
+  <div class="side">
+    <h2>Crypto</h2>
+    <label>TEA key (16 bytes hex, per-device from cloud)</label>
+    <input id="key" value="00112233445566778899AABBCCDDEEFF" spellcheck="false">
+    <label style="margin-top:6px">Fragment delay (ms between BLE writes)</label>
+    <input id="fragDelay" type="number" min="0" step="5" value="40" spellcheck="false">
+    <small>The gateway drops fragments if they arrive faster than it processes them
+    (<code>bleserver deal data is too slow.throw frame!</code>). ~40&nbsp;ms per fragment is safe;
+    raise it if long messages still fail to assemble, set 0 to send back-to-back.</small>
+    <label style="margin-top:6px">Scan filter</label>
+    <select id="filter"><option value="name">name OBI-*</option>
+      <option value="service" selected>service ABF0</option>
+      <option value="all">all devices</option></select>
+    <small>Key is specific to the gateway name (OBI-XXXXXX) — get it via <code>POST /bluetooth-challenges</code>.</small>
+
+    <h2>Quick commands</h2>
+    <button data-cmd='{"type":"StatusRequest"}'>Status</button>
+    <button data-cmd='{"type":"WifiScanRequest"}'>WifiScan</button>
+    <button data-cmd='{"type":"SensorScanRequest"}'>SensorScan</button>
+    <button data-cmd='{"type":"SensorRequest"}'>Sensor</button>
+    <button data-cmd='{"type":"UnbindRequest"}'>Unbind</button>
+
+    <div class="card">
+      <h3>WifiSetRequest</h3>
+      <label>SSID</label><input id="wifiSsid" placeholder="MyWLAN">
+      <label>Password</label><input id="wifiPass" placeholder="secret">
+      <button class="primary" id="btnWifiSet">Send WifiSet</button>
+    </div>
+
+    <div class="card">
+      <h3>SensorBindRequest</h3>
+      <label>Sensor UUID</label><input id="bindUuid" placeholder="uuid">
+      <button class="primary" id="btnBind">Send Bind</button>
+    </div>
+
+    <div class="card">
+      <h3>SetTMPCertificateRequest</h3>
+      <label>url</label><input id="cUrl" placeholder="mqtts://your-broker:8883">
+      <label>provisioningTemplateName</label><input id="cTpl" placeholder="TrustedUserProvTemplEnergyTracking">
+      <label>caPem</label><textarea id="cCa"></textarea>
+      <label>certPem</label><textarea id="cCert"></textarea>
+      <label>privateKey</label><textarea id="cKey"></textarea>
+      <button class="primary" id="btnCert">Send Certificate</button>
+    </div>
+
+    <div class="card">
+      <h3>Raw JSON</h3>
+      <textarea id="rawJson">{"type":"StatusRequest"}</textarea>
+      <button class="primary" id="btnRaw">Send JSON</button>
+    </div>
+
+    <div class="card">
+      <h3>Raw message (no JSON validation)</h3>
+      <label>Mode</label>
+      <select id="rawMode">
+        <option value="text">text — UTF-8 string, sent exactly as typed</option>
+        <option value="hex">hex — raw payload bytes</option>
+      </select>
+      <label>Payload</label>
+      <textarea id="rawMsg" placeholder="anything at all — even invalid JSON (text mode) or bytes like deadbeef (hex mode)"></textarea>
+      <button class="primary" id="btnRawSend">Send raw</button>
+      <small>TEA-framed and written to ABF2 as-is. Use to test/fuzz the device parser.</small>
+    </div>
+
+    <div class="card">
+      <h3>Raw bytes → ABF2 (no framing)</h3>
+      <label>Hex bytes</label>
+      <textarea id="rawBytes" placeholder="e.g. 8000187b2274797065... (a full frame) or any bytes"></textarea>
+      <label style="display:flex;gap:6px;align-items:center;margin-top:6px">
+        <input type="checkbox" id="rawEnc" checked style="width:auto"> TEA-encrypt with key (zero-pad to ×8)
+      </label>
+      <button class="primary" id="btnRawBytes">Write to ABF2</button>
+      <small>Writes these exact bytes to ABF2, optionally TEA-encrypted — bypassing the 3-byte header
+      and fragmentation. Lets you craft malformed/partial frames.</small>
+    </div>
+  </div>
+
+  <div class="log" id="log">
+    <button class="clear" onclick="document.getElementById('log').querySelectorAll('.entry').forEach(e=>e.remove())">clear</button>
+    <div class="entry"><pre>Requires Chrome/Edge (desktop with BLE, or Android). Web Bluetooth is not
+available on iOS Safari or inside sandboxed iframes — open this file directly.
+
+1. Enter the device TEA key.  2. Connect and pick your OBI-XXXXXX gateway.
+3. Fire commands; TX/RX frames are TEA-decoded and shown as JSON below.</pre></div>
+  </div>
+</main>
+
+<script>
+// ---------------- TEA (little-endian words) — matches obi_ble_codec.py ----------------
+const MASK=0xFFFFFFFF, DELTA=0x9E3779B9, SUM0=0xC6EF3720; // DELTA*32
+const LE=true; // 32-bit words are little-endian
+function keyWords(keyBytes){
+  const dv=new DataView(keyBytes.buffer,keyBytes.byteOffset,16), k=[];
+  for(let i=0;i<16;i+=4) k.push(dv.getUint32(i,LE));
+  return k;
+}
+function mix(y,s,ka,kb){
+  return ((((((y<<4)>>>0)+ka)>>>0) ^ ((y+s)>>>0) ^ (((y>>>5)+kb)>>>0))>>>0);
+}
+function encBlock(v0,v1,k){
+  let s=0;
+  for(let i=0;i<32;i++){ s=(s+DELTA)>>>0; v0=(v0+mix(v1,s,k[0],k[1]))>>>0; v1=(v1+mix(v0,s,k[2],k[3]))>>>0; }
+  return [v0>>>0,v1>>>0];
+}
+function decBlock(v0,v1,k){
+  let s=SUM0;
+  for(let i=0;i<32;i++){ v1=(v1-mix(v0,s,k[2],k[3]))>>>0; v0=(v0-mix(v1,s,k[0],k[1]))>>>0; s=(s-DELTA)>>>0; }
+  return [v0>>>0,v1>>>0];
+}
+function teaEcb(data,keyBytes,encrypt){
+  if(data.length%8) throw new Error('len%8');
+  const k=keyWords(keyBytes), out=new Uint8Array(data.length);
+  const din=new DataView(data.buffer,data.byteOffset,data.length);
+  const dout=new DataView(out.buffer);
+  for(let i=0;i<data.length;i+=8){
+    let v0=din.getUint32(i,LE), v1=din.getUint32(i+4,LE);
+    [v0,v1]= encrypt?encBlock(v0,v1,k):decBlock(v0,v1,k);
+    dout.setUint32(i,v0,LE); dout.setUint32(i+4,v1,LE);
+  }
+  return out;
+}
+// ---------------- framing / fragmentation ----------------
+const MAX_PAYLOAD=173;
+function buildFrame(number,index,last,payload){
+  let n=3+payload.length; n=Math.ceil(n/8)*8;
+  const f=new Uint8Array(n);
+  f[0]=(number&0x7f)|(last?0x80:0); f[1]=index&0xff; f[2]=payload.length&0xff;
+  f.set(payload,3); return f;
+}
+function encodeMessage(bytes,keyBytes,number){
+  const n=Math.max(1,Math.ceil(bytes.length/MAX_PAYLOAD)), frames=[];
+  for(let i=0;i<n;i++){
+    const chunk=bytes.slice(i*MAX_PAYLOAD,(i+1)*MAX_PAYLOAD);
+    frames.push(teaEcb(buildFrame(number,i,i===n-1,chunk),keyBytes,true));
+  }
+  return frames;
+}
+function parseFrame(dec){ return {number:dec[0]&0x7f,last:!!(dec[0]&0x80),index:dec[1],
+  payload:dec.slice(3,3+dec[2])}; }
+const enc=new TextEncoder(), dec=new TextDecoder();
+function hex(u8){return [...u8].map(b=>b.toString(16).padStart(2,'0')).join('');}
+function keyBytes(){ const h=document.getElementById('key').value.replace(/[^0-9a-f]/gi,'');
+  if(h.length!==32) throw new Error('key must be 32 hex chars'); const b=new Uint8Array(16);
+  for(let i=0;i<16;i++) b[i]=parseInt(h.substr(i*2,2),16); return b; }
+
+// ---------------- BLE ----------------
+const SVC='0000abf0-0000-1000-8000-00805f9b34fb';
+const CH_RX='0000abf1-0000-1000-8000-00805f9b34fb'; // notify  (gateway -> app)
+const CH_TX='0000abf2-0000-1000-8000-00805f9b34fb'; // write   (app -> gateway)
+let device,chTx,chRx, txNumber=0;
+const rxBuf={}; // number -> frames
+
+function setStatus(t,on){const s=document.getElementById('status');s.textContent=t;
+  s.className='status '+(on?'on':'off');}
+function log(kind,title,obj,rawHex){
+  const el=document.getElementById('log');
+  const d=document.createElement('div'); d.className='entry '+kind;
+  const t=new Date().toLocaleTimeString();
+  let body='';
+  if(obj!==undefined){
+    if(typeof obj==='string') body=obj;                 // raw text shown as-is
+    else { try{body=JSON.stringify(obj,null,2);}catch{body=String(obj);} }
+  }
+  d.innerHTML=`<div class="meta">${t} · <b>${title}</b></div>`+
+    (rawHex?`<div class="hex">${rawHex}</div>`:'')+ (body?`<pre>${escapeHtml(body)}</pre>`:'');
+  el.appendChild(d); el.scrollTop=el.scrollHeight;
+}
+function escapeHtml(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+async function connect(){
+  try{
+    const f=document.getElementById('filter').value;
+    const opts = f==='name'? {filters:[{namePrefix:'OBI-'}],optionalServices:[SVC]}
+               : f==='service'? {filters:[{services:[SVC]}]}
+               : {acceptAllDevices:true,optionalServices:[SVC]};
+    device=await navigator.bluetooth.requestDevice(opts);
+    device.addEventListener('gattserverdisconnected',onDisconnect);
+    setStatus('connecting…',false);
+    const gatt=await device.gatt.connect();
+    const svc=await gatt.getPrimaryService(SVC);
+    chTx=await svc.getCharacteristic(CH_TX);
+    chRx=await svc.getCharacteristic(CH_RX);
+    await chRx.startNotifications();
+    chRx.addEventListener('characteristicvaluechanged',onNotify);
+    txNumber=0;
+    setStatus('connected · '+(device.name||device.id),true);
+    document.getElementById('btnConnect').disabled=true;
+    document.getElementById('btnDisconnect').disabled=false;
+    log('rx','connected to '+(device.name||'device'),undefined,'service ABF0 · notify ABF1 · write ABF2');
+  }catch(e){ log('err','connect failed',String(e)); setStatus('disconnected',false); }
+}
+function onDisconnect(){ setStatus('disconnected',false);
+  document.getElementById('btnConnect').disabled=false;
+  document.getElementById('btnDisconnect').disabled=true;
+  log('err','gatt disconnected'); }
+function disconnect(){ if(device&&device.gatt.connected) device.gatt.disconnect(); }
+
+function onNotify(ev){
+  const v=new Uint8Array(ev.target.value.buffer);
+  try{
+    const d=teaEcb(v,keyBytes(),false);
+    const fr=parseFrame(d);
+    (rxBuf[fr.number]=rxBuf[fr.number]||[]).push(fr);
+    if(fr.last){
+      const frames=rxBuf[fr.number].sort((a,b)=>a.index-b.index); delete rxBuf[fr.number];
+      let total=0; frames.forEach(f=>total+=f.payload.length);
+      const buf=new Uint8Array(total); let o=0; frames.forEach(f=>{buf.set(f.payload,o);o+=f.payload.length;});
+      const txt=dec.decode(buf);
+      let obj; try{obj=JSON.parse(txt);}catch{obj=txt;}
+      log('rx','RX ◀── nr='+fr.number+' ('+frames.length+' frame'+(frames.length>1?'s':'')+')',obj);
+    }
+  }catch(e){ log('err','RX decode error',String(e)+' · '+hex(v)); }
+}
+
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+function fragDelayMs(){ const v=parseInt(document.getElementById('fragDelay').value,10);
+  return isNaN(v)||v<0 ? 0 : v; }
+
+// low-level: TEA-frame and write arbitrary bytes to ABF2 (no JSON validation)
+async function sendBytes(bytes, tag, detail){
+  if(!chTx){ log('err','not connected'); return; }
+  try{
+    const number=txNumber; txNumber=(txNumber+1)%127;
+    const frames=encodeMessage(bytes,keyBytes(),number);
+    const gap=fragDelayMs();
+    for(let i=0;i<frames.length;i++){
+      await chTx.writeValueWithResponse(frames[i]);
+      // pace multi-fragment messages so the gateway doesn't "throw frame" under load
+      if(gap && i<frames.length-1) await sleep(gap);
+    }
+    log('tx','TX ──▶ nr='+number+' ('+frames.length+' frame'+(frames.length>1?'s':'')+' · '
+        +bytes.length+'B)'+(tag?' '+tag:''), detail);
+  }catch(e){ log('err','send error',String(e)); }
+}
+// JSON request (object or JSON string)
+async function send(obj){
+  const js=typeof obj==='string'?obj:JSON.stringify(obj);
+  let detail; try{ detail=JSON.parse(js); }catch{ detail=js; }
+  await sendBytes(enc.encode(js), '', detail);
+}
+// raw UTF-8 string, sent exactly as typed (even invalid JSON)
+async function sendRawText(str){ await sendBytes(enc.encode(str), '[raw text]', str); }
+// raw hex bytes
+async function sendRawHex(hexStr){
+  const h=hexStr.replace(/[^0-9a-fA-F]/g,'');
+  if(h.length%2){ log('err','hex needs an even number of digits'); return; }
+  const b=new Uint8Array(h.length/2);
+  for(let i=0;i<b.length;i++) b[i]=parseInt(h.substr(i*2,2),16);
+  await sendBytes(b, '[raw hex]', h);
+}
+// lowest level: write exact bytes to ABF2, no frame header / no fragmentation,
+// optionally TEA-encrypted (zero-padded to a multiple of 8). For crafting raw/malformed frames.
+async function sendRawBytesToChar(bytes, encrypt){
+  if(!chTx){ log('err','not connected'); return; }
+  try{
+    let out=bytes, note='plaintext';
+    if(encrypt){
+      if(out.length%8){ const p=new Uint8Array(Math.ceil(out.length/8)*8); p.set(out); out=p; }
+      out=teaEcb(out,keyBytes(),true); note='TEA-enc';
+    }
+    await chTx.writeValueWithResponse(out);
+    log('tx','TX ──▶ raw '+note+' ('+out.length+'B, no framing)', hex(out));
+  }catch(e){ log('err','send error',String(e)); }
+}
+
+// ---------------- UI wiring ----------------
+document.getElementById('btnConnect').onclick=connect;
+document.getElementById('btnDisconnect').onclick=disconnect;
+document.querySelectorAll('button[data-cmd]').forEach(b=>b.onclick=()=>send(JSON.parse(b.dataset.cmd)));
+document.getElementById('btnWifiSet').onclick=()=>send({type:'WifiSetRequest',
+  data:{ssid:wifiSsid.value,password:wifiPass.value}});
+document.getElementById('btnBind').onclick=()=>send({type:'SensorBindRequest',data:{uuid:bindUuid.value}});
+document.getElementById('btnCert').onclick=()=>send({type:'SetTMPCertificateRequest',
+  data:{url:cUrl.value,provisioningTemplateName:cTpl.value,caPem:cCa.value,certPem:cCert.value,privateKey:cKey.value}});
+document.getElementById('btnRaw').onclick=()=>{ try{ send(JSON.parse(rawJson.value)); }
+  catch(e){ log('err','invalid JSON',String(e)); } };
+document.getElementById('btnRawSend').onclick=()=>{
+  const v=document.getElementById('rawMsg').value;
+  if(document.getElementById('rawMode').value==='hex') sendRawHex(v); else sendRawText(v);
+};
+document.getElementById('btnRawBytes').onclick=()=>{
+  const h=document.getElementById('rawBytes').value.replace(/[^0-9a-fA-F]/g,'');
+  if(h.length%2){ log('err','hex needs an even number of digits'); return; }
+  const b=new Uint8Array(h.length/2);
+  for(let i=0;i<b.length;i++) b[i]=parseInt(h.substr(i*2,2),16);
+  sendRawBytesToChar(b, document.getElementById('rawEnc').checked);
+};
+
+if(!navigator.bluetooth) log('err','Web Bluetooth unavailable',
+  'Use desktop Chrome/Edge with a BLE adapter, or Chrome on Android. Not supported on iOS/Firefox.');
+</script>
+</body>
+</html>

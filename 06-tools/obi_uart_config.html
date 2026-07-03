@@ -1,0 +1,531 @@
+<title>OBI Bridge · UART Config Tool</title>
+<style>
+  :root{
+    --bg:#0b1013; --bg2:#0f171b; --panel:#121d22; --panel2:#16232a;
+    --line:#22333b; --line2:#2c414b;
+    --ink:#cdd9d6; --ink-dim:#7f9298; --ink-faint:#54676d;
+    --tx:#f0a63c; --rx:#4fd6c2; --sig:#4fd6c2;
+    --ok:#5fc98a; --warn:#e0b341; --crit:#e5604d;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Cascadia Code",monospace;
+    --ui:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:
+      radial-gradient(1200px 500px at 78% -10%, rgba(79,214,194,.06), transparent 60%),var(--bg);
+    color:var(--ink); font-family:var(--ui); line-height:1.5; -webkit-font-smoothing:antialiased;}
+  a{color:var(--sig)}
+  .wrap{max-width:1200px;margin:0 auto;padding:20px 20px 56px}
+  .mono{font-family:var(--mono)}
+
+  header{display:flex;flex-wrap:wrap;align-items:center;gap:14px 18px;padding:14px 16px;margin-bottom:18px;
+    background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:12px}
+  .brand{display:flex;flex-direction:column;gap:2px;margin-right:auto}
+  .brand h1{margin:0;font-size:15px;font-weight:650;letter-spacing:.02em}
+  .brand .sub{font-size:11.5px;color:var(--ink-dim);letter-spacing:.04em;text-transform:uppercase;font-family:var(--mono)}
+  .conn{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .led{width:9px;height:9px;border-radius:50%;background:var(--ink-faint);flex:none}
+  .led.on{background:var(--ok);box-shadow:0 0 10px 1px rgba(95,201,138,.7)}
+  .led.err{background:var(--crit);box-shadow:0 0 10px 1px rgba(229,96,77,.6)}
+  .status{font-family:var(--mono);font-size:12px;color:var(--ink-dim);min-width:96px}
+  select,input,button,textarea{font-family:var(--mono);font-size:12.5px;color:var(--ink);
+    background:var(--bg2);border:1px solid var(--line2);border-radius:8px;padding:8px 10px}
+  input:focus,select:focus,button:focus-visible,textarea:focus{outline:2px solid var(--sig);outline-offset:1px}
+  label.baud{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--ink-dim);text-transform:uppercase;letter-spacing:.05em}
+  label.baud select{padding:6px 8px}
+  button{cursor:pointer;background:var(--panel2);transition:border-color .15s,background .15s}
+  button:hover{border-color:var(--sig)}
+  button.primary{background:linear-gradient(180deg,#1c2a2b,#152021);border-color:#3a5a54;color:#eafffb;font-weight:600}
+  button.primary:hover{border-color:var(--tx);box-shadow:0 0 0 1px rgba(240,166,60,.25) inset}
+  button:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line)}
+
+  .banner{display:none;gap:12px;align-items:flex-start;padding:13px 15px;margin-bottom:18px;border-radius:10px;
+    background:rgba(229,96,77,.08);border:1px solid rgba(229,96,77,.4)}
+  .banner.show{display:flex}
+  .banner b{color:var(--crit)}
+  .banner p{margin:0;font-size:13px;color:var(--ink)}
+
+  .grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.05fr);gap:18px}
+  @media(max-width:860px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .card > h2{margin:0;padding:12px 15px;font-size:11.5px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;
+    color:var(--ink-dim);border-bottom:1px solid var(--line);background:var(--panel2);display:flex;align-items:center;gap:8px}
+  .card > h2 .pip{width:6px;height:6px;border-radius:50%;background:var(--sig)}
+  .card .body{padding:15px}
+
+  /* quick send */
+  .quick{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:15px;padding-bottom:15px;border-bottom:1px dashed var(--line2)}
+  .quick .qlab{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-dim);margin-right:2px;width:100%}
+  .quick button{background:var(--panel2);border-color:#3a5a54;color:#dfeeeb;padding:9px 13px;display:flex;gap:7px;align-items:center}
+  .quick button .qc{color:var(--tx);font-weight:600}
+  .quick button:hover:not(:disabled){border-color:var(--tx)}
+  .quick button.danger{border-color:#5a3a38}.quick button.danger .qc{color:var(--crit)}
+
+  .row{display:flex;flex-direction:column;gap:6px;margin-bottom:13px}
+  .row:last-child{margin-bottom:0}
+  .row > .lab{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-dim);display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+  .row > .lab .hint{text-transform:none;letter-spacing:0;color:var(--ink-faint);font-family:var(--mono)}
+  .row input,.row select,.row textarea{width:100%}
+  textarea{resize:vertical;min-height:44px}
+  .field-note{font-size:11px;color:var(--ink-faint);font-family:var(--mono)}
+  .invalid{border-color:var(--crit)!important}
+  .seg{display:flex;border:1px solid var(--line2);border-radius:8px;overflow:hidden;width:max-content}
+  .seg button{border:0;border-radius:0;background:var(--bg2);padding:7px 12px;color:var(--ink-dim)}
+  .seg button.on{background:var(--panel2);color:var(--sig)}
+  .presetgrid{display:grid;grid-template-columns:1fr;border:1px solid var(--line2);border-radius:9px;overflow:hidden}
+  .presetgrid button{border:0;border-radius:0;text-align:left;background:var(--bg2);padding:10px 12px;display:flex;gap:10px;align-items:baseline;border-bottom:1px solid var(--line)}
+  .presetgrid button:last-child{border-bottom:0}
+  .presetgrid button.on{background:var(--panel2)}
+  .presetgrid .cc{color:var(--tx);font-weight:600;min-width:34px}
+  .presetgrid .nm{color:var(--ink);font-family:var(--ui);font-size:12.5px}
+  .presetgrid .nm small{display:block;color:var(--ink-faint);font-size:11px;font-family:var(--mono);margin-top:1px}
+  .presetgrid button.danger .cc{color:var(--crit)}
+
+  .anatomy{padding:13px 15px;border-top:1px solid var(--line);background:var(--bg2)}
+  .anatomy .cap{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-dim);margin-bottom:9px;display:flex;justify-content:space-between}
+  .anatomy .cap .len{font-family:var(--mono);color:var(--ink-dim);text-transform:none;letter-spacing:0}
+  .bytes{display:flex;flex-wrap:wrap;gap:4px}
+  .cell{border:1px solid var(--line2);border-radius:6px;padding:4px 6px 5px;min-width:30px;text-align:center;background:var(--panel)}
+  .cell .v{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
+  .cell .t{font-size:8.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-faint);margin-top:2px}
+  .cell.len .v{color:var(--sig)} .cell.crc .v{color:var(--warn)}
+  .cell.magic .v,.cell.proto .v{color:var(--ink-dim)}
+  .cell.cmd{border-color:rgba(240,166,60,.5)}.cell.cmd .v{color:var(--tx);font-weight:600}
+  .cell.pl .v{color:var(--rx)}
+  .sendbar{display:flex;gap:10px;align-items:center;padding:13px 15px;border-top:1px solid var(--line);flex-wrap:wrap}
+  .sendbar .hex{flex:1;min-width:180px;font-family:var(--mono);font-size:12px;color:var(--ink-dim);background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:8px 10px;overflow-x:auto;white-space:nowrap}
+  .sendbar .hex b{color:var(--ink)}
+
+  .montools{display:flex;gap:10px;align-items:center;margin-left:auto}
+  .montools button{padding:5px 9px;font-size:11px}
+  .chk{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--ink-dim);font-family:var(--mono)}
+  .log{height:360px;overflow-y:auto;padding:10px 12px;font-family:var(--mono);font-size:12px;line-height:1.55;background:#080c0e}
+  .ln{display:flex;gap:9px;padding:1px 0;white-space:pre-wrap;word-break:break-word}
+  .ln .ts{color:var(--ink-faint);flex:none}
+  .ln .dir{flex:none;width:26px;font-weight:600}
+  .ln.tx .dir{color:var(--tx)} .ln.tx .msg{color:#f4c689}
+  .ln.log .dir{color:var(--ink-faint)} .ln.log .msg{color:#7d9296}
+  .ln.note .dir{color:var(--ink-faint)} .ln.note .msg{color:var(--ink-dim)}
+  .ln.err .dir,.ln.err .msg{color:var(--crit)}
+  .ln.raw .dir{color:var(--ink-faint)} .ln.raw .msg{color:#3f5257}
+  .ln .ascii{color:var(--ink-faint)}
+  /* decoded frame block */
+  .ln.frame{display:block;background:rgba(79,214,194,.05);border-left:2px solid var(--rx);
+    padding:5px 8px 6px;margin:3px 0;border-radius:0 6px 6px 0}
+  .ln.frame .fh{display:flex;gap:9px;align-items:baseline}
+  .ln.frame .fh .fhead{color:var(--rx);font-weight:600}
+  .ln.frame .fh .tag{color:var(--ink-faint)}
+  .ln.frame .ok{color:var(--ok)} .ln.frame .bad{color:var(--crit)}
+  .ln.frame .kv2{display:grid;grid-template-columns:auto 1fr;gap:1px 12px;margin:4px 0 0 35px}
+  .ln.frame .kv2 .k{color:var(--ink-dim)}
+  .ln.frame .kv2 .v{color:var(--ink)}
+  .ln.frame .kv2 .v.key{color:var(--crit);font-weight:600}
+  .ln.frame .kv2 .v .q{color:var(--ink-faint)}
+  .empty{color:var(--ink-faint);padding:14px 12px;font-family:var(--mono);font-size:12px}
+
+  .decode{padding:14px 15px;border-top:1px solid var(--line);background:var(--bg2)}
+  .decode h3{margin:0 0 4px;font-size:11.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-dim)}
+  .decode p.d{margin:0 0 11px;font-size:11.5px;color:var(--ink-faint);font-family:var(--mono)}
+  .decrow{display:flex;gap:8px;margin-bottom:11px;flex-wrap:wrap}
+  .decrow input{flex:1;min-width:200px}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:5px 12px;align-items:baseline}
+  .kv dt{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-dim);white-space:nowrap}
+  .kv dd{margin:0;font-family:var(--mono);font-size:12.5px;color:var(--ink);word-break:break-all}
+  .kv dd.key{color:var(--crit);font-weight:600}
+  .kv dd .q{color:var(--ink-faint)}
+
+  footer{margin-top:22px;padding:15px 16px;border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--ink-dim);font-size:12.5px}
+  footer .warn-t{color:var(--crit);font-weight:600}
+  footer code{font-family:var(--mono);background:var(--bg2);border:1px solid var(--line);border-radius:4px;padding:1px 5px;color:var(--ink);font-size:11.5px}
+  footer ul{margin:8px 0 0;padding-left:18px} footer li{margin:3px 0}
+  @media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <h1>OBI Bridge · UART Config Console</h1>
+      <span class="sub">C5 5C framing · protocol 0xFE · UART0 8N1</span>
+    </div>
+    <div class="conn">
+      <label class="baud">Baud
+        <select id="baud">
+          <option>9600</option><option>57600</option><option selected>115200</option>
+          <option>230400</option><option>460800</option><option>921600</option>
+        </select>
+      </label>
+      <span class="led" id="led"></span>
+      <span class="status" id="status">disconnected</span>
+      <button class="primary" id="connect">Connect</button>
+    </div>
+  </header>
+
+  <div class="banner" id="banner">
+    <p><b>Web Serial isn't available in this frame.</b> The embedded preview blocks serial-port access.
+    Download this page and open the file in <b>Chrome</b> or <b>Edge</b> on desktop — serial works from a local <code>file://</code> too.</p>
+  </div>
+
+  <div class="grid">
+    <!-- BUILDER -->
+    <section class="card">
+      <h2><span class="pip"></span> Command builder</h2>
+      <div class="body">
+        <div class="quick" id="quick">
+          <span class="qlab">Quick send — one click builds &amp; transmits</span>
+          <button data-q="49" class="danger" disabled><span class="qc">0x31</span> Read IDs &amp; TEA key</button>
+          <button data-q="59" class="danger" disabled><span class="qc">0x3B</span> Read WiFi creds</button>
+          <button data-q="55" disabled><span class="qc">0x37</span> Read WiFi status</button>
+        </div>
+
+        <div class="row">
+          <span class="lab">Build a command</span>
+          <div class="presetgrid" id="presets">
+            <button data-p="49" class="on"><span class="cc">0x31</span><span class="nm">Read IDs &amp; TEA key <small>cmd 49 · no payload → UUID+BLE-ID+key</small></span></button>
+            <button data-p="48" class="danger"><span class="cc">0x30</span><span class="nm">Write provisioning <small>cmd 48 · 38 B: UUID+BLE-ID+TEA key</small></span></button>
+            <button data-p="59" class="danger"><span class="cc">0x3B</span><span class="nm">Read WiFi credentials <small>cmd 59 · no payload → SSID + password</small></span></button>
+            <button data-p="58" class="danger"><span class="cc">0x3A</span><span class="nm">Write WiFi credentials <small>cmd 58 · SSID + password</small></span></button>
+            <button data-p="52"><span class="cc">0x34</span><span class="nm">LoRa test transmit <small>cmd 52 · [len][frame bytes]</small></span></button>
+            <button data-p="55"><span class="cc">0x37</span><span class="nm">Read WiFi status <small>cmd 55 · no payload → status + SSID</small></span></button>
+            <button data-p="custom"><span class="cc mono">0x??</span><span class="nm">Custom <small>any command + raw payload</small></span></button>
+          </div>
+        </div>
+
+        <div id="fields"></div>
+
+        <div class="row">
+          <span class="lab">CRC-16/MODBUS <span class="hint" id="crcval">—</span></span>
+          <div class="seg" id="crcmode">
+            <button data-m="auto" class="on">Compute</button>
+            <button data-m="zero">Zero (skip check)</button>
+          </div>
+          <span class="field-note">Firmware skips verification when the CRC field is <b>00 00</b>.</span>
+        </div>
+      </div>
+
+      <div class="anatomy">
+        <div class="cap"><span>Outgoing frame</span><span class="len" id="framelen"></span></div>
+        <div class="bytes" id="anatomy"></div>
+      </div>
+
+      <div class="sendbar">
+        <div class="hex" id="hexline"></div>
+        <button class="primary" id="send" disabled>Transmit ▸</button>
+      </div>
+    </section>
+
+    <!-- MONITOR -->
+    <section class="card">
+      <h2><span class="pip"></span> Serial monitor
+        <span class="montools">
+          <label class="chk"><input type="checkbox" id="showlog" checked> log</label>
+          <label class="chk"><input type="checkbox" id="showraw"> raw</label>
+          <label class="chk"><input type="checkbox" id="autoscroll" checked> scroll</label>
+          <button id="clear">Clear</button>
+        </span>
+      </h2>
+      <div class="log" id="log"><div class="empty">No traffic yet. Connect a port, then use Quick send.</div></div>
+
+      <div class="decode">
+        <h3>cmd 49 decoder</h3>
+        <p class="d">payload 39 B: [code] · [16 B UUID] · [6 B BLE-ID] · [16 B TEA key]. Auto-fills from responses.</p>
+        <div class="decrow">
+          <input id="decin" placeholder="paste a C5 5C frame or 39-byte payload as hex" spellcheck="false">
+          <button id="decGo">Decode</button>
+        </div>
+        <dl class="kv" id="decout"><dt>waiting</dt><dd>—</dd></dl>
+      </div>
+    </section>
+  </div>
+
+  <footer>
+    <span class="warn-t">What this is.</span>
+    A crafter for the OBI bridge's plaintext UART config channel (vsocket pipe 2). Requests are
+    <code>C5 5C · LEN(16-bit BE) · CRC · FE · CMD · payload</code>; responses come back the same way with
+    <code>CMD | 0x80</code>. The CRC (CRC-16/MODBUS) covers everything from <code>FE</code> on and may be zeroed to bypass.
+    Reachable only over <b>UART0</b> (8N1) — not BLE — and command 49 returns the 16-byte TEA key in the clear.
+    Use only on hardware you own or are authorized to test.
+    <ul>
+      <li>The monitor reassembles frames out of the mixed stream; ESP-IDF console text shows as dim <b>log</b> lines (toggle off to hide, or on <b>raw</b> to also see raw hex chunks).</li>
+      <li>No response? Send the whole frame in one burst (this tool does) and make sure nothing else holds the port.</li>
+    </ul>
+  </footer>
+</div>
+
+<script>
+"use strict";
+const $=s=>document.querySelector(s);
+const enc=new TextEncoder();
+const hx=b=>b.toString(16).toUpperCase().padStart(2,"0");
+const bytesToHex=(a,sep=" ")=>Array.from(a,hx).join(sep);
+const asciiOf=a=>Array.from(a,b=>(b>=32&&b<127)?String.fromCharCode(b):"·").join("");
+const esc=s=>s.replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+function parseHex(str){
+  const t=(str||"").replace(/0x/gi," ").replace(/[^0-9a-fA-F]/g," ").trim();
+  if(!t)return new Uint8Array(0);
+  const out=[];
+  for(const p of t.split(/\s+/)){
+    if(p.length%2!==0)return null;
+    for(const pair of p.match(/.{2}/g)) out.push(parseInt(pair,16));
+  }
+  return new Uint8Array(out);
+}
+function parseAsciiOrHex(str,expect){
+  if(str.length===expect && /^[\x20-\x7e]+$/.test(str) && !/^[0-9a-fA-F ]+$/.test(str)) return enc.encode(str);
+  return parseHex(str);
+}
+/* CRC-16/MODBUS (init 0xFFFF, poly 0xA001). Returns 16-bit; low byte = CRC-lo. */
+function crc16(bytes){let crc=0xFFFF;for(let i=0;i<bytes.length;i++){crc^=bytes[i];for(let b=0;b<8;b++)crc=(crc&1)?((crc>>>1)^0xA001):(crc>>>1);}return crc&0xFFFF;}
+
+let preset="49", crcMode="auto";
+let port=null, writer=null, reader=null, keepReading=false;
+let lastProv=null; // last decoded 39-byte provisioning payload
+
+/* ---------- builder fields ---------- */
+function renderFields(){
+  const f=$("#fields");
+  if(preset==="48"){
+    f.innerHTML=`
+      <div class="row"><span class="lab">UUID <span class="hint">16 bytes · hex</span></span>
+        <input id="f_uuid" spellcheck="false" placeholder="00112233445566778899AABBCCDDEEFF"></div>
+      <div class="row"><span class="lab">BLE-ID <span class="hint">6 chars (OBI-XXXXXX suffix) or 6 hex bytes</span></span>
+        <input id="f_bleid" spellcheck="false" placeholder="ABC123"></div>
+      <div class="row"><span class="lab">TEA key <span class="hint">16 bytes · hex</span></span>
+        <input id="f_key" spellcheck="false" placeholder="00112233445566778899AABBCCDDEEFF"></div>`;
+  } else if(preset==="58"){
+    f.innerHTML=`
+      <div class="row"><span class="lab">SSID <span class="hint">text · ≤255 bytes</span></span>
+        <input id="w_ssid" spellcheck="false" placeholder="MyNetwork"></div>
+      <div class="row"><span class="lab">Password <span class="hint">text · ≤255 bytes</span></span>
+        <input id="w_pwd" spellcheck="false" placeholder="wifi-password"></div>
+      <div class="field-note">payload = [ssid_len][pwd_len][ssid][password]</div>`;
+  } else if(preset==="52"){
+    f.innerHTML=`<div class="row"><span class="lab">LoRa payload <span class="hint">raw hex · first byte = length</span></span>
+        <textarea id="f_raw" spellcheck="false" placeholder="03 AA BB CC"></textarea></div>`;
+  } else if(preset==="custom"){
+    f.innerHTML=`
+      <div class="row"><span class="lab">Command byte <span class="hint">decimal or 0x..</span></span>
+        <input id="f_cmd" spellcheck="false" placeholder="0x31" style="max-width:160px"></div>
+      <div class="row"><span class="lab">Payload <span class="hint">raw hex · may be empty</span></span>
+        <textarea id="f_raw" spellcheck="false" placeholder="00 11 22 …"></textarea></div>`;
+  } else {
+    f.innerHTML=`<div class="field-note">No payload — this command triggers a read-back.</div>`;
+  }
+  [...f.querySelectorAll("input,textarea")].forEach(el=>el.addEventListener("input",refresh));
+}
+function mark(sel,ok){const el=$(sel);if(el)el.classList.toggle("invalid",!ok && el.value.trim()!=="");}
+
+function currentPayloadAndCmd(){
+  if(preset==="49")return{cmd:0x31,payload:new Uint8Array(0)};
+  if(preset==="55")return{cmd:0x37,payload:new Uint8Array(0)};
+  if(preset==="59")return{cmd:0x3B,payload:new Uint8Array(0)};
+  if(preset==="58"){
+    const ssid=enc.encode($("#w_ssid")?.value||""),pwd=enc.encode($("#w_pwd")?.value||"");
+    mark("#w_ssid",ssid.length<=255);mark("#w_pwd",pwd.length<=255);
+    if(ssid.length>255||pwd.length>255)return{err:"SSID and password must each be ≤255 bytes."};
+    const p=new Uint8Array(2+ssid.length+pwd.length);
+    p[0]=ssid.length;p[1]=pwd.length;p.set(ssid,2);p.set(pwd,2+ssid.length);
+    return{cmd:0x3A,payload:p};
+  }
+  if(preset==="48"){
+    const uuid=parseHex($("#f_uuid")?.value); mark("#f_uuid",uuid&&uuid.length===16);
+    const id=parseAsciiOrHex($("#f_bleid")?.value||"",6); mark("#f_bleid",id&&id.length===6);
+    const key=parseHex($("#f_key")?.value); mark("#f_key",key&&key.length===16);
+    if(!(uuid&&uuid.length===16&&id&&id.length===6&&key&&key.length===16))
+      return{err:"Need 16-byte UUID, 6-byte BLE-ID and 16-byte TEA key."};
+    const p=new Uint8Array(38);p.set(uuid,0);p.set(id,16);p.set(key,22);
+    return{cmd:0x30,payload:p};
+  }
+  if(preset==="52"){const p=parseHex($("#f_raw")?.value);mark("#f_raw",p!==null);
+    if(p===null)return{err:"Payload isn't valid hex."};return{cmd:0x34,payload:p};}
+  const cs=($("#f_cmd")?.value||"").trim();
+  const cmd=cs.toLowerCase().startsWith("0x")?parseInt(cs,16):parseInt(cs,10);
+  mark("#f_cmd",Number.isInteger(cmd)&&cmd>=0&&cmd<=255);
+  const p=parseHex($("#f_raw")?.value);mark("#f_raw",p!==null);
+  if(!(Number.isInteger(cmd)&&cmd>=0&&cmd<=255))return{err:"Command byte must be 0–255."};
+  if(p===null)return{err:"Payload isn't valid hex."};
+  return{cmd,payload:p};
+}
+function makeFrame(cmd,payload){
+  const total=8+payload.length;
+  const f=new Uint8Array(total);
+  f[0]=0xC5;f[1]=0x5C;f[2]=(total>>8)&0xFF;f[3]=total&0xFF;f[6]=0xFE;f[7]=cmd;f.set(payload,8);
+  let crc=0;
+  if(crcMode==="zero"){f[4]=0;f[5]=0;}else{crc=crc16(f.subarray(6));f[4]=crc&0xFF;f[5]=(crc>>8)&0xFF;}
+  return{frame:f,crc,cmd,total};
+}
+function buildFrame(){const r=currentPayloadAndCmd();if(r.err)return r;return makeFrame(r.cmd,r.payload);}
+
+function refresh(){
+  const r=buildFrame();
+  const an=$("#anatomy"),hl=$("#hexline"),fl=$("#framelen"),cv=$("#crcval");
+  if(r.err){an.innerHTML=`<span class="empty" style="padding:0">${r.err}</span>`;hl.innerHTML="";fl.textContent="";cv.textContent="—";$("#send").disabled=true;return;}
+  const f=r.frame;
+  const cells=[["magic",hx(f[0]),"C5"],["magic",hx(f[1]),"5C"],["len",hx(f[2]),"len·hi"],["len",hx(f[3]),"len·lo"],
+    ["crc",hx(f[4]),"crc·lo"],["crc",hx(f[5]),"crc·hi"],["proto",hx(f[6]),"FE"],["cmd",hx(f[7]),"cmd"]];
+  for(let i=8;i<f.length;i++)cells.push(["pl",hx(f[i]),i===8?"payload":""]);
+  an.innerHTML=cells.map(c=>`<div class="cell ${c[0]}"><div class="v">${c[1]}</div><div class="t">${c[2]}</div></div>`).join("");
+  fl.textContent=`${r.total} B · cmd 0x${hx(r.cmd)} (${r.cmd})`;
+  cv.textContent=crcMode==="zero"?"0000 (skip)":"0x"+r.crc.toString(16).toUpperCase().padStart(4,"0");
+  hl.innerHTML=`<b>TX</b> ${bytesToHex(f)}`;
+  $("#send").disabled=!(port&&writer);
+}
+
+/* ---------- logging ---------- */
+function stamp(){const d=new Date();return d.toTimeString().slice(0,8)+"."+String(d.getMilliseconds()).padStart(3,"0");}
+function clearEmpty(){const e=$("#log .empty");if(e)e.remove();}
+function append(el){clearEmpty();$("#log").appendChild(el);if($("#autoscroll").checked)$("#log").scrollTop=$("#log").scrollHeight;}
+function logLine(dir,cls,msg,ascii){
+  const el=document.createElement("div");el.className="ln "+cls;
+  el.innerHTML=`<span class="ts">${stamp()}</span><span class="dir">${dir}</span><span class="msg">${msg}</span>`+(ascii?`  <span class="ascii">${ascii}</span>`:"");
+  append(el);
+}
+
+/* ---------- inbound stream reassembly ---------- */
+let sbuf=[];      // pending raw bytes
+let logacc="";    // accumulated console text
+function feed(u8){
+  if($("#showraw").checked) logLine("··","raw",bytesToHex(u8));
+  for(const b of u8) sbuf.push(b);
+  parseStream();
+}
+function idxFrame(a){for(let i=0;i<a.length-1;i++)if(a[i]===0xC5&&a[i+1]===0x5C)return i;return -1;}
+function parseStream(){
+  while(true){
+    const i=idxFrame(sbuf);
+    if(i<0){
+      const keep=(sbuf.length&&sbuf[sbuf.length-1]===0xC5)?1:0;
+      if(sbuf.length-keep>0) emitLog(sbuf.slice(0,sbuf.length-keep));
+      sbuf=sbuf.slice(sbuf.length-keep);
+      return;
+    }
+    if(i>0){emitLog(sbuf.slice(0,i));sbuf=sbuf.slice(i);}
+    if(sbuf.length<4)return;
+    const LEN=(sbuf[2]<<8)|sbuf[3];
+    if(LEN<8||LEN>1024){emitLog(sbuf.slice(0,1));sbuf=sbuf.slice(1);continue;}
+    if(sbuf.length<LEN)return;
+    emitFrame(sbuf.slice(0,LEN));sbuf=sbuf.slice(LEN);
+  }
+}
+function emitLog(arr){
+  for(const b of arr) logacc+=(b===13?"":String.fromCharCode(b));
+  let nl;
+  while((nl=logacc.indexOf("\n"))>=0){
+    let line=logacc.slice(0,nl);logacc=logacc.slice(nl+1);
+    line=line.replace(/\x1b\[[0-9;]*m/g,"").replace(/[^\x20-\x7e]/g,"·").trim();
+    if(line && $("#showlog").checked) logLine("··","log",esc(line));
+  }
+  if(logacc.length>1024){const line=logacc.replace(/\x1b\[[0-9;]*m/g,"").replace(/[^\x20-\x7e]/g,"·").trim();logacc="";if(line&&$("#showlog").checked)logLine("··","log",esc(line));}
+}
+function emitFrame(frame){
+  const LEN=frame.length,cmd=frame[7],payload=frame.slice(8,LEN);
+  const stored=(frame[4]<<8)|frame[5];
+  const m=crc16(frame.slice(6,LEN)),fw=((m&0xFF)<<8)|((m>>8)&0xFF);
+  const crcok=stored===0?"—":(stored===fw?"✓":"✗");
+  const isResp=!!(cmd&0x80),req=cmd&0x7F;
+  const el=document.createElement("div");el.className="ln frame";
+  const crcHtml=crcok==="✓"?'<span class="ok">CRC ✓</span>':crcok==="✗"?'<span class="bad">CRC ✗</span>':'<span class="tag">CRC —</span>';
+  let head=`<div class="fh"><span class="ts">${stamp()}</span><span class="dir">◈</span>`+
+    `<span class="fhead">${isResp?"RESP":"FRAME"} cmd 0x${hx(cmd)}</span>`+
+    `<span class="tag">${isResp?`(req 0x${hx(req)})`:""} · ${payload.length} B · </span>${crcHtml}</div>`;
+  let rows="";
+  if(cmd===0xB1 && payload.length>=39){           // cmd 49 response: read provisioning
+    lastProv=payload.slice(0,39);
+    const uuid=payload.slice(1,17),id=payload.slice(17,23),key=payload.slice(23,39);
+    rows=`<div class="kv2">`+
+      `<span class="k">marker</span><span class="v">0x${hx(payload[0])}</span>`+
+      `<span class="k">UUID</span><span class="v">${bytesToHex(uuid,"")}</span>`+
+      `<span class="k">BLE-ID</span><span class="v">${bytesToHex(id," ")} <span class="q">“${esc(asciiOf(id))}”</span></span>`+
+      `<span class="k">TEA key</span><span class="v key">${bytesToHex(key,"")}</span>`+
+      `</div>`;
+    fillDecode(payload.slice(0,39));
+  } else if(cmd===0xB7 && payload.length>=1){      // cmd 55 response: WiFi status + SSID
+    const ssid=payload.slice(1);
+    rows=`<div class="kv2">`+
+      `<span class="k">status</span><span class="v">0x${hx(payload[0])}</span>`+
+      `<span class="k">SSID</span><span class="v">${bytesToHex(ssid," ")} <span class="q">“${esc(asciiOf(ssid))}”</span></span>`+
+      `</div>`;
+  } else if(cmd===0xBB && payload.length>=2){      // cmd 59 response: WiFi credentials
+    const sl=payload[0],pl=payload[1],ssid=payload.slice(2,2+sl),pwd=payload.slice(2+sl,2+sl+pl);
+    rows=`<div class="kv2">`+
+      `<span class="k">SSID</span><span class="v">“${esc(asciiOf(ssid))}” <span class="q">(${sl} B)</span></span>`+
+      `<span class="k">password</span><span class="v key">“${esc(asciiOf(pwd))}” <span class="q">(${pl} B)</span></span>`+
+      `</div>`;
+  } else if((cmd===0xB0||cmd===0xB4||cmd===0xBA) && payload.length===0){  // acks
+    const w={0xB0:"provisioning written",0xB4:"LoRa frame sent",0xBA:"WiFi credentials set"}[cmd];
+    rows=`<div class="kv2"><span class="k">result</span><span class="v"><span class="q">ack (${w})</span></span></div>`;
+  } else if(payload.length){
+    rows=`<div class="kv2"><span class="k">payload</span><span class="v">${bytesToHex(payload)} <span class="q">“${esc(asciiOf(payload))}”</span></span></div>`;
+  }
+  el.innerHTML=head+rows;
+  append(el);
+}
+
+/* ---------- cmd49 decoder panel ---------- */
+function decodeAny(bytes){
+  if(bytes.length>=8 && bytes[0]===0xC5 && bytes[1]===0x5C){const L=(bytes[2]<<8)|bytes[3];return bytes.slice(8,Math.min(L,bytes.length));}
+  if(bytes.length===40 && bytes[1]===0x43){const o=[bytes[0]];for(let i=2;i<40;i++)o.push(bytes[i]);return o;}
+  return bytes;
+}
+function fillDecode(pl){
+  const out=$("#decout");
+  if(!pl||pl.length<39){out.innerHTML="<dt>error</dt><dd>Need a 39-byte payload (or a full frame).</dd>";return;}
+  const uuid=Array.from(pl).slice(1,17),id=Array.from(pl).slice(17,23),key=Array.from(pl).slice(23,39);
+  out.innerHTML=
+    `<dt>code</dt><dd>0x${hx(pl[0])}</dd>`+
+    `<dt>UUID</dt><dd>${bytesToHex(uuid,"")}</dd>`+
+    `<dt>BLE-ID</dt><dd>${bytesToHex(id," ")} <span class="q">“${esc(asciiOf(id))}”</span></dd>`+
+    `<dt>TEA key</dt><dd class="key">${bytesToHex(key,"")}</dd>`;
+}
+
+/* ---------- serial ---------- */
+function setSend(on){
+  $("#send").disabled=!(on&&!buildFrame().err);
+  [...document.querySelectorAll("#quick button")].forEach(b=>b.disabled=!on);
+}
+async function connect(){
+  if(port){await disconnect();return;}
+  try{
+    port=await navigator.serial.requestPort();
+    await port.open({baudRate:+$("#baud").value,dataBits:8,stopBits:1,parity:"none",flowControl:"none"});
+    writer=port.writable.getWriter();
+    setConn(true,"connected");logLine("··","note",`port opened @ ${$("#baud").value} 8N1`);
+    keepReading=true;readLoop();setSend(true);refresh();
+  }catch(e){setConn(false,"error",true);logLine("!!","err","connect failed — "+e.message);port=null;}
+}
+async function disconnect(){
+  keepReading=false;
+  try{if(reader){await reader.cancel();reader.releaseLock();reader=null;}}catch(_){}
+  try{if(writer){writer.releaseLock();writer=null;}}catch(_){}
+  try{if(port){await port.close();}}catch(_){}
+  port=null;setConn(false,"disconnected");logLine("··","note","port closed");setSend(false);
+}
+async function readLoop(){
+  while(port&&port.readable&&keepReading){
+    try{
+      reader=port.readable.getReader();
+      while(true){const{value,done}=await reader.read();if(done)break;if(value&&value.length)feed(value);}
+    }catch(e){if(keepReading)logLine("!!","err","read error — "+e.message);}
+    finally{if(reader){try{reader.releaseLock();}catch(_){}}reader=null;}
+    if(!keepReading)break;
+  }
+}
+async function sendBytes(frame){
+  if(!writer){logLine("!!","err","not connected");return;}
+  try{await writer.write(frame);logLine("TX","tx",bytesToHex(frame),asciiOf(frame));}
+  catch(e){logLine("!!","err","write failed — "+e.message);}
+}
+function setConn(on,txt,err){$("#led").className="led"+(on?" on":err?" err":"");$("#status").textContent=txt;$("#connect").textContent=on?"Disconnect":"Connect";}
+
+/* ---------- wiring ---------- */
+$("#quick").addEventListener("click",e=>{const b=e.target.closest("button[data-q]");if(!b)return;const map={"49":0x31,"55":0x37,"59":0x3B};sendBytes(makeFrame(map[b.dataset.q],new Uint8Array(0)).frame);});
+$("#presets").addEventListener("click",e=>{const b=e.target.closest("button[data-p]");if(!b)return;preset=b.dataset.p;[...$("#presets").children].forEach(x=>x.classList.toggle("on",x===b));renderFields();refresh();});
+$("#crcmode").addEventListener("click",e=>{const b=e.target.closest("button[data-m]");if(!b)return;crcMode=b.dataset.m;[...$("#crcmode").children].forEach(x=>x.classList.toggle("on",x===b));refresh();});
+$("#connect").addEventListener("click",connect);
+$("#send").addEventListener("click",()=>{const r=buildFrame();if(!r.err)sendBytes(r.frame);});
+$("#clear").addEventListener("click",()=>{$("#log").innerHTML='<div class="empty">Cleared.</div>';});
+$("#decGo").addEventListener("click",()=>fillDecode(decodeAny(parseHex($("#decin").value)||new Uint8Array(0))));
+$("#baud").addEventListener("change",()=>{if(port)logLine("··","note","reconnect to apply new baud");});
+
+renderFields();refresh();setSend(false);
+if(!("serial" in navigator))$("#banner").classList.add("show");
+</script>

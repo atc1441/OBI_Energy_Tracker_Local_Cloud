@@ -1,0 +1,23 @@
+# no vendor firmware images are distributed (SUMEC / OBI copyright) — dump your own
+firmware/**/*.bin
+firmware/**/*.elf
+firmware/**/*.hex
+firmware/esp32/
+
+# never commit generated key material or captures
+pki/
+*.key
+*.pem
+*.crt
+*.p12
+*.log
+perm_test/
+certs_*/
+__pycache__/
+*.pyc
+*.i64
+*.id0
+*.id1
+*.id2
+*.nam
+*.til
