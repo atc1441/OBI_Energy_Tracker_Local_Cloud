@@ -27,6 +27,13 @@ flowchart LR
 - **Gateway → Cloud:** MQTT über TLS (8883), AWS‑IoT‑Fleet‑Provisioning.
 - **App ↔ Gateway:** BLE GATT (Service `ABF0`, Chars `ABF1`/`ABF2`), Payload = JSON in **TEA**.
 
+Einige erklärungen im Video format gibt es hier:(Zur weiterleitung einfach aufs bild clicken)
+
+[![YoutubeVideo](https://img.youtube.com/vi/2jMEaRuSJ18/0.jpg)](https://www.youtube.com/watch?v=2jMEaRuSJ18)
+
+
+[![YoutubeVideo](https://img.youtube.com/vi/U4Vvf0kHnEk/0.jpg)](https://www.youtube.com/watch?v=U4Vvf0kHnEk)
+
 ## Was möglich ist
 | Ziel | Wie | Sektion |
 |---|---|---|
