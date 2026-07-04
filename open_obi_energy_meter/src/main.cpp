@@ -44,8 +44,12 @@ const uint8_t GWID[6] = { 'O', 'B', 'I', 'E', 'S', 'P' };
 SX1262 radio = new Module(PIN_LORA_NSS, PIN_LORA_DIO1, PIN_LORA_RST, PIN_LORA_BUSY);
 
 // ---- per-reader state (struct in reader.h, shared with the web/MQTT module) --
-const int MAX_READERS = 4;
+const int MAX_READERS = 64;   // ~92 B/entry -> ~6 KB RAM for 64; the real ceiling is LoRa airtime, not memory
 Reader readers[MAX_READERS];
+
+// An UNBOUND reader (never accepted onto this gateway) that goes silent this long is almost certainly a
+// mis-decoded frame — bogus ids like FFFFFD that never really existed — so it is auto-pruned (see loop()).
+static const uint32_t READER_STALE_MS = 400000;   // ~400 s
 
 static uint8_t  g_ourPub[64];        // our static ECDH public key (generated once)
 static bool     g_ecdhReady = false;
@@ -96,7 +100,7 @@ static Reader *addReader(const uint8_t h[3]) {
   Reader *r = findReader(h);
   if (r) return r;
   for (auto &x : readers) if (!x.used) {
-    x = Reader{}; x.used = true; memcpy(x.handle, h, 3);
+    x = Reader{}; x.used = true; x.lastSeenMs = millis(); memcpy(x.handle, h, 3);   // stamp now so a fresh entry isn't instantly pruned
     if (loadUuid(h, x.uuid)) x.haveUuid = true;     // restore a previously-seen UUID
     x.assigned = loadAssigned(h);                   // restore the accept flag (auto-binds on sight)
     return &x;
@@ -853,6 +857,21 @@ void loop() {
     else                            led_set(LED_PORTAL);
   }
   led_loop();
+
+  // Prune stale phantom readers: an UNBOUND entry (never accepted onto this gateway) that hasn't been heard
+  // from in READER_STALE_MS is dropped so the list/UI/MQTT don't fill with ghosts (bad-decode ids like
+  // FFFFFD). A real, still-present reader simply reappears on its next transmission. Assigned readers are
+  // kept regardless — a bound reader going quiet is a signal we want to keep showing, not hide.
+  static uint32_t lastPrune = 0;
+  if (now - lastPrune >= 10000) {
+    lastPrune = now;
+    for (auto &r : readers)
+      if (r.used && !r.assigned && now - r.lastSeenMs >= READER_STALE_MS) {
+        Serial.printf("[prune] drop stale unbound reader %02X%02X%02X (unseen %lus)\n",
+                      r.handle[0], r.handle[1], r.handle[2], (unsigned long)((now - r.lastSeenMs) / 1000));
+        r.haveKey = false; r.used = false;
+      }
+  }
 
   web_loop();     // service the web dashboard + MQTT (both non-blocking)
   delay(5);       // don't busy-spin — free the single core for the LoRa + web tasks

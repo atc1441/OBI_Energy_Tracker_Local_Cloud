@@ -3,3 +3,6 @@
 build.log
 upload.log
 *.log
+# generated per-build by version.py (local, per-machine)
+version.txt
+include/fw_version.h
