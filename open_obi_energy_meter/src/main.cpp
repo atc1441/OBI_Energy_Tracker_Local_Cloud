@@ -1,7 +1,9 @@
 // OBI / heyOBI LoRa mini-gateway  —  ESP32 + SX1262 (any board via board_config.h)
 // ---------------------------------------------------------------------------
 // Acts as the reader's gateway so it pairs & ECDH-key-exchanges with US, letting
-// us hold the per-device TEA key and read the 1.2.x energy payload in the clear.
+// us hold the per-device TEA key and read the energy payload in the clear. Both reader
+// generations do the same ECDH -> TEA-ECB (the old v32 reader / cloud "1.0.1" as well as
+// 1.2.x); only the frame/command layout differs, NOT the crypto.
 //
 // Flow (all reversed from firmware 1.2.1):
 //   - send the 1 Hz time beacon (cmd 15, broadcast) carrying OUR 6-byte gateway id
@@ -305,8 +307,10 @@ static void sendBind(Reader *r) {
   r->lastBind = millis();
 }
 
-// 1.0.x readers announce with cmd 17 and expect an empty cmd 49 ack ("dealBind old cmd"),
-// then report energy with a 1-byte-XOR payload (no ECDH). cmd 49 = OBI old-bind ack.
+// The legacy v32 reader (cloud "1.0.1") announces with cmd 17 and expects an empty cmd 49 ack
+// ("dealBind old cmd"). This ack is a plaintext control frame (only the outer frame XOR) — the reader
+// still runs the ECDH exchange (cmd 32) afterwards and TEA-encrypts its energy, exactly like 1.2.x.
+// cmd 49 = OBI old-bind ack.
 static void sendActivateOld(Reader *r) {
   uint8_t f[8];
   size_t n = obi_build_frame(f, r->handle, 49, nullptr, 0);
@@ -487,19 +491,19 @@ static void handleRx() {
         // new version to trigger the update.
         uint8_t cur = r->softver ? r->softver : 57;
         uint8_t ver = (g_otaActive && !memcmp(r->handle, g_otaTarget, 3)) ? g_otaVersion : cur;
-        if (cmd == 24 || cmd == 25) sendLegacyAck(r, cmd, ver, rssi);   // old _c reader: cmd 56/57 plaintext
+        if (cmd == 24 || cmd == 25) sendLegacyAck(r, cmd, ver, rssi);   // old v32 _c reader: cmd 56/57 TEA
         else                        sendEnergyAck(r, cmd, ver);          // 1.2.x _d reader: cmd 38/40 TEA
       }
       size_t plen = (len - 4) & ~0x7u;
       if (r && plen) {
         uint8_t p[256];
         const char *how = nullptr;  bool legacy = false;
-        // try in priority: XOR/1.2.x (crc), TEA/1.2.x (crc), TEA/legacy (softver[0], plausibility).
-        // (a valid crc is trusted immediately; the legacy layout has no crc so it needs the key.)
-        memcpy(p, d + 4, plen);
-        if (energyValid(p, plen)) how = "xor/1.2.x";
-        if (!how && r->haveKey) { memcpy(p, d + 4, plen); obi_tea_ecb_decrypt(p, plen, r->key);
-                                  if (energyValid(p, plen)) how = "tea/1.2.x"; }
+        // The energy payload is always TEA-ECB with the per-device ECDH key — on the old v32 reader
+        // (cloud "1.0.1") just as on 1.2.x (confirmed by pairing real hardware; the earlier "old readers
+        // send a plaintext / 1-byte-XOR energy payload" assumption did NOT hold). So we only ever
+        // TEA-decrypt: try the 1.2.x CRC layout first, then the legacy layout (no crc -> plausibility).
+        if (r->haveKey) { memcpy(p, d + 4, plen); obi_tea_ecb_decrypt(p, plen, r->key);
+                          if (energyValid(p, plen)) how = "tea/1.2.x"; }
         if (!how && r->haveKey) { memcpy(p, d + 4, plen); obi_tea_ecb_decrypt(p, plen, r->key);
                                   if (legacyValid(p, plen)) { how = "tea/legacy"; legacy = true; } }
         if (how) {

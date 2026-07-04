@@ -1,7 +1,7 @@
 // obi_proto.h — OBI/heyOBI LoRa protocol helpers (reversed from firmware 1.2.1).
 // Frame:  [handle:3 plaintext][b3 = type<<6 | cmd][payload...]
 //   control frames (beacon/scan/bind): b3..end are 1-byte XOR, key = (h0+h1+h2)&0xFF
-//   energy payload on 1.2.x:            bytes 4.. are TEA-ECB with the per-device ECDH key
+//   energy payload (v32 & 1.2.x):       bytes 4.. are TEA-ECB with the per-device ECDH key
 #pragma once
 #include <Arduino.h>
 

@@ -23,9 +23,11 @@ segments — see [../firmware/README.md](../firmware/README.md) for the IDA setu
 ## Key facts (the short version)
 - **BLE** control channel: **classic TEA** (32 rounds, delta `0x9E3779B9`, ECB), one 16-byte key per
   device, JSON payload, 173-byte fragmentation. Key is provisioned, stored in NVS.
-- **LoRa** link: framed, dispatched by a 6-bit command; "encryption" is a **single-byte XOR** whose key
-  is the byte-sum of the cleartext 3-byte handle. An ECDH P-256 exchange gates data flow but its shared
-  secret is unused.
+- **LoRa** link: framed, dispatched by a 6-bit command. The frame has an outer **single-byte XOR** (key =
+  byte-sum of the cleartext 3-byte handle) that only hides `type/cmd` + control payloads. The **energy
+  payload is TEA-ECB** with a per-device **ECDH P-256** key on **both** the old v32 readers (cloud "1.0.1")
+  **and** 1.2.x — the old readers are *not* XOR-only (an earlier note here was wrong; corrected after
+  building the ESP32 gateway).
 - **UART0** exposes a **plaintext** config protocol that can read/write the TEA key, WiFi credentials and
   more — the practical entry point for self-hosting.
 - **OTA**: bridge self-update via MQTT (esp_ota, dual partition); reader firmware is **bundled inside the

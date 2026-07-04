@@ -22,9 +22,11 @@ Subsystem. Das Reader‑Image ist ein rohes Cortex‑M0+‑Binary, hinter die ES
 ## Kernfakten (Kurzfassung)
 - **BLE**‑Steuerkanal: **klassisches TEA** (32 Runden, Delta `0x9E3779B9`, ECB), ein 16‑Byte‑Key pro Gerät,
   JSON‑Payload, 173‑Byte‑Fragmentierung. Key wird provisioniert, in NVS gespeichert.
-- **LoRa**‑Link: geframed, über 6‑Bit‑Command verteilt; „Verschlüsselung" ist **1‑Byte‑XOR**, dessen
-  Schlüssel die Byte‑Summe des Klartext‑Handles ist. Ein ECDH‑P‑256 gated den Datenfluss, das Secret bleibt
-  ungenutzt.
+- **LoRa**‑Link: geframed, über 6‑Bit‑Command verteilt. Der Frame hat ein äußeres **1‑Byte‑XOR** (Key =
+  Byte‑Summe des Klartext‑Handles), das nur `type/cmd` + Steuer‑Payloads verdeckt. Der **Energie‑Payload ist
+  TEA‑ECB** mit einem per‑Device‑**ECDH‑P‑256**‑Key — auf **beiden**, den alten v32‑Readern (Cloud „1.0.1")
+  **und** 1.2.x. Die alten Reader sind *nicht* XOR‑only (eine frühere Notiz hier war falsch; nach dem Bau der
+  ESP32‑Gateway korrigiert).
 - **UART0** bietet ein **Klartext**‑Config‑Protokoll, das TEA‑Key, WLAN‑Daten u. a. lesen/schreiben kann —
   der praktische Einstieg fürs Self‑Hosting.
 - **OTA**: Gateway‑Selbst‑Update via MQTT (esp_ota, Dual‑Partition); die Reader‑Firmware ist **im

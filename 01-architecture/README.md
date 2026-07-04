@@ -50,7 +50,7 @@ flowchart TD
 sequenceDiagram
     participant R as Reader (BAT32G135)
     participant B as Bridge (ESP32-C3)
-    Note over R,B: frame = handle(3B) + type/cmd(1B) + payload, XOR key = (h0+h1+h2) & 0xFF
+    Note over R,B: frame = handle(3B, plaintext) + type/cmd(1B) + payload; outer XOR key = (h0+h1+h2)&0xFF; energy payload = TEA-ECB with ECDH key (v32 & 1.2.x)
     R->>B: cmd 32 — ECDH pubkey (handshake gate)
     B->>R: cmd 32 — bridge pubkey (sets key-ready)
     R->>B: cmd 17 — announce (UUID + RSSI)

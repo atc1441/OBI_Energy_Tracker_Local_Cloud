@@ -12,6 +12,10 @@ Byte 4..  : payload                         ┘ Key = (b0 + b1 + b2) & 0xFF
 - `typ = byte3 >> 6`, `cmd = byte3 & 0x3F`.
 - XOR ab Offset 3; der Key ist nur die Byte‑Summe des Klartext‑Handles → wer einen Frame mitschneidet, kann
   ihn berechnen. Obfuskation, keine Verschlüsselung.
+- **Dieses XOR ist nur die äußere Schicht.** Der **Energie‑Payload** darunter ist zusätzlich **TEA‑ECB**
+  verschlüsselt mit dem per‑Device‑ECDH‑Key — auf den alten v32‑Readern (Cloud „1.0.1") *und* 1.2.x (siehe
+  [ECDH‑Sektion](#ecdh--cmd-32-der-eigentliche-lora-key-auf-v32-und-12x)). Steuer‑Frames bleiben unter dem
+  XOR im Klartext.
 - `typ` 1/2/3 wählen die Bound‑Sensor‑Handler (cmd 1/2/3); `typ 0` nutzt den 6‑Bit‑`cmd`.
 
 ## Timing — beacon‑synchronisiert (wer sendet wann)
@@ -104,18 +108,28 @@ wird als `EnergyTrackingOutlet/…/state` published — Schema in
 [03-cloud-api.md](03-cloud-api.md#firmware-12x-telemetrie-reversed-schema_version-2). Auf 1.2.x sind diese
 Frames **TEA‑verschlüsselt** (siehe ECDH‑Sektion).
 
-## ECDH — cmd 32 (ungenutztes Secret auf 1.0.x; **der eigentliche LoRa‑Key auf 1.2.x**)
+## ECDH — cmd 32 (**der eigentliche LoRa‑Key auf v32 UND 1.2.x**)
 Der Reader sendet einen 64‑Byte‑P‑256‑Public‑Key; das Gateway antwortet mit seinem eigenen 64‑Byte‑Key,
 berechnet ein 32‑Byte‑Shared‑Secret und setzt `key_ready`. **`key_ready` gated die Annahme von
 Energiedaten** (kein Exchange → Daten verworfen), der Handshake ist also immer *Pflicht*.
 
-- **1.0.x / 3x.x:** das Secret wird **nie gelesen** — Frames bleiben 1‑Byte‑XOR. Reines Liveness‑Gate ohne
-  kryptografischen Effekt.
-- **1.2.x:** das Secret **ist der LoRa‑Key**. `lora_cmd32_key_exchange` speichert es per Gerät (Struct `+143`,
-  32 B) und jeder Frame‑Payload wird damit **TEA‑ECB** ver-/entschlüsselt (`lora_encrypt_frame` /
-  `lora_decrypt_frame`), gated durch `key_ready` (`+78`). Auf 1.2.x greift die 1‑Byte‑XOR‑Analyse also nicht
-  mehr — der Link ist echt verschlüsselt (siehe
-  [03-security.md](03-security.md#2-lora-link-ohne-echte-krypto--nur-auf-10x--3xx-in-12x-gefixt)).
+Das Shared‑Secret **ist der LoRa‑Key** — und (eine frühere Annahme hier korrigierend) das gilt **auch für
+die alten v32‑Reader**, nicht nur für 1.2.x. Verifiziert durch den Bau der ESP32‑Gateway
+([../open_obi_energy_meter](../open_obi_energy_meter)): der alte Reader, dessen Cloud‑Firmware‑String
+`1.0.1` lautet, meldet auf dem Link **softver 32 („v32")** und **verlangt** sein Energie‑ACK (cmd 24→56 /
+25→57) **TEA‑verschlüsselt** mit dem ECDH‑Key (reversed aus seinem ACK‑Handler `sub_B7A0`); sein Energie‑
+Uplink wird über denselben TEA‑Pfad dekodiert (`tea/legacy`).
+
+- **v32 (Cloud „1.0.1") / 3x.x:** `lora_cmd32_key_exchange`‑Ergebnis → **TEA‑ECB**‑Payload mit dem Legacy‑
+  Energie‑Layout und den Legacy‑Command‑Nummern (cmd 24/25 Energie, 56/57 ACKs). Gleiche Krypto wie 1.2.x,
+  älteres Frame‑Layout.
+- **1.2.x:** das Secret wird per Gerät gespeichert (Struct `+143`, 32 B) und jeder Frame‑Payload wird damit
+  **TEA‑ECB** ver-/entschlüsselt (`lora_encrypt_frame` / `lora_decrypt_frame`), gated durch `key_ready`
+  (`+78`), mit dem neueren CRC‑präfixierten Energie‑Layout.
+
+Nur das **äußere Frame‑XOR** (Byte3..Ende, Handle‑Summe‑Key) ist allen Versionen gemein und bleibt trivial
+rekonstruierbar; der *Energie‑Payload* selbst ist auf beiden Generationen TEA‑verschlüsselt (siehe
+[03-security.md](03-security.md)).
 
 ## OTA über LoRa (Gateway = Server, Reader zieht)
 Die Reader‑Firmware liegt **im Gateway‑Image** (Markierung `filec`, in der laufenden App‑Partition) und wird
@@ -167,8 +181,9 @@ void setup() {
 }
 ```
 Beim RX bekommst du die rohe LoRa‑Payload = das [Frame‑Format](#frame-format) oben: 3‑Byte‑Klartext‑Handle,
-dann `type|cmd`, dann die Payload. Auf **1.0.x/3x.x** ist die Payload 1‑Byte‑XOR (Key = Handle‑Byte‑Summe,
-trivial rekonstruierbar). Auf **1.2.x** ist sie **TEA‑ECB** mit dem per‑Device‑ECDH‑Key — siehe
-[ECDH‑Sektion](#ecdh--cmd-32-ungenutztes-secret-auf-10x-der-eigentliche-lora-key-auf-12x); ein passiver
+dann `type|cmd`, dann die Payload. Das **äußere XOR** über `Byte3..Ende` (Key = Handle‑Byte‑Summe) ist auf
+jeder Version trivial rekonstruierbar und legt `type/cmd` + Steuer‑Payloads offen. Der **Energie‑Payload**
+ist jedoch **TEA‑ECB** mit dem per‑Device‑ECDH‑Key — auf **beiden** Generationen, den alten v32‑Readern
+**und** 1.2.x — siehe [ECDH‑Sektion](#ecdh--cmd-32-der-eigentliche-lora-key-auf-v32-und-12x); ein passiver
 Sniffer sieht Ciphertext + Klartext‑Handle/‑cmd, braucht aber den Key (aus dem Join oder per Gerät extrahiert),
 um die Energiefelder zu lesen. Siehe [05-lora-direkt.md](05-lora-direkt.md) für das Empfänger‑Projekt.

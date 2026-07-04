@@ -38,7 +38,7 @@ flowchart TD
 sequenceDiagram
     participant R as Reader (BAT32G135)
     participant B as Gateway (ESP32-C3)
-    Note over R,B: Frame = handle(3B) + typ/cmd(1B) + payload, XOR-Key = (h0+h1+h2) & 0xFF
+    Note over R,B: Frame = handle(3B, Klartext) + typ/cmd(1B) + payload; äußerer XOR-Key = (h0+h1+h2)&0xFF; Energie-Payload = TEA-ECB mit ECDH-Key (v32 & 1.2.x)
     R->>B: cmd 32 — ECDH-Pubkey (Handshake-Gate)
     B->>R: cmd 32 — Gateway-Pubkey (setzt key-ready)
     R->>B: cmd 17 — Announce (UUID + RSSI)

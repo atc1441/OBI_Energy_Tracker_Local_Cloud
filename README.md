@@ -32,7 +32,7 @@ This repo is made together with these explanation videos:(click on the image)
 ```mermaid
 flowchart LR
     M["⚡ Electricity meter"] -->|"IR / optical<br/>OBIS registers"| R["📟 Reader<br/>BAT32G135 + LoRa"]
-    R <-->|"868 MHz LoRa<br/>SX1262 · 1-byte XOR"| B["📶 Bridge<br/>ESP32-C3<br/>WiFi + BLE"]
+    R <-->|"868 MHz LoRa<br/>SX1262 · TEA-ECB (ECDH)"| B["📶 Bridge<br/>ESP32-C3<br/>WiFi + BLE"]
     B <-->|"MQTTS 8883<br/>TLS + AWS IoT"| C[("☁️ Cloud<br/>yours or vendor")]
     P["📱 Phone app"] -.->|"BLE ABF1/ABF2<br/>TEA + JSON"| B
     subgraph Field
@@ -116,8 +116,10 @@ firmware/                   Loader script + IDA notes (no vendor binaries — du
 
 ## Security posture (factual summary)
 The BLE control channel uses **TEA** (single 16-byte key per device, and that key is also retrievable from
-the vendor cloud with just a login + the BLE name — no ownership check). The **LoRa link is only obfuscated
-with a single-byte XOR on `1.0.x`/`3x.x`** (its ECDH shared secret goes unused) — but **`1.2.x` fixed this**:
-LoRa is TEA-encrypted with a per-device ECDH-derived key. The plaintext **UART config channel can read/write
+the vendor cloud with just a login + the BLE name — no ownership check). The **LoRa energy payload is
+TEA-encrypted with a per-device ECDH-derived key on both reader generations** — the old readers (cloud
+firmware `1.0.1`, softver `32`/"v32") do the same ECDH → TEA-ECB as `1.2.x`; only the frame layout differs
+(an earlier "old readers are single-byte-XOR only" claim was **wrong**, corrected after building the ESP32
+gateway). The single-byte XOR is only an outer frame obfuscation. The plaintext **UART config channel can read/write
 the TEA key and WiFi credentials**. Details and impact are in
 [03-reverse-engineering](03-reverse-engineering/). These notes exist so owners can secure and self-host their units.

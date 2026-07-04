@@ -29,7 +29,7 @@ bind + ECDH). Everything was reverse-engineered from firmware `1.2.1`; details i
 | # | Feature | Notes |
 |---|---|---|
 | 1 | **Full bridge replacement** | 1 Hz time beacon, scan, announce/reconnect, bind, mutual **ECDH (P-256)** key exchange |
-| 2 | **Both reader generations** | `1.2.x` (TEA-ECB with per-device ECDH key) **and** legacy `3x.x` (single-byte XOR) auto-detected |
+| 2 | **Both reader generations** | `1.2.x` and the legacy v32 reader (cloud "1.0.1"/softver `32`) — **both TEA-ECB with a per-device ECDH key**, only the frame layout differs; auto-detected |
 | 3 | **Energy decode** | import / export / power, battery, firmware/hardware version, infrared & low-power flags |
 | 4 | **Set upload interval** | per reader, from the web UI **or** MQTT — rides the encrypted energy-ACK the reader already waits for |
 | 5 | **Reader firmware OTA over LoRa** | flash your own reader image; all three pull protocols served; can **un-brick** a reader stuck in its bootloader |
@@ -168,9 +168,11 @@ The firmware is split so the radio state machine and the network stack never blo
 **How pairing works** (all handled automatically): the reader is passive and waits for the gateway. It
 accepts our 1 Hz beacon (it only checks the gateway id), announces (cmd 17/35) or reconnects (cmd 18/58);
 we scan-ack + bind (cmd 59); the reader runs a mutual **ECDH P-256** exchange (cmd 32) and from then on
-TEA-encrypts its energy payloads with the derived key. Legacy `3x.x` readers do the same dance with the
-older cmd 49/50 acks and an un-encrypted payload layout. Turn the vendor bridge off and it happens on its
-own — no factory reset required.
+TEA-encrypts its energy payloads with the derived key. The legacy **v32** reader (cloud firmware "1.0.1")
+does the **same** ECDH + TEA-ECB dance — it even *requires* its acks TEA-encrypted (reversed from its
+`sub_B7A0` handler) — just with the older command numbers (cmd 24/25 energy → 56/57 acks) and the legacy
+energy layout. It is **not** XOR-only. Turn the vendor bridge off and it happens on its own — no factory
+reset required.
 
 ## Notes & limits
 
@@ -220,7 +222,7 @@ Bind + ECDH). Alles wurde aus Firmware `1.2.1` reversed; Details in
 | # | Funktion | Hinweise |
 |---|---|---|
 | 1 | **Vollständiger Bridge-Ersatz** | 1-Hz-Zeit-Beacon, Scan, Announce/Reconnect, Bind, gegenseitiger **ECDH (P-256)**-Schlüsseltausch |
-| 2 | **Beide Reader-Generationen** | `1.2.x` (TEA-ECB mit Pro-Gerät-ECDH-Schlüssel) **und** Legacy `3x.x` (1-Byte-XOR), automatisch erkannt |
+| 2 | **Beide Reader-Generationen** | `1.2.x` und der Legacy-v32-Reader (Cloud „1.0.1"/softver `32`) — **beide TEA-ECB mit Pro-Gerät-ECDH-Schlüssel**, nur das Frame-Layout unterscheidet sich; automatisch erkannt |
 | 3 | **Energie-Dekodierung** | Bezug / Einspeisung / Leistung, Batterie, Firmware-/Hardware-Version, Infrarot- & Low-Power-Flags |
 | 4 | **Upload-Intervall setzen** | je Reader, über die Web-UI **oder** MQTT — reist im verschlüsselten Energie-ACK mit, auf den der Reader ohnehin wartet |
 | 5 | **Reader-Firmware-OTA über LoRa** | eigenes Reader-Image flashen; alle drei Pull-Protokolle bedient; kann einen im Bootloader festhängenden Reader **wiederbeleben** |
@@ -361,8 +363,10 @@ Die Firmware ist so aufgeteilt, dass sich Funk-Statemachine und Netzwerk-Stack n
 akzeptiert unser 1-Hz-Beacon (prüft nur die Gateway-ID), meldet sich an (cmd 17/35) oder verbindet neu
 (cmd 18/58); wir scan-acken + binden (cmd 59); der Reader führt einen gegenseitigen **ECDH-P-256**-Tausch
 durch (cmd 32) und verschlüsselt ab dann seine Energie-Payloads per TEA mit dem abgeleiteten Schlüssel.
-Legacy-`3x.x`-Reader machen dasselbe mit den älteren cmd-49/50-ACKs und einem unverschlüsselten Payload-
-Layout. Hersteller-Bridge ausschalten — der Rest passiert von selbst, kein Werksreset nötig.
+Der Legacy-**v32**-Reader (Cloud-Firmware „1.0.1") macht **dasselbe** ECDH + TEA-ECB — er *verlangt* seine
+ACKs sogar TEA-verschlüsselt (reversed aus seinem `sub_B7A0`-Handler) — nur mit den älteren Command-Nummern
+(cmd 24/25 Energie → 56/57 ACKs) und dem Legacy-Energie-Layout. Er ist **nicht** XOR-only. Hersteller-Bridge
+ausschalten — der Rest passiert von selbst, kein Werksreset nötig.
 
 ## Hinweise & Grenzen
 

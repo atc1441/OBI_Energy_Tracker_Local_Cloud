@@ -41,22 +41,25 @@ void setup() {
 ```
 1. strip the 3-byte handle (bytes 0..2, plaintext)
 2. byte3 -> type = >>6, cmd = &0x3F      (do this on the DECRYPTED payload)
-3a. firmware 1.0.x / 3x.x:  key = (b0+b1+b2) & 0xFF ; XOR bytes 3..end  -> trivially recoverable from the frame
-3b. firmware 1.2.x:         payload is TEA-ECB with the per-device ECDH key (see below) — NOT recoverable passively
+3.  all versions:          key = (b0+b1+b2) & 0xFF ; XOR bytes 3..end  -> recovers type/cmd + control-frame payloads
+3b. energy payload:        TEA-ECB with the per-device ECDH key on BOTH old v32 (cloud "1.0.1") AND 1.2.x — NOT recoverable passively
 4. parse payload by cmd (energy layout for 19/22/23; see lora-protocol.md)
 ```
 The plaintext handle + `type|cmd` are always visible, so you can always see **who** is talking and **which**
-frame it is. On **1.0.x** the whole payload is readable straight from the air (the XOR key is the handle
-byte-sum). On **1.2.x** the energy fields are genuinely **TEA-encrypted** — a passive sniffer sees ciphertext;
+frame it is. Contrary to an earlier claim here, the old readers are **not** XOR-only: the reader the cloud
+reports as `1.0.1` reports **softver 32 ("v32")** on the link and TEA-encrypts its energy payload with an
+ECDH-derived key, exactly like **1.2.x** (only the frame layout differs). So on **both** generations the
+energy fields are genuinely **TEA-encrypted** — a passive sniffer sees ciphertext;
 to read the meter values you need that device's key, either by **observing/answering the ECDH join** (you act
 as the gateway, below) or by extracting it. See
-[lora-protocol.md · ECDH](../03-reverse-engineering/lora-protocol.md#ecdh--cmd-32-unused-secret-on-10x-the-actual-lora-key-on-12x).
+[lora-protocol.md · ECDH](../03-reverse-engineering/lora-protocol.md#ecdh--cmd-32-the-actual-lora-key-on-both-v32-and-12x).
 
 ## Acting as the bridge (bidirectional)
 To fully replace the bridge you implement the RX dispatch and the TX side:
 - Answer **cmd 32** (ECDH): the reader won't send energy data until `key_ready` is set, so you must
-  complete the key-exchange handshake (send a 64-byte P-256 public key back). The shared secret is not
-  used afterwards, so the exchange just needs to *complete*.
+  complete the key-exchange handshake (send a 64-byte P-256 public key back). The shared secret **is** the
+  crypto key — derive `TEA key = first 16 bytes of the shared X` and use it to decrypt the reader's energy
+  frames and to TEA-encrypt the acks it requires (this holds for the old v32 reader too, not just 1.2.x).
 - Handle **cmd 17** (announce) and issue scan/bind so the reader considers itself paired.
 - Optionally serve **OTA** (cmd 20/21) if you want to push your own reader firmware — the reader pulls
   64-byte blocks by offset; you supply metadata (frame cmd 12) then blocks (frame cmd 71). Source the

@@ -16,6 +16,10 @@ Byte 4..  : payload                         ┘ key = (b0 + b1 + b2) & 0xFF
 - `type = byte3 >> 6`, `cmd = byte3 & 0x3F`.
 - XOR applies from offset 3 to the end; the key is just the byte-sum of the cleartext handle → anyone
   who captures a frame can compute it. This is obfuscation, not encryption.
+- **This XOR is only the outer layer.** The **energy payload** underneath is additionally **TEA-ECB**
+  encrypted with the per-device ECDH key — on the old v32 readers (cloud "1.0.1") *and* 1.2.x (see the
+  [ECDH section](#ecdh--cmd-32-the-actual-lora-key-on-both-v32-and-12x)). Control frames stay plaintext
+  under the XOR.
 - `type` 1/2/3 select the bound-sensor data handlers (cmd 1/2/3); `type 0` uses the 6-bit `cmd`.
 
 ## Timing — beacon-synchronized (who sends when)
@@ -105,18 +109,28 @@ is published as `EnergyTrackingOutlet/…/state` — schema in
 [cloud-api.md](cloud-api.md#firmware-12x-telemetry-reversed-schema_version-2). On 1.2.x these frames are
 **TEA-encrypted** (see the ECDH section below).
 
-## ECDH — cmd 32 (unused secret on 1.0.x; **the actual LoRa key on 1.2.x**)
+## ECDH — cmd 32 (**the actual LoRa key on both v32 and 1.2.x**)
 The reader sends a 64-byte P-256 public key; the bridge replies with its own 64-byte key, computes a
 32-byte shared secret, and sets `key_ready`. **`key_ready` gates energy-data acceptance** (no exchange →
 data rejected), so the handshake is always *required*.
 
-- **1.0.x / 3x.x:** the shared secret is **never read** — frames stay 1-byte XOR. The handshake is just a
-  liveness gate with no cryptographic effect.
-- **1.2.x:** the shared secret **is the LoRa key**. `lora_cmd32_key_exchange` stores it per device
-  (struct `+143`, 32 B) and every frame payload is **TEA-ECB** encrypted/decrypted with it
-  (`lora_encrypt_frame` / `lora_decrypt_frame`), gated by the `key_ready` flag (`+78`). So on 1.2.x the
-  1-byte-XOR analysis below no longer applies — the link is genuinely encrypted (see
-  [security-notes.md](security-notes.md#2-lora-link-has-no-real-crypto--on-10x--3xx-only-fixed-in-12x)).
+The shared secret **is the LoRa key** — and (correcting an earlier assumption here) that is true on the
+**old v32 readers too**, not just 1.2.x. This was confirmed by building the ESP32 gateway
+([../open_obi_energy_meter](../open_obi_energy_meter)): the old reader whose cloud firmware string is
+`1.0.1` reports **softver 32 ("v32")** on the link and **requires** its energy ACK (cmd 24→56 / 25→57) to
+be **TEA-encrypted** with the ECDH-derived key (reversed from its ack handler `sub_B7A0`); its energy
+uplink is decoded via the same TEA path (`tea/legacy`).
+
+- **v32 (cloud "1.0.1") / 3x.x:** `lora_cmd32_key_exchange` result → **TEA-ECB** payload with the legacy
+  energy layout and legacy command numbers (cmd 24/25 energy, 56/57 acks). Same crypto as 1.2.x, older
+  frame layout.
+- **1.2.x:** the shared secret is stored per device (struct `+143`, 32 B) and every frame payload is
+  **TEA-ECB** encrypted/decrypted with it (`lora_encrypt_frame` / `lora_decrypt_frame`), gated by the
+  `key_ready` flag (`+78`), with the newer CRC-prefixed energy layout.
+
+Only the **outer frame XOR** (byte3..end, handle-sum key) is common to all versions and remains trivially
+recoverable; the *energy payload* itself is TEA-encrypted on both generations (see
+[security-notes.md](security-notes.md)).
 
 ## OTA over LoRa (bridge = server, reader pulls)
 The reader firmware lives **inside the bridge image** (marked `filec`, in the running app partition) and
@@ -168,8 +182,9 @@ void setup() {
 }
 ```
 On RX you get the raw LoRa payload = the [frame format](#frame-format) above: 3-byte plaintext handle, then
-`type|cmd`, then the payload. On **1.0.x/3x.x** the payload is 1-byte XOR (key = handle byte-sum, trivially
-recoverable). On **1.2.x** the payload is **TEA-ECB** with the per-device ECDH key — see the
-[ECDH section](#ecdh--cmd-32-unused-secret-on-10x-the-actual-lora-key-on-12x); a passive sniffer sees the
+`type|cmd`, then the payload. The `byte3..end` **outer XOR** (key = handle byte-sum) is trivially
+recoverable on every version and reveals `type/cmd` + control-frame payloads. The **energy payload**,
+however, is **TEA-ECB** with the per-device ECDH key on **both** the old v32 readers **and** 1.2.x — see the
+[ECDH section](#ecdh--cmd-32-the-actual-lora-key-on-both-v32-and-12x); a passive sniffer sees the
 ciphertext and the plaintext handle/cmd, but needs the key (from the join, or extracted per device) to read
 the energy fields. See [../05-lora-direct-868mhz](../05-lora-direct-868mhz/) for the receiver project.

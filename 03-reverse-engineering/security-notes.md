@@ -18,19 +18,30 @@ name) and holds any OBI account can pull the key that protects its BLE control c
 the per-device TEA key is effectively low-secrecy. Owners: prefer the UART path and treat the BLE key as
 not-secret. See [cloud-api.md](cloud-api.md#where-the-device-secrets-come-from).
 
-## 2. LoRa link has no real crypto — **on 1.0.x / 3x.x only (fixed in 1.2.x)**
-On `1.0.x` (and the `3x.x` readers) frames are obfuscated with a **single-byte XOR** whose key is the
-byte-sum of the cleartext 3-byte handle — derivable from any captured frame. The ECDH exchange (cmd 32)
-gates data flow but its shared secret is **never used**. Result on those versions: LoRa traffic can be
-read, forged, and injected (fake energy readings, or pulling the stored reader firmware via unbound cmd 21).
+## 2. LoRa link crypto — outer XOR on every frame, but old readers are TEA-encrypted, **not** XOR-only
+Every frame's `byte3..end` is obfuscated with a **single-byte XOR** whose key is the byte-sum of the
+cleartext 3-byte handle — derivable from any captured frame. So the handle, the `type/cmd` byte and the
+plaintext control-frame payloads are effectively public on **every** firmware. That part is real.
 
-> **Fixed in firmware 1.2.x.** The `1.2.1` bridge actually **uses** the ECDH result: `lora_cmd32_key_exchange`
-> takes the reader's P-256 public key, computes a 32-byte shared secret (`ecdh_compute_shared_secret`), and
-> stores it per device; `lora_decrypt_frame` / `lora_encrypt_frame` then run **TEA-ECB** over the payload
-> with that key (device struct: `+78` key-ready flag, `+79` reader pubkey 64 B, `+143` shared key 32 B).
-> So on `1.2.x` the LoRa link is TEA-encrypted with a per-device ECDH-derived key — the 1-byte-XOR read/forge
-> no longer applies. (The key exchange itself is still unauthenticated, so an active MITM during the join is
-> a separate question.) See [lora-protocol.md](lora-protocol.md).
+> **Correction (verified by building the ESP32 gateway).** An earlier version of this note claimed the
+> *energy payload* also stayed 1-byte-XOR on `1.0.x`/`3x.x`, on the assumption that the ECDH secret "went
+> unused." Pairing a real reader with our own gateway ([../open_obi_energy_meter](../open_obi_energy_meter))
+> disproved that. The old reader the cloud reports as firmware **`1.0.1`** in fact reports **softver 32
+> ("v32")** on the LoRa link and runs the **same ECDH → TEA-ECB** crypto as 1.2.x. Reversed from the v32
+> reader's ack handler `sub_B7A0`, that reader **requires** its energy ACK (cmd 24→56 / 25→57) to be
+> **TEA-encrypted** with the ECDH-derived key — it rejects anything that isn't a multiple of 8 or doesn't
+> decrypt — and its energy uplink decodes as TEA as well (`tea/legacy` in `main.cpp`). Only the **frame /
+> command layout** differs from 1.2.x (legacy energy layout, cmd 24/25 energy + 56/57 acks, cmd 17/49
+> announce/bind) — **not** the encryption.
+
+**On 1.2.x** the mechanism is identical: `lora_cmd32_key_exchange` takes the reader's P-256 public key,
+computes a 32-byte shared secret (`ecdh_compute_shared_secret`) and stores it per device; `lora_decrypt_frame`
+/ `lora_encrypt_frame` run **TEA-ECB** over the payload with that key (device struct: `+78` key-ready flag,
+`+79` reader pubkey 64 B, `+143` shared key 32 B). So on **v32 and 1.2.x** the LoRa energy payload is
+TEA-encrypted with a per-device ECDH key — the read/forge/inject scenario from the old XOR-only claim does
+**not** apply to these readers. The real residual weakness is that **the ECDH join itself is
+unauthenticated**, so an active MITM *during pairing* could still establish its own key (on both
+generations). See [lora-protocol.md](lora-protocol.md).
 
 ## 3. BLE fragment reassembly — heap overflow (partial finding)
 `ble_reassemble_frags` allocates a **fixed 5120-byte** buffer on the first fragment and then appends each

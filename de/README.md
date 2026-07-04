@@ -17,7 +17,7 @@ mit dem Reader spricht — damit dir die gekaufte Hardware wirklich gehört.
 ```mermaid
 flowchart LR
     M["⚡ Stromzähler"] -->|"IR / optisch<br/>OBIS-Register"| R["📟 Reader<br/>BAT32G135 + LoRa"]
-    R <-->|"868 MHz LoRa<br/>SX1262 · 1-Byte-XOR"| B["📶 Gateway<br/>ESP32-C3<br/>WLAN + BLE"]
+    R <-->|"868 MHz LoRa<br/>SX1262 · TEA-ECB (ECDH)"| B["📶 Gateway<br/>ESP32-C3<br/>WLAN + BLE"]
     B <-->|"MQTTS 8883<br/>TLS + AWS IoT"| C[("☁️ Cloud<br/>deine oder Hersteller")]
     P["📱 App"] -.->|"BLE ABF1/ABF2<br/>TEA + JSON"| B
 ```
@@ -86,8 +86,10 @@ Firmware nur über die eigene Cloud‑OTA (Bootloader per eFuse gesperrt).
 
 ## Sicherheits‑Kurzfassung
 BLE‑Steuerkanal nutzt **TEA** (ein 16‑Byte‑Key pro Gerät — der zudem mit nur Login + BLE‑Name aus der
-Hersteller‑Cloud abrufbar ist, ohne Besitz‑Prüfung). Der **LoRa‑Link ist auf `1.0.x`/`3x.x` nur mit
-1‑Byte‑XOR obfuskiert** (ECDH‑Secret ungenutzt) — **`1.2.x` hat das gefixt**: LoRa ist dort TEA‑verschlüsselt
-mit einem per‑Device‑ECDH‑Key. Der Klartext‑**UART‑Config‑Kanal kann TEA‑Key und WLAN‑Daten lesen/schreiben**.
+Hersteller‑Cloud abrufbar ist, ohne Besitz‑Prüfung). Der **LoRa‑Energie‑Payload ist auf beiden Reader‑
+Generationen TEA‑verschlüsselt mit einem per‑Device‑ECDH‑Key** — die alten Reader (Cloud‑Firmware `1.0.1`,
+softver `32`/„v32") machen dasselbe ECDH → TEA‑ECB wie `1.2.x`, nur das Frame‑Layout unterscheidet sich (eine
+frühere Behauptung „alte Reader sind nur 1‑Byte‑XOR" war **falsch**, nach dem Bau der ESP32‑Gateway
+korrigiert). Das 1‑Byte‑XOR ist nur äußere Frame‑Obfuskation. Der Klartext‑**UART‑Config‑Kanal kann TEA‑Key und WLAN‑Daten lesen/schreiben**.
 Details: [03 · Reversing](03-reverse-engineering.md). Diese Hinweise dienen dazu, eigene Geräte
 abzusichern/selbst zu hosten.
