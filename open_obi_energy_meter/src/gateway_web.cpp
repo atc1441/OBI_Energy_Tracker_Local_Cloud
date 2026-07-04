@@ -127,8 +127,9 @@ body{margin:0;background:
  radial-gradient(1200px 500px at 80% -10%,#12351f33,transparent),
  radial-gradient(900px 400px at -10% 0%,#0e2a4a33,transparent),var(--bg);
  color:var(--txt);font:14.5px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;min-height:100vh}
-header{padding:14px 20px;display:flex;align-items:center;gap:13px;position:sticky;top:0;z-index:5;
+header{padding:12px 20px;position:sticky;top:0;z-index:5;
  background:#0a0e14cc;backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.htop{display:flex;align-items:center;gap:13px}
 .logo{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;font-size:19px;
  background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 0 18px #31d07a55}
 h1{font-size:16px;margin:0;font-weight:650}.sub{color:var(--dim);font-size:12px}
@@ -137,9 +138,9 @@ h1{font-size:16px;margin:0;font-weight:650}.sub{color:var(--dim);font-size:12px}
 .seg button{background:transparent;border:0;color:var(--dim);padding:7px 12px;cursor:pointer;font-size:13px;font-weight:600}
 .seg button.act{background:var(--accent);color:#04140a}
 .icon{background:var(--panel2);border:1px solid var(--line);color:var(--dim);border-radius:9px;padding:7px 11px;cursor:pointer;font-size:15px}
-.wrap{max-width:860px;margin:0 auto;padding:20px}
-.bar{display:flex;flex-wrap:wrap;gap:9px;margin-bottom:16px}
-.pill{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 13px;font-size:12.5px}
+.wrap{max-width:1200px;margin:0 auto;padding:20px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;margin-top:11px}
+.pill{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:7px 12px;font-size:12.5px;white-space:nowrap}
 .pill .k{color:var(--dim);margin-right:7px;font-weight:600}.pill b{font-family:var(--mono)}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
 .on{background:var(--accent);box-shadow:0 0 8px var(--accent)}.off{background:var(--red)}.idle{background:var(--dim)}
@@ -158,11 +159,12 @@ h1{font-size:16px;margin:0;font-weight:650}.sub{color:var(--dim);font-size:12px}
 .uuid{font-family:var(--mono);font-size:11.5px;color:var(--dim);word-break:break-all;margin:7px 0 13px;
  padding:6px 9px;background:#0d131b;border-radius:8px;border:1px solid #1a222d}
 .uuid b{color:#9fb0c4;letter-spacing:.5px}
-.mx{display:grid;grid-template-columns:repeat(auto-fit,minmax(92px,1fr));gap:7px}
-.mc{background:#0f151d;border:1px solid #1a222d;border-radius:9px;padding:8px 10px}
-.mc .l{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.7px;font-weight:600;margin-bottom:4px}
-.mc .v{font-family:var(--mono);font-size:15px;font-weight:600}
-.mc .v small{font-size:11px;color:var(--dim);font-weight:400}
+.mx{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:8px}
+.mc{background:#0f151d;border:1px solid #1a222d;border-radius:10px;padding:9px 11px;display:flex;flex-direction:column;gap:3px;min-width:0}
+.mc .l{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.7px;font-weight:600}
+.mc .v{font-family:var(--mono);font-size:15.5px;font-weight:600;line-height:1.15;
+ white-space:nowrap;font-variant-numeric:tabular-nums;display:flex;align-items:baseline;gap:3px}
+.mc .v small{font-size:11px;color:var(--dim);font-weight:400;flex:none}
 .v.na{color:#3d4a5a}
 .batt{height:5px;background:#0a0e14;border-radius:3px;overflow:hidden;margin-top:6px}
 .batt>i{display:block;height:100%;border-radius:3px;transition:.3s}
@@ -183,10 +185,13 @@ button.g{background:transparent;color:var(--txt);border:1px solid var(--line);bo
 footer{color:var(--dim);font-size:12px;text-align:center;padding:26px}
 footer b{font-family:var(--mono);color:var(--txt)}
 </style></head><body>
-<header><div class="logo">⚡</div><div><h1>OBI LoRa Gateway</h1><div class="sub" id="sub"></div></div>
+<header>
+<div class="htop"><div class="logo">⚡</div><div><h1>OBI LoRa Gateway</h1><div class="sub" id="sub"></div></div>
 <div class="spacer"></div>
 <div class="seg"><button id="lde" onclick="setLang('de')">DE</button><button id="len" onclick="setLang('en')">EN</button></div>
-<button class="icon" onclick="tog('mq')" title="MQTT">⚙</button></header>
+<button class="icon" onclick="tog('mq')" title="MQTT">⚙</button></div>
+<div class="bar" id="bar"></div>
+</header>
 <div class="wrap">
  <div class="panel" id="mq">
   <h2 id="mqtt_h"></h2><div class="sub" id="mqtt_stat"></div>
@@ -200,7 +205,6 @@ footer b{font-family:var(--mono);color:var(--txt)}
   <button class="b" onclick="saveMqtt()" id="b_save"></button>
   <div class="sub" id="mqtt_cmd" style="margin-top:10px"></div>
  </div>
- <div class="bar" id="bar"></div>
  <div class="list" id="list"></div>
  <footer><span id="ft"></span> · <b id="gw"></b></footer>
 </div>
