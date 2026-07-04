@@ -1342,7 +1342,7 @@ static void webTask(void *) {
     }
     if (g_serverUp) {
       server.handleClient();
-      if (conn) mqttService();                                // no MQTT attempts while on the setup AP
+      if (conn && !gw_ota_active()) mqttService();            // pause MQTT during a reader OTA (keep WiFi quiet)
     }
     g_mqttUp = conn && mqtt.connected();                      // cache for the e-paper task (owns PubSubClient here)
     vTaskDelay(pdMS_TO_TICKS(2));

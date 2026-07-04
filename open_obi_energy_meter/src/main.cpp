@@ -121,9 +121,11 @@ static bool acceptReader(Reader *r) {
 // preempts the web/MQTT task and answers a reader's OTA block request inside its short RX window — the
 // same reason the stock firmware is fast on the C3. The DIO1 ISR wakes the task immediately.
 volatile bool g_rx = false;
+volatile uint32_t g_reqMicros = 0;   // micros() at the last DIO1 IRQ (RxDone) — for measuring response latency
 static SemaphoreHandle_t g_loraSem = nullptr;
 void IRAM_ATTR onDio1() {
   g_rx = true;
+  g_reqMicros = micros();
   if (g_loraSem) { BaseType_t hpw = pdFALSE; xSemaphoreGiveFromISR(g_loraSem, &hpw); if (hpw) portYIELD_FROM_ISR(); }
 }
 
@@ -167,8 +169,7 @@ static void txFrame(const uint8_t *buf, size_t len, const char *what) {
   radio.startReceive();
   g_rx = false;                 // discard the TxDone that also pulses DIO1
   gw_radio_log('T', buf, -1, (int)len, 0, what);   // buf[0..2] = target handle (plaintext)
-  if (strcmp(what, "ota-blk") != 0)                // skip the per-block spam during a reader OTA (frees the loop)
-    Serial.printf("  TX %-6s len=%d -> %d\n", what, (int)len, st);
+  Serial.printf("  TX %-6s len=%d -> %d\n", what, (int)len, st);   // note carries offset+latency for OTA blocks
 }
 
 // pull the 16-byte UUID + type + version out of an announce (XOR-decoded payload).
@@ -350,7 +351,8 @@ static void serveOtaRequest(const uint8_t handle[3], const uint8_t *req, size_t 
     uint16_t bc = obi_crc16(b + 6, 64);
     b[70] = bc & 0xFF; b[71] = bc >> 8;
     uint8_t f[80]; size_t n = obi_build_frame(f, handle, 34, b, sizeof(b));
-    txFrame(f, n, "ota-blk");
+    char note[16]; snprintf(note, sizeof note, "b@%u", (unsigned)pos);
+    txFrame(f, n, note);
     if (pos < g_otaSize) { uint32_t s = pos + 64 > g_otaSize ? g_otaSize : pos + 64; if (s > g_otaServed) g_otaServed = s; }
     if (g_otaServed >= g_otaSize) {                   // whole image served -> stop advertising the version
       g_otaActive = false;
@@ -358,6 +360,14 @@ static void serveOtaRequest(const uint8_t handle[3], const uint8_t *req, size_t 
     }
   }
 }
+
+// Wait until this many µs after the reader's request (RxDone) before sending the OTA block, so the reader
+// has finished its TX->RX turnaround and is actually listening. Answering too early (the C3 does it in
+// ~1.8 ms) means the block preamble arrives before the reader's RX is open -> it misses it -> 1 s retry.
+#ifndef OTA_RESP_DELAY_US
+#define OTA_RESP_DELAY_US 8000
+#endif
+static inline void otaRespWait() { while ((uint32_t)(micros() - g_reqMicros) < OTA_RESP_DELAY_US) {} }
 
 // LEGACY OTA used by the reader BOOTLOADER. Response cmd = reqCmd | 0x20 (cmd21->53, cmd20->52). type 0x10.
 // request 6B = [f0][f1][offset:4 LE]; readPos = big-endian of those 4 bytes.
@@ -394,10 +404,11 @@ static void serveOtaLegacy(const uint8_t handle[3], uint8_t reqCmd, const uint8_
       blen = 69;
     }
     uint8_t f[80]; size_t n = obi_build_frame(f, handle, rc, b, blen);
-    txFrame(f, n, "ota-blk");
+    uint32_t lat = (uint32_t)(micros() - g_reqMicros);        // RxDone -> just before TX = our response latency
+    char note[24]; snprintf(note, sizeof note, "b@%u %uus", (unsigned)pos, (unsigned)lat);
+    txFrame(f, n, note);
     if (pos < g_otaSize) { uint32_t s = pos + 64 > g_otaSize ? g_otaSize : pos + 64; if (s > g_otaServed) g_otaServed = s; }
-    if ((g_otaServed & 0x7FF) < 64)   // progress line only every ~2 KB, not every 64 B block
-      Serial.printf("[ota%u] %u/%u\n", reqCmd, g_otaServed, g_otaSize);
+    Serial.printf("[ota%u] @%u  %u/%u\n", reqCmd, pos, g_otaServed, g_otaSize);
   }
 }
 
@@ -554,9 +565,13 @@ static void handleRx() {
   { Reader *seen = findReader(handle);
     if (seen) { seen->lastSeenMs = millis(); seen->lastRssi = rssi; } }
 
-  // quiet the per-request RX spam during an active OTA (the reader polls blocks continuously)
-  if (!(gw_ota_active() && (cmd == 20 || cmd == 21 || cmd == 33)))
-    Serial.printf("\nRX %02X%02X%02X cmd=%u len=%d rssi=%.0f\n", handle[0], handle[1], handle[2], cmd, len, rssi);
+  Serial.printf("\nRX %02X%02X%02X cmd=%u len=%d rssi=%.0f\n", handle[0], handle[1], handle[2], cmd, len, rssi);
+
+  // The reader (bootloader AND main firmware) needs a few ms to turn its radio TX->RX after sending; answer
+  // any request too early and it isn't listening yet. Wait here so EVERY response (bind/ECDH/ack/OTA block)
+  // lands in the reader's RX window — same fix that made the reader OTA fast, applied to all replies.
+  // (skip for a foreign beacon: we never reply to it, so no need to burn the delay.)
+  if (cmd != OBI_CMD_TIME_BEACON) otaRespWait();
 
   switch (cmd) {
     // The reader keeps sending its "find gateway" frame between energy reports and needs the
@@ -765,7 +780,7 @@ static void loraTask(void *) {
     if (g_rx) { g_rx = false; handleRx(); }
     uint32_t now = millis();
     bool ota = gw_ota_active();
-    if (now - lastBeacon >= (ota ? 5000u : 1000u)) { lastBeacon = now; sendBeacon(); }
+    if (now - lastBeacon >= 1000u) { lastBeacon = now; sendBeacon(); }   // keep 1 Hz beacon (readers pace to it)
     if (!ota && now - lastScan >= 3000) { lastScan = now; sendScan(); }
     if (!ota)                                         // re-pair safety net for assigned, not-yet-keyed readers
       for (auto &r : readers)
@@ -807,8 +822,10 @@ void setup() {
   buttonSetup();   // case button: hold to factory-reset (closed-case OBI_BOARD_OBI_C3)
 #endif
   flash_dbg_uart_begin();   // UART flash console, runs alongside the log (type 'help')
-  // LoRa in its own high-priority task on the Arduino core (preempts web on the single-core C3)
-  xTaskCreatePinnedToCore(loraTask, "lora", 8192, nullptr, 3, nullptr, CONFIG_ARDUINO_RUNNING_CORE);
+  // LoRa in its own task, priority ABOVE the TCP/IP stack (18) + web task (1) so on the single-core C3 the
+  // WiFi/HTTP/MQTT work can't delay a reader's OTA block response past its short RX window (this is the
+  // real reason the C3 was slow vs the dual-core S3). Below the WiFi driver (23) so WiFi stays healthy.
+  xTaskCreatePinnedToCore(loraTask, "lora", 8192, nullptr, 20, nullptr, CONFIG_ARDUINO_RUNNING_CORE);
   web_setup();     // WiFi config portal + web dashboard + MQTT (non-fatal if WiFi is unavailable)
 }
 
