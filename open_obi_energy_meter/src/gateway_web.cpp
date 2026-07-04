@@ -148,7 +148,6 @@ h1{font-size:16px;margin:0;font-weight:650}.sub{color:var(--dim);font-size:12px}
 .card{background:linear-gradient(180deg,#161d27,#131922);border:1px solid var(--line);border-radius:15px;
  padding:14px 16px;transition:.15s;position:relative;overflow:hidden}
 .card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(var(--accent),var(--accent2))}
-.card:hover{border-color:#31527a;transform:translateY(-1px)}
 .hd{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
 .hd .id{font-family:var(--mono);font-size:17px;font-weight:700;letter-spacing:1.5px}
 .tag{font-size:10px;padding:3px 8px;border-radius:20px;border:1px solid var(--line);color:var(--dim);
@@ -156,6 +155,8 @@ h1{font-size:16px;margin:0;font-weight:650}.sub{color:var(--dim);font-size:12px}
 .tag.meter{color:var(--blue);border-color:#26496f;background:#1a2c4022}
 .tag.outlet{color:var(--amber);border-color:#5a4713;background:#3a2e0a22}
 .meta{color:var(--dim);font-size:12px;font-family:var(--mono)}
+.del{margin-left:auto;background:transparent;border:1px solid var(--line);color:var(--dim);border-radius:7px;padding:3px 9px;cursor:pointer;font-size:13px;line-height:1}
+.del:hover{border-color:var(--red);color:var(--red)}
 .uuid{font-family:var(--mono);font-size:11.5px;color:var(--dim);word-break:break-all;margin:7px 0 13px;
  padding:6px 9px;background:#0d131b;border-radius:8px;border:1px solid #1a222d}
 .uuid b{color:#9fb0c4;letter-spacing:.5px}
@@ -202,7 +203,11 @@ footer b{font-family:var(--mono);color:var(--txt)}
    <div><label id="l_pass"></label><input id="c_pass" type="password" placeholder="••••"></div>
    <div style="grid-column:1/3"><label id="l_topic"></label><input id="c_topic" style="width:100%"></div>
   </div>
-  <button class="b" onclick="saveMqtt()" id="b_save"></button>
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+   <button class="b" onclick="saveMqtt()" id="b_save"></button>
+   <button class="g" onclick="rediscover()" id="b_disc"></button>
+   <span class="sub" id="disc_msg" style="margin:0"></span>
+  </div>
   <div class="sub" id="mqtt_cmd" style="margin-top:10px"></div>
  </div>
  <div class="list" id="list"></div>
@@ -214,11 +219,12 @@ const T={
  de:{sub:'869,5 MHz · SF7 · liest deine Zähler direkt',wifi:'WLAN',mqtt:'MQTT',radio:'Funk',readers:'Reader',
   offline:'offline',fw:'Firmware',batt:'Batterie',opt:'Sensor',active:'aktiv',nosig:'kein Signal',
   imp:'Bezug',exp:'Einspeisung',pow:'Leistung',seen:'Zuletzt',before:'vor',setiv:'Intervall',sec:'Sek.',
+  del:'Reader löschen',delq:'Reader %i aus der Liste entfernen?\n\nEr ist nicht dauerhaft gesperrt — beim nächsten Empfang taucht er wieder auf.',
   none:'Noch keine Reader',waiting:'Warte auf einen Reader — Reader-Taste ~10 s halten (echtes Gateway aus).',
   uuidwait:'UUID noch unbekannt — Reader per Taste neu verbinden',
   irhint:'Noch keine Messwerte — Reader-Taste einmal kurz drücken, um die Infrarot-Lesung zu starten.',
   uptime:'Laufzeit',mqcfg:'MQTT-Einstellungen',host:'Server',port:'Port',user:'Benutzer',pass:'Passwort',
-  topic:'Basis-Topic',save:'Speichern',con:'verbunden',dis:'getrennt',lastpub:'zuletzt gesendet',
+  topic:'Basis-Topic',save:'Speichern',disc:'Discovery senden',discok:'Discovery gesendet ✓',discno:'MQTT nicht verbunden',con:'verbunden',dis:'getrennt',lastpub:'zuletzt gesendet',
   msgs:'Nachr.',never:'noch nichts',disabled:'deaktiviert',ago:'her',
   cmdhint:'Intervall per MQTT setzen (Sekunden als Payload):',
   boot:'Bootloader-Modus — bereit zum Flashen',
@@ -231,11 +237,12 @@ const T={
  en:{sub:'869.5 MHz · SF7 · reading your meters directly',wifi:'WiFi',mqtt:'MQTT',radio:'Radio',readers:'Readers',
   offline:'offline',fw:'Firmware',batt:'Battery',opt:'Sensor',active:'active',nosig:'no signal',
   imp:'Import',exp:'Export',pow:'Power',seen:'Last seen',before:'',setiv:'Interval',sec:'sec',
+  del:'Delete reader',delq:'Remove reader %i from the list?\n\nIt is not permanently blocked — it reappears on the next reception.',
   none:'No readers yet',waiting:'Waiting for a reader — hold its button ~10 s (real gateway off).',
   uuidwait:'UUID unknown yet — reconnect the reader with its button',
   irhint:'No readings yet — tap the reader button once to start its infrared readout.',
   uptime:'uptime',mqcfg:'MQTT settings',host:'Server',port:'Port',user:'User',pass:'Password',
-  topic:'Base topic',save:'Save',con:'connected',dis:'disconnected',lastpub:'last publish',
+  topic:'Base topic',save:'Save',disc:'Send discovery',discok:'Discovery sent ✓',discno:'MQTT not connected',con:'connected',dis:'disconnected',lastpub:'last publish',
   msgs:'msgs',never:'nothing yet',disabled:'disabled',ago:'ago',
   cmdhint:'Set interval via MQTT (seconds as payload):',
   boot:'Bootloader mode — ready to flash',
@@ -250,7 +257,7 @@ function setLang(x){lang=x;L=T[x];localStorage.setItem('lang',x);applyLang();tic
 function applyLang(){$('#lde').className=lang=='de'?'act':'';$('#len').className=lang=='en'?'act':'';
  $('#sub').textContent=L.sub;$('#mqtt_h').textContent=L.mqcfg;$('#l_host').textContent=L.host;
  $('#l_port').textContent=L.port;$('#l_user').textContent=L.user;$('#l_pass').textContent=L.pass;
- $('#l_topic').textContent=L.topic;$('#b_save').textContent=L.save;}
+ $('#l_topic').textContent=L.topic;$('#b_save').textContent=L.save;$('#b_disc').textContent=L.disc;}
 function tog(id){$('#'+id).classList.toggle('open')}
 const nf=n=>n.toLocaleString(lang=='de'?'de-DE':'en-US');
 function val(v,unit){return v===null?`<span class="v na">–</span>`:`<span class="v">${nf(v)}${unit?' <small>'+unit+'</small>':''}</span>`}
@@ -286,7 +293,8 @@ function card(r){
  return `<div class="card">
   <div class="hd"><span class="id">${r.id.toUpperCase()}</span>
    <span class="tag ${r.type}">${r.type}</span>
-   <span class="meta">v${r.softver}.${r.hardver}${r.legacy?' · legacy':''} · ${r.rssi} dBm${r.paired?' · 🔒':''}</span></div>
+   <span class="meta">FW ${r.softver} · HW ${r.hardver}${r.legacy?' · legacy':''} · ${r.rssi} dBm${r.paired?' · 🔒':''}</span>
+   <button class="del" onclick="delReader('${r.id}')" title="${L.del}">✕</button></div>
   <div class="uuid">${r.uuid?('<b>UUID</b> '+r.uuid):L.uuidwait}</div>
   ${r.bootloader?`<div class="boot">⚙ ${L.boot}</div>`:''}
   <div class="mx">
@@ -307,6 +315,8 @@ function card(r){
  </div>`;
 }
 async function setIv(id){const v=$('#iv_'+id).value;if(!v)return;await fetch('/api/interval?id='+id+'&seconds='+v,{method:'POST'});tick();}
+async function delReader(id){if(!confirm(L.delq.replace('%i',id.toUpperCase())))return;
+ await fetch('/api/delete?id='+id,{method:'POST'});tick();}
 let uploading=false;
 async function doOta(id,cur){
  const f=$('#fw_'+id).files[0]; if(!f){$('#op_'+id).textContent=L.pick;return;}
@@ -328,6 +338,10 @@ async function doOta(id,cur){
 async function saveMqtt(){const b=new URLSearchParams();b.set('host',$('#c_host').value);b.set('port',$('#c_port').value);
  b.set('user',$('#c_user').value);b.set('topic',$('#c_topic').value);if($('#c_pass').value)b.set('pass',$('#c_pass').value);
  await fetch('/api/mqtt',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b});$('#c_pass').value='';tick();}
+async function rediscover(){const m=$('#disc_msg');m.textContent='…';
+ try{const r=await(await fetch('/api/rediscover',{method:'POST'})).json();
+  m.textContent=r.ok?L.discok+' ('+r.count+')':L.discno;}catch(e){m.textContent=L.discno;}
+ setTimeout(()=>{m.textContent=''},4000);tick();}
 applyLang();tick();setInterval(tick,2000);
 </script></body></html>
 )HTML";
@@ -383,6 +397,8 @@ static void handleOtaUpload() {
 }
 static void handleOtaDone()   { server.send(200, "application/json", gw_ota_active() ? "{\"ok\":true}" : "{\"ok\":false}"); }
 static void mqttCallback(char *topic, byte *payload, unsigned int len);   // fwd: <base>/<id>/set_interval
+static void handleRediscover();                                          // fwd: re-send HA discovery on demand
+static void handleDelete();                                              // fwd: drop a phantom reader from the list
 static void handleOtaCancel() { gw_ota_cancel(); server.send(200, "application/json", "{\"ok\":true}"); }
 
 // ---------------------------------------------------------------- services
@@ -403,11 +419,13 @@ static void startServices() {
   server.on("/api/status", handleStatus);
   server.on("/api/interval", HTTP_POST, handleInterval);
   server.on("/api/mqtt", HTTP_POST, handleMqttCfg);
+  server.on("/api/rediscover", HTTP_POST, handleRediscover);
+  server.on("/api/delete", HTTP_POST, handleDelete);
   server.on("/api/ota", HTTP_POST, handleOtaDone, handleOtaUpload);   // multipart .bin upload
   server.on("/api/ota_cancel", HTTP_POST, handleOtaCancel);
   server.begin();
   mqtt.setServer(g_mqttHost, g_mqttPort);
-  mqtt.setBufferSize(512);
+  mqtt.setBufferSize(768);          // HA discovery configs (with device block) exceed the 256B default
   mqtt.setCallback(mqttCallback);          // <base>/<id>/set_interval command topic
   g_serverUp = true; g_wifiOk = true;
   Serial.printf("[web] WiFi ok, dashboard: http://%s/\n", WiFi.localIP().toString().c_str());
@@ -436,6 +454,119 @@ static void mqttCallback(char *topic, byte *payload, unsigned int len) {
   }
 }
 
+// ---- Home Assistant MQTT discovery ----------------------------------------
+// One retained config per measurement on homeassistant/<component>/<node>/<obj>/config
+// so HA auto-creates the entities and groups them under a device. The state stays the
+// single JSON on <base>/<id>; each config just points its value_template at a JSON field.
+// (The homeassistant/ discovery prefix is fixed here and is independent of the base topic.)
+static void publishDiscovery(const Reader &r) {
+  String id  = hex(r.handle, 3);                       // "e1c6c5"
+  String uid = "obi_" + id;                            // device id / unique_id base
+  String stt = String(g_mqttTopic) + "/" + id;         // state topic (the JSON)
+  String cmd = stt + "/set_interval";                  // command topic (number -> interval)
+  String avt = String(g_mqttTopic) + "/status";        // gateway LWT: online/offline
+  String dev = "\"dev\":{\"ids\":[\"" + uid + "\"],\"name\":\"OBI " + typeName(r.devType) + " " + id +
+               "\",\"mf\":\"OBI\",\"mdl\":\"" + typeName(r.devType) +
+               "\",\"sw\":\"" + String(r.softver) + "\",\"hw\":\"" + String(r.hardver) + "\"}";
+
+  // --- sensors (dc/unit/sc == nullptr -> that field is omitted from the config) ---
+  // import/export/power may be null in the JSON -> guarded so we never push a bogus 0.
+  struct SDef { const char *key, *name, *dc, *unit, *sc, *tpl; bool diag; };
+  static const SDef defs[] = {
+    {"import",   "Import",    "energy",          "kWh", "total_increasing",
+       "{% if value_json['import'] is not none %}{{ (value_json['import']|float(0))/1000 }}{% endif %}", false},
+    {"export",   "Export",    "energy",          "kWh", "total_increasing",
+       "{% if value_json['export'] is not none %}{{ (value_json['export']|float(0))/1000 }}{% endif %}", false},
+    {"power",    "Power",     "power",           "W",   "measurement",
+       "{% if value_json['power'] is not none %}{{ value_json['power'] }}{% endif %}", false},
+    {"battery",  "Battery",   "voltage",         "V",   "measurement",
+       "{{ (value_json['battery_mV']|float(0))/1000 }}", true},
+    {"rssi",     "RSSI",      "signal_strength", "dBm", "measurement",
+       "{{ value_json['rssi'] }}", true},
+    {"lastseen", "Last seen", "duration",        "s",   "measurement",
+       "{{ value_json['age_s'] }}", true},
+    {"uuid",     "UUID",      nullptr,           nullptr, nullptr,
+       "{% if value_json['uuid'] %}{{ value_json['uuid'] }}{% endif %}", true},
+    {"type",     "Type",      nullptr,           nullptr, nullptr,
+       "{{ value_json['type'] }}", true},
+    {"firmware", "Firmware",  nullptr,           nullptr, nullptr,
+       "{{ value_json['softver'] }}", true},
+    {"hardware", "Hardware",  nullptr,           nullptr, nullptr,
+       "{{ value_json['hardver'] }}", true},
+  };
+  for (const SDef &d : defs) {
+    String topic = "homeassistant/sensor/" + uid + "/" + d.key + "/config";
+    String p = "{\"name\":\"" + String(d.name) + "\",\"uniq_id\":\"" + uid + "_" + d.key + "\""
+               ",\"stat_t\":\"" + stt + "\",\"val_tpl\":\"" + d.tpl + "\",\"avty_t\":\"" + avt + "\"";
+    if (d.dc)   p += ",\"dev_cla\":\"" + String(d.dc) + "\"";
+    if (d.unit) p += ",\"unit_of_meas\":\"" + String(d.unit) + "\"";
+    if (d.sc)   p += ",\"stat_cla\":\"" + String(d.sc) + "\"";
+    if (d.diag) p += ",\"ent_cat\":\"diagnostic\"";
+    p += "," + dev + "}";
+    mqtt.publish(topic.c_str(), p.c_str(), true);
+  }
+
+  // --- binary sensors (all diagnostic) ---
+  struct BDef { const char *key, *name, *field; };
+  static const BDef bdefs[] = {
+    {"infrared",   "Optical sensor",  "infrared"},
+    {"paired",     "Paired",          "paired"},
+    {"legacy",     "Legacy protocol", "legacy"},
+    {"bootloader", "Bootloader mode", "bootloader"},
+  };
+  for (const BDef &b : bdefs) {
+    String topic = "homeassistant/binary_sensor/" + uid + "/" + b.key + "/config";
+    String p = "{\"name\":\"" + String(b.name) + "\",\"uniq_id\":\"" + uid + "_" + b.key + "\""
+               ",\"stat_t\":\"" + stt + "\",\"val_tpl\":\"{{ 'ON' if value_json['" + b.field + "'] else 'OFF' }}\""
+               ",\"avty_t\":\"" + avt + "\",\"ent_cat\":\"diagnostic\"," + dev + "}";
+    mqtt.publish(topic.c_str(), p.c_str(), true);
+  }
+
+  // --- number: upload interval (writes seconds to <base>/<id>/set_interval) ---
+  String ntopic = "homeassistant/number/" + uid + "/interval/config";
+  String np = "{\"name\":\"Upload interval\",\"uniq_id\":\"" + uid + "_interval\""
+              ",\"stat_t\":\"" + stt + "\",\"cmd_t\":\"" + cmd + "\""
+              ",\"val_tpl\":\"{% if value_json['interval'] %}{{ value_json['interval'] }}{% endif %}\""
+              ",\"min\":1,\"max\":65535,\"step\":1,\"mode\":\"box\",\"unit_of_meas\":\"s\""
+              ",\"avty_t\":\"" + avt + "\",\"ent_cat\":\"config\"," + dev + "}";
+  mqtt.publish(ntopic.c_str(), np.c_str(), true);
+}
+
+// Remove a reader's discovery entities from HA by publishing empty retained configs.
+// Mirrors the topics created by publishDiscovery() — keep the two lists in sync.
+static void clearDiscovery(const String &uid) {
+  static const char *sensors[]  = {"import","export","power","battery","rssi","lastseen","uuid","type","firmware","hardware"};
+  static const char *binaries[] = {"infrared","paired","legacy","bootloader"};
+  for (const char *k : sensors)  { String t = "homeassistant/sensor/"        + uid + "/" + k + "/config"; mqtt.publish(t.c_str(), "", true); }
+  for (const char *k : binaries) { String t = "homeassistant/binary_sensor/" + uid + "/" + k + "/config"; mqtt.publish(t.c_str(), "", true); }
+  String t = "homeassistant/number/" + uid + "/interval/config"; mqtt.publish(t.c_str(), "", true);
+}
+
+// Web button: drop a (phantom) reader from the list. Not a permanent block — the next valid
+// frame re-creates it. Also clears its HA discovery so a phantom doesn't linger in Home Assistant.
+static void handleDelete() {
+  String id = server.arg("id");
+  if (id.length() != 6) { server.send(400, "application/json", "{\"ok\":false}"); return; }
+  uint8_t h[3];
+  for (int i = 0; i < 3; i++) h[i] = (uint8_t)strtol(id.substring(i * 2, i * 2 + 2).c_str(), nullptr, 16);
+  bool ok = gw_delete_reader(h);
+  if (ok && mqtt.connected()) clearDiscovery("obi_" + id);
+  server.send(200, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false}");
+}
+
+// Web button: force a fresh discovery + availability publish for every known reader.
+static void handleRediscover() {
+  if (!mqtt.connected()) { server.send(200, "application/json", "{\"ok\":false}"); return; }
+  String avt = String(g_mqttTopic) + "/status";
+  mqtt.publish(avt.c_str(), "online", true);
+  int n = 0;
+  for (int i = 0; i < MAX_READERS; i++) {
+    Reader &r = readers[i];
+    if (r.used && r.haveData) { publishDiscovery(r); r.mqttDiscovered = true; n++; }
+  }
+  server.send(200, "application/json", String("{\"ok\":true,\"count\":") + n + "}");
+}
+
 static void mqttService() {
   static uint32_t lastTry = 0, lastPub = 0;
   uint32_t now = millis();
@@ -443,9 +574,13 @@ static void mqttService() {
   if (g_mqttHost[0] && !mqtt.connected() && now - lastTry > 8000) {
     lastTry = now;
     String cid = "obi-gw-" + hex(GWID, 3);
-    if (mqtt.connect(cid.c_str(), g_mqttUser[0] ? g_mqttUser : nullptr, g_mqttPass[0] ? g_mqttPass : nullptr)) {
+    String avt = String(g_mqttTopic) + "/status";               // availability (LWT) topic
+    if (mqtt.connect(cid.c_str(), g_mqttUser[0] ? g_mqttUser : nullptr, g_mqttPass[0] ? g_mqttPass : nullptr,
+                     avt.c_str(), 0, true, "offline")) {          // broker publishes "offline" if we drop
       String sub = String(g_mqttTopic) + "/+/set_interval";     // one wildcard level = reader id
       mqtt.subscribe(sub.c_str());
+      mqtt.publish(avt.c_str(), "online", true);
+      for (int i = 0; i < MAX_READERS; i++) readers[i].mqttDiscovered = false;  // re-announce after (re)connect
       Serial.printf("[mqtt] connected, subscribed %s\n", sub.c_str());
     }
     g_mqttState = mqtt.state();
@@ -457,13 +592,20 @@ static void mqttService() {
       for (int i = 0; i < MAX_READERS; i++) {
         Reader &r = readers[i];
         if (!r.used || !r.haveData) continue;
+        if (!r.mqttDiscovered) { publishDiscovery(r); r.mqttDiscovered = true; }
         String topic = String(g_mqttTopic) + "/" + hex(r.handle, 3);
         String p = "{\"id\":\"" + hex(r.handle, 3) + "\",\"uuid\":" +
                    (r.haveUuid ? "\"" + uuidStr(r.uuid) + "\"" : "null") +
                    ",\"type\":\"" + typeName(r.devType) + "\",\"battery_mV\":" + r.battery_mV +
                    ",\"rssi\":" + (int)r.lastRssi + ",\"infrared\":" + ((r.flags & 1) ? "true" : "false") +
                    ",\"import\":" + jnum(r.import_) + ",\"export\":" + jnum(r.export_) +
-                   ",\"power\":" + jnum(r.power) + "}";
+                   ",\"power\":" + jnum(r.power) +
+                   ",\"softver\":" + String(r.softver) + ",\"hardver\":" + String(r.hardver) +
+                   ",\"paired\":" + (r.haveKey ? "true" : "false") +
+                   ",\"legacy\":" + (r.legacy ? "true" : "false") +
+                   ",\"bootloader\":" + (r.inBootloader ? "true" : "false") +
+                   ",\"interval\":" + String(r.setInterval) +
+                   ",\"age_s\":" + String((millis() - r.lastSeenMs) / 1000) + "}";
         if (mqtt.publish(topic.c_str(), p.c_str())) g_mqttPubCount++;
       }
       g_mqttLastPubMs = now;

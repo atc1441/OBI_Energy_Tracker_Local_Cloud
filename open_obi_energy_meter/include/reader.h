@@ -29,6 +29,7 @@ struct Reader {
   // config
   uint16_t setInterval = 0;      // last upload-interval requested (shown in UI)
   uint8_t  intervalTx  = 0;      // remaining cmd-14 retransmits to send
+  bool     mqttDiscovered = false;  // HA discovery config already published (reset on each MQTT connect)
 };
 
 // defined in main.cpp
@@ -38,6 +39,7 @@ extern const uint8_t GWID[6];
 
 // LoRa-side actions the web UI triggers (defined in main.cpp)
 void gw_request_interval(const uint8_t handle[3], uint16_t seconds);  // set the reader's upload interval
+bool gw_delete_reader(const uint8_t handle[3]);                       // drop a (phantom) reader; reappears on next RX
 uint32_t gw_uptime_s();
 
 // ---- reader firmware OTA over LoRa (serve to the reader's bootloader) --------

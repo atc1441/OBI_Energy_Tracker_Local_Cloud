@@ -116,6 +116,14 @@ void gw_request_interval(const uint8_t handle[3], uint16_t seconds) {
   for (auto &r : readers)
     if (r.used && !memcmp(r.handle, handle, 3)) { r.setInterval = seconds; return; }
 }
+// Drop a reader from the list (e.g. a phantom created by a bad RX). This only frees the
+// slot — it is NOT a permanent block: the next valid frame from that handle re-creates it
+// via addReader(). The persisted UUID is left in NVS so a real reader comes back unchanged.
+bool gw_delete_reader(const uint8_t handle[3]) {
+  for (auto &r : readers)
+    if (r.used && !memcmp(r.handle, handle, 3)) { r.used = false; return true; }
+  return false;
+}
 
 // default upload interval (seconds) when the user hasn't set one for a reader
 #define OBI_DEFAULT_INTERVAL 10
@@ -163,6 +171,26 @@ static void sendLegacyAck(Reader *r, uint8_t rxcmd, uint8_t version, float rssi)
   uint8_t f[16];
   size_t n = obi_build_frame(f, r->handle, cmd, b, sizeof(b));
   txFrame(f, n, "ack-v32");
+}
+
+// Raw (unencrypted) "completedata" ACK for a plaintext-generation reader (no ECDH / no TEA — payloads
+// are only handle-XOR'd, key = (h0+h1+h2)&0xFF = obi_xor_key). Fully reversed from reader_v1.0.0
+// sub_B8DC (softver 24) and reader_v31.0.0 completedata_on_ack_ota (softver 31): the handler is
+// registered on wire cmd (energy_cmd | 0x20) — so v24 (energy cmd 22) listens on cmd 54, v31 (energy
+// cmd 19) on cmd 51. Payload is EXACTLY 3 bytes [version][interval_byte][pad]:
+//   - interval: applied as interval = 2 * interval_byte seconds (sub_63A0; byte 0 or 255 -> 300 s).
+//   - version:  0 or the reader's own softver = no-op; ANY other value seen 3x in a row => the reader
+//               arms the 0x3782 handoff record + SCB_AIRCR reset into the bootloader to pull an OTA.
+// No key needed — the outer handle-XOR (obi_build_frame) already matches what the reader expects.
+static void sendCompletedataRaw(Reader *r, uint8_t ackCmd, uint8_t version) {
+  uint16_t secs = r->setInterval ? r->setInterval : OBI_DEFAULT_INTERVAL;
+  uint16_t half = secs / 2;                          // firmware doubles it: interval = 2 * byte
+  if (half < 1)   half = 1;                           // 0/255 would select the reader's 300 s default
+  if (half > 254) half = 254;
+  uint8_t pl[3] = { version, (uint8_t)half, 0x00 };   // [version][interval_byte][pad]
+  uint8_t f[16];
+  size_t n = obi_build_frame(f, r->handle, ackCmd, pl, sizeof(pl));
+  txFrame(f, n, version ? "otaCd" : "intervalCd");
 }
 
 // ============ reader firmware OTA over LoRa (cmd 33 request -> cmd 34 serve) ============
@@ -493,6 +521,14 @@ static void handleRx() {
         uint8_t ver = (g_otaActive && !memcmp(r->handle, g_otaTarget, 3)) ? g_otaVersion : cur;
         if (cmd == 24 || cmd == 25) sendLegacyAck(r, cmd, ver, rssi);   // old v32 _c reader: cmd 56/57 TEA
         else                        sendEnergyAck(r, cmd, ver);          // 1.2.x _d reader: cmd 38/40 TEA
+        // A keyless v3x reader (plaintext energy, never did ECDH) never gets the TEA ack above — both
+        // ack builders bail on !haveKey. Drive it via the plaintext completedata ACK (cmd 51) instead:
+        // carries the interval, and advertises the OTA version (0 = no-op) so an armed OTA still resets
+        // the reader into the bootloader after 3 acks — no key needed.
+        if (!r->haveKey && (cmd == OBI_CMD_ENERGY_U16 || cmd == OBI_CMD_ENERGY_U32 || cmd == OBI_CMD_ENERGY_RT)) {
+          uint8_t rawver = (g_otaActive && !memcmp(r->handle, g_otaTarget, 3)) ? g_otaVersion : 0;
+          sendCompletedataRaw(r, cmd | 0x20, rawver);    // ack cmd = energy_cmd | 0x20 (v24: 22->54)
+        }
       }
       size_t plen = (len - 4) & ~0x7u;
       if (r && plen) {
@@ -506,6 +542,17 @@ static void handleRx() {
                           if (energyValid(p, plen)) how = "tea/1.2.x"; }
         if (!how && r->haveKey) { memcpy(p, d + 4, plen); obi_tea_ecb_decrypt(p, plen, r->key);
                                   if (legacyValid(p, plen)) { how = "tea/legacy"; legacy = true; } }
+        // Plaintext fallback — a reader that never completed the ECDH key exchange (e.g. an old firmware
+        // freshly out of the bootloader) sends its energy UNENCRYPTED. ONLY for readers with no key, so a
+        // paired reader's TEA ciphertext is never touched. The legacy layout has NO internal CRC — only a
+        // loose plausibility check that WOULD false-match ciphertext — so restrict it to the legacy energy
+        // commands (19/22/23); a 1.2.x reader (cmd 37/39) is never plaintext-legacy-decoded. The 1.2.x
+        // layout carries its own CRC16, so that variant is safe to try on any command.
+        bool legacyCmd = (cmd == OBI_CMD_ENERGY_U16 || cmd == OBI_CMD_ENERGY_U32 || cmd == OBI_CMD_ENERGY_RT);
+        if (!how && !r->haveKey) { memcpy(p, d + 4, plen);
+                                   if (energyValid(p, plen)) how = "plain/1.2.x"; }
+        if (!how && !r->haveKey && legacyCmd) { memcpy(p, d + 4, plen);
+                                   if (legacyValid(p, plen)) { how = "plain/legacy"; legacy = true; } }
         if (how) {
           Serial.printf("  energy [%s]: ", how); hexdump(p, plen); Serial.println();
           if (legacy) printEnergyOld(p, plen); else printEnergy(p, plen);

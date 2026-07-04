@@ -34,7 +34,7 @@ bind + ECDH). Everything was reverse-engineered from firmware `1.2.1`; details i
 | 4 | **Set upload interval** | per reader, from the web UI **or** MQTT — rides the encrypted energy-ACK the reader already waits for |
 | 5 | **Reader firmware OTA over LoRa** | flash your own reader image; all three pull protocols served; can **un-brick** a reader stuck in its bootloader |
 | 6 | **Web dashboard** | WiFi captive-portal setup, live reader cards, interval + firmware controls, DE/EN toggle |
-| 7 | **MQTT** | publishes each reader as JSON; configurable in the UI; **command topic** to set the interval remotely |
+| 7 | **MQTT + Home Assistant** | publishes each reader as JSON; **HA auto-discovery** (sensors, binary sensors, availability + a settable interval `number`) so devices appear automatically; **command topic** to set the interval remotely |
 | 8 | **Persistence** | reader UUIDs + MQTT settings saved in NVS, survive reboots |
 | 9 | **Board-generic** | any ESP32 / ESP32-S3 + SX1262 via `board_config.h`; not tied to one vendor board |
 
@@ -90,11 +90,13 @@ re-pair to this gateway on their own within a minute.
 - **WiFi captive portal** (WiFiManager) — no hard-coded credentials; reconfigurable any time.
 - **Live reader cards**: 3-byte id, 16-byte **UUID**, device type, firmware/hardware version, RSSI,
   battery, infrared (meter-reading) status, and import / export / power.
-- **Per reader**: set the **upload interval** and **flash firmware** (`.bin` picker → over-the-air update).
+- **Per reader**: set the **upload interval**, **flash firmware** (`.bin` picker → over-the-air update), and
+  **delete** the reader (✕) — handy for a phantom created by a bad RX. Delete only frees the slot (and clears
+  its Home Assistant entities); it is **not** a permanent block, so a real reader reappears on its next frame.
 - **Bootloader badge**: a reader that reset into its OTA bootloader is shown with a ⚙ *"Bootloader mode —
   ready to flash"* badge so you can (re)arm firmware for it even though it isn't sending energy.
 - **MQTT panel** (⚙): configure host/port/user/pass/base-topic and see live status (connected, last
-  publish, message count).
+  publish, message count); a **Send discovery** button re-publishes all Home Assistant discovery configs.
 - **DE/EN toggle**, remembered in the browser.
 - The web/MQTT stack runs on **core 0** while LoRa runs on **core 1**, so HTTP traffic never stutters the
   radio timing.
@@ -119,12 +121,34 @@ waits ~300 ms for after each report):
 - **Publish**: every reader is published as JSON to `‹base›/‹id›` (e.g. `obi/gateway/d70c9a`):
   ```json
   {"id":"d70c9a","uuid":"…","type":"meter","battery_mV":3080,"rssi":-74,
-   "infrared":true,"import":83049758,"export":875840,"power":null}
+   "infrared":true,"import":83049758,"export":875840,"power":null,
+   "softver":57,"hardver":6,"paired":true,"legacy":false,"bootloader":false,"interval":30,"age_s":5}
   ```
+- **Availability**: an LWT topic `‹base›/status` carries `online` / `offline` (the broker publishes
+  `offline` if the gateway drops), so Home Assistant marks the entities *unavailable* automatically.
 - **Subscribe**: `‹base›/+/set_interval` (see above).
 - **Status** is exposed on `/api/status` (`connected`, `state`, `pub_count`, `last_pub_s`) and shown in the
   dashboard MQTT panel.
 - All settings are configurable in the web UI and persisted in NVS.
+
+### Home Assistant auto-discovery
+
+The gateway also publishes **retained MQTT discovery configs** under the `homeassistant/…/config` prefix, so
+every reader shows up **automatically** as a Home Assistant device — no manual YAML. The state stays the single
+JSON above; each discovery entity just points a `value_template` at one of its fields.
+
+- **Prefix is fixed** to `homeassistant/` and is **independent of your base topic** — leave the base topic at
+  its default (`obi/gateway`); do **not** set it to `homeassistant/…`.
+- Entities created per reader (grouped under one device *"OBI meter ‹id›"*):
+  - **Sensors**: Import, Export (energy, kWh, `total_increasing`), Power (W); plus diagnostics Battery (V),
+    RSSI (dBm), Last seen (s), UUID, Type, Firmware and Hardware (shown separately, e.g. FW 57 / HW 6).
+  - **Binary sensors** (diagnostic): Optical sensor, Paired, Legacy protocol, Bootloader mode.
+  - **Number — Upload interval**: writes seconds to `‹base›/‹id›/set_interval`, so you can change the interval
+    straight from Home Assistant (1–65535 s).
+- Discovery is (re)sent automatically after every MQTT (re)connect and when a new reader first reports. The
+  MQTT panel also has a **"Send discovery"** button next to *Save* to push all configs on demand.
+- Because import/export are raw Wh, their templates divide by 1000 → **kWh**. Null/`n/a` readings are guarded,
+  so a missing value never pushes a bogus `0`.
 
 ## Reader firmware OTA over LoRa
 
@@ -227,7 +251,7 @@ Bind + ECDH). Alles wurde aus Firmware `1.2.1` reversed; Details in
 | 4 | **Upload-Intervall setzen** | je Reader, über die Web-UI **oder** MQTT — reist im verschlüsselten Energie-ACK mit, auf den der Reader ohnehin wartet |
 | 5 | **Reader-Firmware-OTA über LoRa** | eigenes Reader-Image flashen; alle drei Pull-Protokolle bedient; kann einen im Bootloader festhängenden Reader **wiederbeleben** |
 | 6 | **Web-Dashboard** | WLAN-Einrichtung per Captive-Portal, Live-Reader-Karten, Intervall- + Firmware-Steuerung, DE/EN-Umschalter |
-| 7 | **MQTT** | publiziert jeden Reader als JSON; in der UI konfigurierbar; **Command-Topic** zum Fern-Setzen des Intervalls |
+| 7 | **MQTT + Home Assistant** | publiziert jeden Reader als JSON; **HA-Auto-Discovery** (Sensoren, Binärsensoren, Verfügbarkeit + einstellbares Intervall-`number`), sodass Geräte automatisch erscheinen; **Command-Topic** zum Fern-Setzen des Intervalls |
 | 8 | **Persistenz** | Reader-UUIDs + MQTT-Einstellungen im NVS gespeichert, überstehen Neustarts |
 | 9 | **Board-generisch** | beliebiger ESP32 / ESP32-S3 + SX1262 via `board_config.h`; nicht an ein Hersteller-Board gebunden |
 
@@ -284,12 +308,16 @@ dieses Gateway.
 - **WLAN-Captive-Portal** (WiFiManager) — keine fest verdrahteten Zugangsdaten; jederzeit neu konfigurierbar.
 - **Live-Reader-Karten**: 3-Byte-ID, 16-Byte-**UUID**, Gerätetyp, Firmware-/Hardware-Version, RSSI,
   Batterie, Infrarot-(Zähler-Lese-)Status sowie Bezug / Einspeisung / Leistung.
-- **Je Reader**: **Upload-Intervall** setzen und **Firmware flashen** (`.bin`-Auswahl → Over-the-Air-Update).
+- **Je Reader**: **Upload-Intervall** setzen, **Firmware flashen** (`.bin`-Auswahl → Over-the-Air-Update) und
+  den Reader **löschen** (✕) — praktisch bei einem Phantom aus fehlerhaftem RX. Löschen gibt nur den Slot frei
+  (und entfernt seine Home-Assistant-Entities); es ist **keine** dauerhafte Sperre, ein echter Reader taucht
+  beim nächsten Frame wieder auf.
 - **Bootloader-Badge**: ein Reader, der in seinen OTA-Bootloader neu gestartet ist, wird mit einem
   ⚙ *"Bootloader-Modus — bereit zum Flashen"* angezeigt, damit du auch dann Firmware für ihn scharfschalten
   kannst, wenn er keine Energie sendet.
 - **MQTT-Panel** (⚙): Host/Port/Benutzer/Passwort/Basis-Topic konfigurieren und Live-Status sehen
-  (verbunden, zuletzt gesendet, Anzahl).
+  (verbunden, zuletzt gesendet, Anzahl); ein **Discovery senden**-Button publiziert alle
+  Home-Assistant-Discovery-Configs neu.
 - **DE/EN-Umschalter**, im Browser gemerkt.
 - Der Web-/MQTT-Stack läuft auf **Core 0**, LoRa auf **Core 1**, damit HTTP-Verkehr das Funk-Timing nie stört.
 
@@ -313,12 +341,35 @@ Reader nach jedem Bericht ohnehin ~300 ms wartet):
 - **Publish**: jeder Reader wird als JSON an `‹base›/‹id›` publiziert (z. B. `obi/gateway/d70c9a`):
   ```json
   {"id":"d70c9a","uuid":"…","type":"meter","battery_mV":3080,"rssi":-74,
-   "infrared":true,"import":83049758,"export":875840,"power":null}
+   "infrared":true,"import":83049758,"export":875840,"power":null,
+   "softver":57,"hardver":6,"paired":true,"legacy":false,"bootloader":false,"interval":30,"age_s":5}
   ```
+- **Verfügbarkeit**: ein LWT-Topic `‹base›/status` trägt `online` / `offline` (der Broker sendet `offline`,
+  wenn das Gateway wegfällt), sodass Home Assistant die Entities automatisch als *nicht verfügbar* markiert.
 - **Subscribe**: `‹base›/+/set_interval` (siehe oben).
 - **Status** liegt auf `/api/status` (`connected`, `state`, `pub_count`, `last_pub_s`) und wird im
   MQTT-Panel angezeigt.
 - Alle Einstellungen sind in der Web-UI konfigurierbar und im NVS persistiert.
+
+### Home-Assistant-Auto-Discovery
+
+Das Gateway publiziert zusätzlich **retained MQTT-Discovery-Configs** unter dem Präfix `homeassistant/…/config`,
+sodass jeder Reader **automatisch** als Home-Assistant-Gerät erscheint — ganz ohne manuelles YAML. Der State
+bleibt die eine JSON oben; jede Discovery-Entity zeigt nur mit einem `value_template` auf eines ihrer Felder.
+
+- **Präfix ist fest** auf `homeassistant/` und **unabhängig vom Basis-Topic** — lass das Basis-Topic auf dem
+  Standard (`obi/gateway`); setze es **nicht** auf `homeassistant/…`.
+- Pro Reader angelegte Entities (gruppiert unter einem Gerät *„OBI meter ‹id›"*):
+  - **Sensoren**: Import, Export (energy, kWh, `total_increasing`), Power (W); dazu als Diagnose Batterie (V),
+    RSSI (dBm), Last seen (s), UUID, Type, Firmware und Hardware (getrennt, z. B. FW 57 / HW 6).
+  - **Binärsensoren** (Diagnose): Optical sensor, Paired, Legacy protocol, Bootloader mode.
+  - **Number — Upload interval**: schreibt Sekunden auf `‹base›/‹id›/set_interval`, sodass du das Intervall
+    direkt aus Home Assistant ändern kannst (1–65535 s).
+- Discovery wird nach jedem MQTT-(Neu-)Connect und beim ersten Melden eines neuen Readers automatisch (neu)
+  gesendet. Im MQTT-Panel gibt es neben *Speichern* zusätzlich einen **„Discovery senden"**-Button, um alle
+  Configs auf Knopfdruck zu pushen.
+- Da Bezug/Einspeisung als rohe Wh kommen, teilen ihre Templates durch 1000 → **kWh**. Null-/„n/a"-Werte sind
+  abgesichert, damit ein fehlender Wert nie eine falsche `0` pusht.
 
 ## Reader-Firmware-OTA über LoRa
 
