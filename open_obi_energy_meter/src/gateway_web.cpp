@@ -473,10 +473,10 @@ static void publishDiscovery(const Reader &r) {
   // import/export/power may be null in the JSON -> guarded so we never push a bogus 0.
   struct SDef { const char *key, *name, *dc, *unit, *sc, *tpl; bool diag; };
   static const SDef defs[] = {
-    {"import",   "Import",    "energy",          "kWh", "total_increasing",
-       "{% if value_json['import'] is not none %}{{ (value_json['import']|float(0))/1000 }}{% endif %}", false},
-    {"export",   "Export",    "energy",          "kWh", "total_increasing",
-       "{% if value_json['export'] is not none %}{{ (value_json['export']|float(0))/1000 }}{% endif %}", false},
+    {"import",   "Import",    "energy",          "Wh",  "total_increasing",
+       "{% if value_json['import'] is not none %}{{ value_json['import'] }}{% endif %}", false},
+    {"export",   "Export",    "energy",          "Wh",  "total_increasing",
+       "{% if value_json['export'] is not none %}{{ value_json['export'] }}{% endif %}", false},
     {"power",    "Power",     "power",           "W",   "measurement",
        "{% if value_json['power'] is not none %}{{ value_json['power'] }}{% endif %}", false},
     {"battery",  "Battery",   "voltage",         "V",   "measurement",

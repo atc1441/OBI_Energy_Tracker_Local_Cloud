@@ -140,15 +140,15 @@ JSON above; each discovery entity just points a `value_template` at one of its f
 - **Prefix is fixed** to `homeassistant/` and is **independent of your base topic** — leave the base topic at
   its default (`obi/gateway`); do **not** set it to `homeassistant/…`.
 - Entities created per reader (grouped under one device *"OBI meter ‹id›"*):
-  - **Sensors**: Import, Export (energy, kWh, `total_increasing`), Power (W); plus diagnostics Battery (V),
+  - **Sensors**: Import, Export (energy, **Wh**, `total_increasing`), Power (W); plus diagnostics Battery (V),
     RSSI (dBm), Last seen (s), UUID, Type, Firmware and Hardware (shown separately, e.g. FW 57 / HW 6).
   - **Binary sensors** (diagnostic): Optical sensor, Paired, Legacy protocol, Bootloader mode.
   - **Number — Upload interval**: writes seconds to `‹base›/‹id›/set_interval`, so you can change the interval
     straight from Home Assistant (1–65535 s).
 - Discovery is (re)sent automatically after every MQTT (re)connect and when a new reader first reports. The
   MQTT panel also has a **"Send discovery"** button next to *Save* to push all configs on demand.
-- Because import/export are raw Wh, their templates divide by 1000 → **kWh**. Null/`n/a` readings are guarded,
-  so a missing value never pushes a bogus `0`.
+- Import/export are reported as raw **Wh** (`total_increasing`), matching the meter's native unit — divide by
+  1000 in HA if you prefer kWh. Null/`n/a` readings are guarded, so a missing value never pushes a bogus `0`.
 
 ## Reader firmware OTA over LoRa
 
@@ -360,7 +360,7 @@ bleibt die eine JSON oben; jede Discovery-Entity zeigt nur mit einem `value_temp
 - **Präfix ist fest** auf `homeassistant/` und **unabhängig vom Basis-Topic** — lass das Basis-Topic auf dem
   Standard (`obi/gateway`); setze es **nicht** auf `homeassistant/…`.
 - Pro Reader angelegte Entities (gruppiert unter einem Gerät *„OBI meter ‹id›"*):
-  - **Sensoren**: Import, Export (energy, kWh, `total_increasing`), Power (W); dazu als Diagnose Batterie (V),
+  - **Sensoren**: Import, Export (energy, **Wh**, `total_increasing`), Power (W); dazu als Diagnose Batterie (V),
     RSSI (dBm), Last seen (s), UUID, Type, Firmware und Hardware (getrennt, z. B. FW 57 / HW 6).
   - **Binärsensoren** (Diagnose): Optical sensor, Paired, Legacy protocol, Bootloader mode.
   - **Number — Upload interval**: schreibt Sekunden auf `‹base›/‹id›/set_interval`, sodass du das Intervall
@@ -368,8 +368,9 @@ bleibt die eine JSON oben; jede Discovery-Entity zeigt nur mit einem `value_temp
 - Discovery wird nach jedem MQTT-(Neu-)Connect und beim ersten Melden eines neuen Readers automatisch (neu)
   gesendet. Im MQTT-Panel gibt es neben *Speichern* zusätzlich einen **„Discovery senden"**-Button, um alle
   Configs auf Knopfdruck zu pushen.
-- Da Bezug/Einspeisung als rohe Wh kommen, teilen ihre Templates durch 1000 → **kWh**. Null-/„n/a"-Werte sind
-  abgesichert, damit ein fehlender Wert nie eine falsche `0` pusht.
+- Bezug/Einspeisung werden als rohe **Wh** gemeldet (`total_increasing`), passend zur nativen Einheit des
+  Zählers — bei Bedarf in HA durch 1000 teilen für kWh. Null-/„n/a"-Werte sind abgesichert, damit ein
+  fehlender Wert nie eine falsche `0` pusht.
 
 ## Reader-Firmware-OTA über LoRa
 
