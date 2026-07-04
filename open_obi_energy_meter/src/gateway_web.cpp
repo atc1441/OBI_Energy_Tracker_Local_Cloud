@@ -219,7 +219,11 @@ const T={
   cmdhint:'Intervall per MQTT setzen (Sekunden als Payload):',
   boot:'Bootloader-Modus — bereit zum Flashen',
   flash:'Firmware flashen',pick:'Erst eine .bin auswählen',uploading:'lädt hoch…',armed:'bereit — Reader startet neu & zieht',
-  otarun:'OTA läuft',otawarn:'⚠ Reader-Firmware über LoRa flashen — nur mit gültiger .bin. Der Reader validiert vor dem Schreiben.'},
+  otarun:'OTA läuft',otawarn:'⚠ Reader-Firmware über LoRa flashen — nur mit gültiger .bin. Der Reader validiert vor dem Schreiben.',
+  vnote:'Die Firmware-Version MUSS im Dateinamen stehen, z.B. reader_v55.bin.',
+  novers:'Keine Version im Dateinamen gefunden.\nBitte die richtige Firmware-Version in den Dateinamen schreiben, z.B. reader_v55.bin',
+  vmiss:'Version fehlt im Dateinamen',
+  samever:'Der Reader läuft bereits auf v%v — er akzeptiert dieselbe Version nicht (kein Reflash).\n\nTrotzdem versuchen?'},
  en:{sub:'869.5 MHz · SF7 · reading your meters directly',wifi:'WiFi',mqtt:'MQTT',radio:'Radio',readers:'Readers',
   offline:'offline',fw:'Firmware',batt:'Battery',opt:'Sensor',active:'active',nosig:'no signal',
   imp:'Import',exp:'Export',pow:'Power',seen:'Last seen',before:'',setiv:'Interval',sec:'sec',
@@ -232,7 +236,11 @@ const T={
   cmdhint:'Set interval via MQTT (seconds as payload):',
   boot:'Bootloader mode — ready to flash',
   flash:'Flash firmware',pick:'Pick a .bin first',uploading:'uploading…',armed:'armed — reader will reset & pull',
-  otarun:'OTA in progress',otawarn:'⚠ Flash reader firmware over LoRa — use a valid .bin only. The reader validates before writing.'}};
+  otarun:'OTA in progress',otawarn:'⚠ Flash reader firmware over LoRa — use a valid .bin only. The reader validates before writing.',
+  vnote:'The firmware version MUST be in the filename, e.g. reader_v55.bin.',
+  novers:'No version found in the filename.\nPut the correct firmware version in the filename, e.g. reader_v55.bin',
+  vmiss:'version missing in filename',
+  samever:'The reader is already on v%v — it will not accept the same version (no reflash).\n\nTry anyway?'}};
 let lang=localStorage.getItem('lang')||'de',L=T[lang];
 function setLang(x){lang=x;L=T[x];localStorage.setItem('lang',x);applyLang();tick();}
 function applyLang(){$('#lde').className=lang=='de'?'act':'';$('#len').className=lang=='en'?'act':'';
@@ -289,18 +297,24 @@ function card(r){
   <div class="ctrl"><input type="number" id="iv_${r.id}" placeholder="${L.sec}" min="5" value="${r.interval||''}">
    <button class="g" onclick="setIv('${r.id}')">${L.setiv}</button>
    <input type="file" id="fw_${r.id}" accept=".bin" style="flex:1 1 200px;min-width:170px;padding:6px 8px;font-size:12px">
-   <button class="g" onclick="doOta('${r.id}')">${L.flash}</button>
+   <button class="g" onclick="doOta('${r.id}',${r.softver||0})">${L.flash}</button>
    <span class="meta" id="op_${r.id}"></span></div>
   ${!r.has_data&&!r.bootloader?`<div class="hint">⚠ ${L.irhint}</div>`:''}
  </div>`;
 }
 async function setIv(id){const v=$('#iv_'+id).value;if(!v)return;await fetch('/api/interval?id='+id+'&seconds='+v,{method:'POST'});tick();}
 let uploading=false;
-async function doOta(id){
+async function doOta(id,cur){
  const f=$('#fw_'+id).files[0]; if(!f){$('#op_'+id).textContent=L.pick;return;}
- if(!confirm(L.otawarn+'\n\nReader: '+id.toUpperCase()+'\n'+(lang=='de'?'Datei':'File')+': '+f.name)) return;
+ // version comes from the filename (…v55.bin); the reader needs it to decide whether to reflash.
+ const vm=f.name.match(/v(\d+)/);
+ if(!vm){ alert(L.novers); $('#op_'+id).textContent=L.vmiss; return; }
+ const ver=parseInt(vm[1])&255;
+ const dl=lang=='de'?'Datei':'File';
+ if(!confirm(L.otawarn+'\n\n'+L.vnote+'\n\nReader: '+id.toUpperCase()+'\n'+dl+': '+f.name+'\nVersion: v'+ver)) return;
+ // the reader refuses an OTA to the version it is already running -> warn but let the user force it.
+ if(cur&&ver===cur){ if(!confirm(L.samever.replace('%v',ver))) return; }
  const buf=await f.arrayBuffer(); const fd=new FormData(); fd.append('fw',new Blob([buf]),f.name);
- const vm=f.name.match(/v(\d+)/); const ver=vm?parseInt(vm[1])&255:1;   // version from filename (…v56.bin)
  uploading=true; $('#op_'+id).textContent=L.uploading;
  try{ const r=await (await fetch('/api/ota?id='+id+'&size='+buf.byteLength+'&ver='+ver,{method:'POST',body:fd})).json();
    $('#op_'+id).textContent=r.ok?L.armed:'error'; }
