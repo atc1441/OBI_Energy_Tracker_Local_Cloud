@@ -102,7 +102,9 @@ static int fillEfuses(EfuseKV *o, int max) {
 #else
   add("DIS_DOWNLOAD_MODE", esp_efuse_read_field_bit(ESP_EFUSE_DIS_DOWNLOAD_MODE));
   add("DIS_DIRECT_BOOT",   esp_efuse_read_field_bit(ESP_EFUSE_DIS_DIRECT_BOOT));
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
   add("DIS_PAD_JTAG",      esp_efuse_read_field_bit(ESP_EFUSE_DIS_PAD_JTAG));
+#endif
 #if defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32S3)
   add("DIS_USB_JTAG",      esp_efuse_read_field_bit(ESP_EFUSE_DIS_USB_JTAG));
 #endif

@@ -65,6 +65,20 @@
   #define PIN_STATUS_LED    0     // on-board LED (sub_4201A04E/03A, active-low); optional reset feedback
   #define STATUS_LED_ACTIVE_LOW 1
 
+#elif defined(OBI_BOARD_XIAO_ESP32S3)       // Seeed Studio XIAO ESP32S3 & Wio-SX1262 Kit (B2B)
+  // Pin mapping via the on-board B2B connector. Wio-SX1262 has a TCXO on DIO3,
+  // DIO2 drives the internal RF switch, and RF_SW (GPIO38) is the RX enable.
+  #define PIN_LORA_NSS   41
+  #define PIN_LORA_SCK   7
+  #define PIN_LORA_MOSI  9
+  #define PIN_LORA_MISO  8
+  #define PIN_LORA_RST   42
+  #define PIN_LORA_BUSY  40
+  #define PIN_LORA_DIO1  39
+  #define LORA_TCXO_V    1.8f     // Wio-SX1262 TCXO on DIO3
+  #define LORA_RXEN_PIN  38       // RF_SW on module — HIGH during RX
+  #define LORA_DIO2_RFSW true
+
 #elif defined(OBI_BOARD_CUSTOM)            // <-- your own wiring: edit these
   #define PIN_LORA_NSS   8
   #define PIN_LORA_SCK   9
@@ -78,5 +92,5 @@
   #define LORA_DIO2_RFSW true
 
 #else
-  #error "No board selected. Add -D OBI_BOARD_HELTEC_S3 (or _OBI_C3 / _CUSTOM) to build_flags in platformio.ini"
+  #error "No board selected. Add -D OBI_BOARD_HELTEC_S3 (or _TTGO_TBEAM_SX1262 / _OBI_C3 / _XIAO_ESP32S3 / _CUSTOM) to build_flags in platformio.ini"
 #endif
