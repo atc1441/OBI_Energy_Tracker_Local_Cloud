@@ -483,7 +483,7 @@ function card(r){
    <div class="mc"><div class="l">${L.opt}</div><span class="v" style="font-size:13px">${sens}</span></div>
    <div class="mc"><div class="l">${L.seen}</div><span class="v">${L.before} ${r.age_s}s</span></div>
   </div>
-  ${r.assigned?`<div class="ctrl"><input type="number" id="iv_${r.id}" placeholder="${L.sec}" min="5" value="${r.interval||''}">
+  ${r.assigned?`<div class="ctrl"><input type="number" id="iv_${r.id}" placeholder="${L.sec}" min="1" value="${r.interval||''}">
    <button class="g" onclick="setIv('${r.id}')">${L.setiv}</button>
    <input type="file" id="fw_${r.id}" accept=".bin" style="flex:1 1 200px;min-width:170px;padding:6px 8px;font-size:12px">
    <button class="g" onclick="doOta('${r.id}',${r.softver||0})">${L.flash}</button>

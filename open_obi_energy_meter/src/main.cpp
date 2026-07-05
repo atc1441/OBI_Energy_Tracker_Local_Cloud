@@ -98,6 +98,22 @@ static bool loadAssigned(const uint8_t h[3]) {
   return v;
 }
 
+// Per-reader upload interval (seconds), PERSISTED in NVS so it survives both a gateway reboot AND a re-pair
+// (the RAM reader slot is recreated on re-pair, which would otherwise reset the interval to the default).
+// Local Preferences per call for the same cross-core reason as saveAssigned (web task core 0 / LoRa core 1).
+static void saveInterval(const uint8_t h[3], uint16_t secs) {
+  char k[8]; uuidKey(h, k);
+  Preferences p; p.begin("obiival", false);
+  if (secs) p.putUShort(k, secs); else p.remove(k);
+  p.end();
+}
+static uint16_t loadInterval(const uint8_t h[3]) {
+  char k[8]; uuidKey(h, k);
+  Preferences p; p.begin("obiival", true);
+  uint16_t v = p.getUShort(k, 0); p.end();
+  return v;
+}
+
 // Auto-pair window: while active, every reader that announces is accepted automatically.
 static uint32_t g_pairUntil = 0;
 static bool pairWindowActive() { return g_pairUntil && (int32_t)(millis() - g_pairUntil) < 0; }
@@ -110,6 +126,7 @@ static Reader *addReader(const uint8_t h[3]) {
     x = Reader{}; x.used = true; x.lastSeenMs = millis(); memcpy(x.handle, h, 3);   // stamp now so a fresh entry isn't instantly pruned
     if (loadUuid(h, x.uuid)) x.haveUuid = true;     // restore a previously-seen UUID
     x.assigned = loadAssigned(h);                   // restore the accept flag (auto-binds on sight)
+    x.setInterval = loadInterval(h);                // restore the persisted upload interval (survives reboot + re-pair)
     return &x;
   }
   return nullptr;
@@ -211,6 +228,7 @@ static void storeAnnounce(Reader *r, uint8_t cmd, const uint8_t *pl, size_t plen
 // ---- web-UI hooks (declared in reader.h) -----------------------------------
 uint32_t gw_uptime_s() { return millis() / 1000; }
 void gw_request_interval(const uint8_t handle[3], uint16_t seconds) {
+  saveInterval(handle, seconds);        // persist so it survives a reboot AND a re-pair (RAM slot is recreated)
   for (auto &r : readers)
     if (r.used && !memcmp(r.handle, handle, 3)) { r.setInterval = seconds; return; }
 }
@@ -219,6 +237,7 @@ void gw_request_interval(const uint8_t handle[3], uint16_t seconds) {
 // so a real reader keeps its identity if you re-bind it later.
 bool gw_delete_reader(const uint8_t handle[3]) {
   saveAssigned(handle, false);        // remove the persisted binding
+  saveInterval(handle, 0);            // forget the persisted upload interval too
   bool found = false;
   for (auto &r : readers)
     if (r.used && !memcmp(r.handle, handle, 3)) { r.assigned = false; r.haveKey = false; r.used = false; found = true; }
@@ -772,6 +791,7 @@ static void doFactoryReset() {
   Serial.println("\n[btn] factory reset — wiping WiFi + MQTT + reader list + assignments");
   g_uuidStore.begin("obiuuid", false); g_uuidStore.clear(); g_uuidStore.end();      // stored reader UUIDs
   { Preferences p; p.begin("obiassign", false); p.clear(); p.end(); }                       // reader assignments
+  { Preferences p; p.begin("obiival", false); p.clear(); p.end(); }                         // persisted upload intervals
   web_factory_reset();                                                          // WiFi + MQTT settings
   for (int i = 0; i < 20; i++) { led_write(i & 1); delay(100); }                // ~2 s blink = confirmed
   Serial.println("[btn] done — rebooting into setup portal");
@@ -842,6 +862,16 @@ void setup() {
   radio.setDio2AsRfSwitch(true);
 #endif
   radio.setCRC(2);
+  // --- max out the SX1262 PA to match the stock firmware's range -------------------------------------
+  // OBI_TXPWR_DBM is already at the SX1262 ceiling (+22 dBm), but RadioLib's begin() clamps the PA
+  // over-current protection (OCP) to 60 mA. The SX1262 draws ~118 mA at +22 dBm, so a 60 mA limit trips
+  // the PA and the REAL output/range falls well short of +22 dBm — this is why range was worse than the
+  // stock firmware, which leaves OCP at the SX1262 140 mA reset default. Raise it to the datasheet max so
+  // the PA can actually reach full +22 dBm.
+  radio.setCurrentLimit(140.0);
+  // Range is bidirectional: also enable the SX126x RX boosted-gain LNA (~+2 dB sensitivity) so the gateway
+  // HEARS distant readers better. The gateway is mains-powered, so the extra RX current costs nothing.
+  radio.setRxBoostedGainMode(true);
   g_loraSem = xSemaphoreCreateBinary();
   radio.setDio1Action(onDio1);
 
