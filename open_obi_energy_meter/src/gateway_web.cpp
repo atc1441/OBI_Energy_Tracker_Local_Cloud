@@ -672,30 +672,65 @@ static void handleGithubLatest() {
              ",\"newer\":" + String(newer ? "true" : "false") + "}";
   server.send(200, "application/json", j);
 }
-// Download this board's newest release .bin from GitHub and flash it. Server picks the URL itself (only ever
-// its own repo's asset). Streams into the OTA slot; Update validates, so a bad/short image is rejected and the
-// running firmware is kept (brick-safe).
-static void handleGithubUpdate() {
+// Download this board's newest release .bin from GitHub and flash it. Runs in a BACKGROUND TASK so the web
+// server stays responsive and the settings page can poll /api/github/progress for a live % bar. Server picks
+// the URL itself (only ever its own repo's asset). Streams into the OTA slot; Update validates, so a bad/short
+// image is rejected and the running firmware is kept (brick-safe).
+static volatile uint8_t  g_ghState = 0;          // 0 idle · 1 running · 2 done (reboot imminent) · 3 error
+static volatile uint32_t g_ghDone = 0, g_ghTotal = 0;
+
+static void ghOtaTask(void *) {
+  g_ghDone = 0; g_ghTotal = 0;
+  bool ok = false;
   String tag, url;
-  if (!githubLatest(tag, url) || !url.length()) { server.send(200, "application/json", "{\"ok\":false,\"err\":\"noasset\"}"); return; }
-  WiFiClientSecure cli; cli.setInsecure();
-  HTTPClient http; http.setUserAgent("OBI-Gateway");
-  http.setConnectTimeout(10000); http.setTimeout(20000);
-  http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
-  if (!http.begin(cli, url)) { server.send(200, "application/json", "{\"ok\":false,\"err\":\"begin\"}"); return; }
-  int code = http.GET();
-  int len = http.getSize();
-  Serial.printf("[ghota] GET %s -> %d len=%d\n", url.c_str(), code, len);
-  if (code != 200 || len <= 0) { http.end(); server.send(200, "application/json", String("{\"ok\":false,\"code\":") + code + "}"); return; }
-  if (!Update.begin(len)) { Update.printError(Serial); http.end(); server.send(200, "application/json", "{\"ok\":false,\"err\":\"begin\"}"); return; }
-  size_t written = Update.writeStream(http.getStream());
-  bool ok = (written == (size_t)len) && Update.end(true);
-  if (!ok) Update.printError(Serial);
-  http.end();
-  Serial.printf("[ghota] wrote %u/%d ok=%d\n", (unsigned)written, len, ok);
-  server.sendHeader("Connection", "close");
-  server.send(200, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false,\"err\":\"write\"}");
-  if (ok) { delay(300); ESP.restart(); }
+  if (githubLatest(tag, url) && url.length()) {
+    WiFiClientSecure cli; cli.setInsecure();
+    HTTPClient http; http.setUserAgent("OBI-Gateway");
+    http.setConnectTimeout(10000); http.setTimeout(20000);
+    http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+    if (http.begin(cli, url)) {
+      int code = http.GET();
+      int len = http.getSize();
+      Serial.printf("[ghota] GET -> %d len=%d\n", code, len);
+      if (code == 200 && len > 0 && Update.begin(len)) {
+        g_ghTotal = len;
+        WiFiClient *st = http.getStreamPtr();
+        uint8_t buf[1024];
+        size_t written = 0; uint32_t lastData = millis();
+        while (written < (size_t)len) {
+          size_t avail = st->available();
+          if (avail) {
+            int n = st->readBytes(buf, avail > sizeof(buf) ? sizeof(buf) : avail);
+            if (n <= 0 || Update.write(buf, n) != (size_t)n) break;
+            written += n; g_ghDone = written; lastData = millis();
+          } else if (!st->connected()) break;
+          else if (millis() - lastData > 20000) break;   // stall
+          else delay(3);                                  // yield so the web task can serve /progress polls
+        }
+        ok = (written == (size_t)len) && Update.end(true);
+        if (!ok) Update.printError(Serial);
+        Serial.printf("[ghota] wrote %u/%d ok=%d\n", (unsigned)written, len, ok);
+      } else Serial.println("[ghota] no image / Update.begin failed");
+    }
+    http.end();
+  }
+  g_ghState = ok ? 2 : 3;
+  if (ok) { delay(900); ESP.restart(); }
+  vTaskDelete(nullptr);
+}
+static void handleGithubUpdate() {
+  if (g_ghState == 1) { server.send(200, "application/json", "{\"ok\":false,\"err\":\"busy\"}"); return; }
+  g_ghState = 1; g_ghDone = 0; g_ghTotal = 0;
+  if (xTaskCreate(ghOtaTask, "ghota", 10240, nullptr, 4, nullptr) != pdPASS) {
+    g_ghState = 0; server.send(200, "application/json", "{\"ok\":false,\"err\":\"task\"}"); return;
+  }
+  server.send(200, "application/json", "{\"ok\":true,\"started\":true}");
+}
+static void handleGithubProgress() {
+  uint32_t d = g_ghDone, tt = g_ghTotal;
+  int pct = tt ? (int)((uint64_t)d * 100 / tt) : 0;
+  server.send(200, "application/json",
+              String("{\"state\":") + g_ghState + ",\"done\":" + d + ",\"total\":" + tt + ",\"pct\":" + pct + "}");
 }
 
 // ---- /settings — WiFi, MQTT and Firmware in one tidy place ------------------------------------------
@@ -759,6 +794,7 @@ button:disabled{opacity:.5;cursor:default}
  <div class=card>
   <h3>⬆ Firmware</h3>
   <div class=stat id=fwcur>…</div>
+  <div class=row style="margin-top:2px"><button class=g id=ghbtn onclick=ghCheck()>Auf Updates prüfen</button></div>
   <div id=ghbox class=msg>GitHub wird geprüft…</div>
   <hr>
   <label id=lman2>Manuell flashen (.bin dieses Boards)</label>
@@ -782,6 +818,7 @@ $('bconn').textContent=t('Verbinden & speichern','Connect & save');$('bportal').
 $('lhost').textContent=t('Server','Server');$('luser').textContent=t('Benutzer','User');$('lpass').textContent=t('Passwort','Password');
 $('ltopic').textContent=t('Basis-Topic','Base topic');$('bmsave').textContent=t('Speichern','Save');$('bdisc').textContent=t('Discovery senden','Send discovery');
 $('lman2').textContent=t('Manuell flashen (.bin dieses Boards)','Manual flash (.bin for this board)');$('bflash').textContent=t('Flashen & neustart','Flash & reboot');
+$('ghbtn').textContent=t('Auf Updates prüfen','Check for updates');
 let cfg=false;
 async function load(){try{
   const s=await(await fetch('/api/status')).json();
@@ -815,11 +852,21 @@ async function ghCheck(){const box=$('ghbox');box.className='msg';box.textConten
   else{box.className='msg okrow';box.innerHTML=`✓ ${t('Aktuell','Up to date')} (${r.current}) — ${t('neuestes Release','latest release')}: ${r.version}`;}
  }catch(e){box.textContent=t('GitHub-Prüfung fehlgeschlagen','GitHub check failed');}}
 async function ghUpdate(){if(!confirm(t('Firmware von GitHub laden und flashen? Das Gerät startet danach neu.','Download & flash firmware from GitHub? The device reboots afterwards.')))return;
- const box=$('ghbox');box.className='msg';box.innerHTML='⏳ '+t('lade & flashe von GitHub… (nicht trennen, ~1–2 Min)','downloading & flashing from GitHub… (do not disconnect, ~1–2 min)');
+ const box=$('ghbox');box.className='msg';
+ box.innerHTML='⏳ '+t('lade & flashe von GitHub… (nicht trennen)','downloading & flashing from GitHub… (do not disconnect)')
+   +'<div class="bar on" style="margin:10px 0 4px"><div class=fill id=ghfill></div></div><div id=ghp class=msg>0%</div>';
  try{const r=await(await fetch('/api/github/update',{method:'POST'})).json();
-  if(r.ok){box.innerHTML='✓ '+t('geflasht — Neustart läuft…','flashed — rebooting…');setTimeout(()=>location.href='/',10000);}
-  else{box.className='msg';box.textContent=t('Update fehlgeschlagen','update failed')+' ('+(r.err||r.code||'?')+') — '+t('aktuelle Firmware bleibt.','current firmware kept.');}
- }catch(e){box.innerHTML='… '+t('Verbindung verloren (evtl. Neustart) — in 10 s zum Dashboard.','connection lost (maybe rebooting) — dashboard in 10 s.');setTimeout(()=>location.href='/',10000);}}
+  if(!r.ok){box.className='msg';box.textContent=t('Start fehlgeschlagen','failed to start')+' ('+(r.err||'?')+')';return;}
+  ghPoll();
+ }catch(e){box.className='msg';box.textContent=t('Fehler beim Start','error starting');}}
+async function ghPoll(){try{const p=await(await fetch('/api/github/progress')).json();
+  const f=$('ghfill'),info=$('ghp');
+  if(f)f.style.width=(p.pct||0)+'%';
+  if(info)info.textContent=(p.pct||0)+'%'+(p.total?' · '+Math.round((p.done||0)/1024)+'/'+Math.round(p.total/1024)+' KB':'');
+  if(p.state==2){if(info)info.textContent='✓ '+t('fertig — Neustart läuft…','done — rebooting…');setTimeout(()=>location.href='/',10000);return;}
+  if(p.state==3){$('ghbox').className='msg';$('ghbox').textContent=t('Update fehlgeschlagen — aktuelle Firmware bleibt.','update failed — current firmware kept.');return;}
+  setTimeout(ghPoll,700);
+ }catch(e){setTimeout(()=>location.href='/',10000);}}  // a failing poll usually means it's rebooting
 function upload(){let f=$('file').files[0];if(!f){$('upmsg').textContent=t('erst eine .bin wählen','pick a .bin first');return;}
  $('upbtn').disabled=true;$('bar').classList.add('on');$('upmsg').textContent=t('lade hoch','uploading')+' '+f.name+'…';
  let fd=new FormData();fd.append('firmware',f);let x=new XMLHttpRequest();x.open('POST','/api/selfupdate');
@@ -1613,6 +1660,7 @@ static void startServices() {
   server.on("/settings",        HTTP_GET,  handleSettingsPage);       // WiFi + MQTT + firmware in one page
   server.on("/api/github/latest", HTTP_GET,  handleGithubLatest);     // check GitHub for the newest release
   server.on("/api/github/update", HTTP_POST, handleGithubUpdate);     // pull + flash the newest release .bin
+  server.on("/api/github/progress", HTTP_GET, handleGithubProgress);  // live download/flash % for the UI
   server.on("/update", HTTP_GET, handleUpdatePage);                   // ESP32 self-update page (still linked from /settings)
   server.on("/api/selfupdate", HTTP_POST, handleSelfOtaDone, handleSelfOtaUpload);
   server.on("/debug", HTTP_GET, handleDebugPage);                     // flash hex editor
