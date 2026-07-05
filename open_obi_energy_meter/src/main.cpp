@@ -280,7 +280,16 @@ static void sendLegacyAck(Reader *r, uint8_t rxcmd, uint8_t version, float rssi)
   if (!r->haveKey) return;                           // ack is TEA-encrypted with the reader's key
   uint8_t b[8] = {0};
   b[0] = version;
-  b[1] = 0xFF;
+  // b[1] = interval byte. The v38-family meter reader applies interval = 2 * b[1] seconds (sub_600C;
+  // byte 0 or 255 -> its 300 s default). The stock value here was 0xFF (=300 s); send the user-configured
+  // interval instead so the dashboard interval control also works for the cmd-24/25 readers. The old
+  // v1.0.1/v32 readers ignore b[1] (they only check version + crc), so this stays safe for them; the CRC
+  // below is recomputed over the new bytes either way.
+  uint16_t secs = r->setInterval ? r->setInterval : OBI_DEFAULT_INTERVAL;
+  uint16_t half = secs / 2;                            // firmware doubles it: interval = 2 * byte
+  if (half < 1)   half = 1;                            // 0/255 would select the reader's 300 s default
+  if (half > 254) half = 254;
+  b[1] = (uint8_t)half;
   b[2] = (uint8_t)(rssi < 0 ? -rssi : rssi);
   uint16_t c = obi_crc16(b, 3);
   b[3] = c & 0xFF; b[4] = c >> 8;
@@ -662,11 +671,14 @@ static void handleRx() {
       // the new version so it resets after 3 acks and pulls the firmware.
       // Only ack ASSIGNED readers — an unassigned one is left to search (so another gateway can take it).
       if (r && acceptReader(r)) {
-        // no-op version = the reader's own reported softver (so it's a no-op both before AND after an
-        // OTA, whatever version the new image reports — avoids a reflash loop). OTA target gets the
-        // new version to trigger the update.
-        uint8_t cur = r->softver ? r->softver : 57;
-        uint8_t ver = (g_otaActive && !memcmp(r->handle, g_otaTarget, 3)) ? g_otaVersion : cur;
+        // no-op version = 0, the UNIVERSAL no-op: every reader generation treats 0 (and its own softver)
+        // as "no OTA available". Advertising a fixed 57 / the reader's softver is unsafe for a reader whose
+        // no-op magic differs — e.g. the v38 meter reader treats only 0 or 38 as no-op, so a stray 57 (sent
+        // in the window before we've decoded its softver, or by a plain default) looks like a real firmware
+        // offer; after 3 such acks it arms its OTA marker and resets into the bootloader to pull an image
+        // that isn't there, getting stuck in a cmd-33 loop (IR never reads -> no values). 0 avoids that for
+        // all generations. The OTA target still gets the real new version to trigger a genuine update.
+        uint8_t ver = (g_otaActive && !memcmp(r->handle, g_otaTarget, 3)) ? g_otaVersion : 0;
         if (cmd == 24 || cmd == 25) sendLegacyAck(r, cmd, ver, rssi);   // old v32 _c reader: cmd 56/57 TEA
         else                        sendEnergyAck(r, cmd, ver);          // 1.2.x _d reader: cmd 38/40 TEA
         // A keyless v3x reader (plaintext energy, never did ECDH) never gets the TEA ack above — both
