@@ -1377,7 +1377,9 @@ static void webTask(void *) {
     }
     if (g_serverUp) {
       server.handleClient();
-      if (conn && !gw_ota_active()) mqttService();            // pause MQTT during a reader OTA (keep WiFi quiet)
+      if (conn) mqttService();                                // keep MQTT serviced even during a reader OTA — pausing it
+                                                              // let the broker's keepalive lapse and drop the client
+                                                              // (which then didn't reconnect on its own)
     }
     g_mqttUp = conn && mqtt.connected();                      // cache for the e-paper task (owns PubSubClient here)
     vTaskDelay(pdMS_TO_TICKS(2));
