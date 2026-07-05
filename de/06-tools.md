@@ -8,6 +8,7 @@ Platzhalter.
 | [`obi_uart_config.html`](../06-tools/obi_uart_config.html) | **Web‑Serial** UART‑Config‑Konsole: TEA‑Key & WLAN über das `C5 5C`‑Protokoll lesen/schreiben |
 | [`obi_gateway_ble.html`](../06-tools/obi_gateway_ble.html) | **Web‑Bluetooth**‑Gateway: WLAN + Zertifikate (TEA+JSON) ans Gerät pushen |
 | [`obi_ble_codec.py`](../06-tools/obi_ble_codec.py) | TEA‑Frame‑Codec: JSON ⇄ Fragmente ⇄ TEA (BLE‑Traffic en-/dekodieren) |
+| [`split_flash_dump.py`](../06-tools/split_flash_dump.py) | Einen Full‑Flash‑Dump (aus /debug „Dump full flash") in einzelne Partitions‑`.bin` zerlegen |
 
 ## obi_uart_config.html
 In **Chrome oder Edge** öffnen (Web Serial braucht einen Chromium‑Browser; läuft auch von `file://`). Mit
@@ -33,6 +34,18 @@ python obi_ble_codec.py decode --key <32hex> <framehex> [<framehex> ...]
 python obi_ble_codec.py tea-enc --key <32hex> --block 0011223344556677
 ```
 Jeder Key, den du übergibst, ist dein eigener; die eingebauten Beispiel‑Keys sind Platzhalter.
+
+## split_flash_dump.py
+Reiner‑Stdlib‑Splitter für einen **Full‑Flash‑Dump**, den du über die `/debug`‑Seite der Custom‑Firmware
+gezogen hast („Dump full flash" → `flash_full_*.bin`). Liest die ESP32‑Partitionstabelle bei `0x8000` aus
+dem Dump und schreibt jede Partition in eine eigene Datei — so kommen die zwei App‑Slots (`ota_0`/`ota_1`,
+die laufende und die vorherige Firmware) getrennt heraus.
+```bash
+python split_flash_dump.py flash_full_4096k.bin --list          # nur die Partitionstabelle zeigen
+python split_flash_dump.py flash_full_4096k.bin -o out/         # jede Partition schreiben
+python split_flash_dump.py flash_full_4096k.bin -o out/ --only app0,app1
+```
+Kompletter Walkthrough (Dumpen + Partitionen teilen): [04-flash-dumpen.md](04-flash-dumpen.md).
 
 > Web Serial / Web Bluetooth brauchen einen Secure Context — Chromium‑Browser am Desktop; beides läuft von
 > lokalem `file://`. Falls eine eingebettete Vorschau den Port‑Zugriff blockt, die Datei herunterladen und

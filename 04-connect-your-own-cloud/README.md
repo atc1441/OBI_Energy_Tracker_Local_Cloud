@@ -148,6 +148,9 @@ Two things the tool handles for you, both learned the hard way:
 - **Stock image** (to restore, downgrade, or study): pull it from the vendor cloud with
   [`tools/obi_ota_download.py`](tools/obi_ota_download.py) — it replays the device's OTA client using a
   cloud cert for your bridge (from `POST /device-provisionings`).
+- **Dump it from your own device** (no cert needed, once the custom firmware runs): the web debug page can
+  read the whole SPI flash — both OTA slots, so you get the running *and* the previous firmware version.
+  Step-by-step + how to split the dump into per-partition files: [dump-your-flash.md](dump-your-flash.md).
 - **Custom image**: any valid ESP32-C3 app-partition image (starts with `0xE9`), built against this
   hardware. `--ota-version` just sets the version string in the offer (cosmetic).
 
