@@ -4,10 +4,11 @@ mitm_proxy.py -- transparent MITM between the OBI device and the real OBI/AWS-Io
 
 Device side  : we are the MQTTS server the device connects to (certs from BLE push).
                The device provisions locally (faked) and becomes operational against us.
-Cloud side   : we hold a real-cloud MQTT connection AS the device's thing, using a cert we
-               provisioned for the device UUID (obi_mqtt_client.py provision --thing-name <uuid>
-               -> certs_bridge/). Because the account owns that bridge (enrolled once via the
-               real app), forwarding the device's heartbeat makes it show up ONLINE in the app.
+Cloud side   : we hold a real-cloud MQTT connection AS the device's thing, using the AWS-IoT
+               client cert for the device UUID. Because the account owns that bridge (enrolled
+               once via the real app), forwarding the device's heartbeat makes it show up ONLINE
+               in the app. Get that cert from the vendor's fleet-provisioning credentials (see
+               Prereqs) -- there is intentionally no client here that talks TO the vendor cloud.
 Bridging     : device uplink  ($aws/rules/.../state, and anything else it publishes) -> real cloud
                cloud downlink  (OTA cmd, firmware-data, shadow, jobs)                -> device
                Everything is logged; this is the MITM tap.
@@ -17,8 +18,17 @@ proxy + push the local-cloud config over BLE (ble_provision.py). The device re-r
 us, we relay to the real cloud, and it appears/behaves as a real bridge -- while we sit in between.
 
 Prereqs:
-  python gen_certs.py --host <LAN-IP>                          # device-side PKI + ble_config.json
-  python ../obi_mqtt_client.py provision --thing-name <uuid> --out-dir certs_bridge   # cloud-side cert
+  python gen_certs.py --host <LAN-IP>          # device-side PKI + ble_config.json
+  # Cloud-side cert (certs_bridge/): fetch the vendor's AWS-IoT fleet-provisioning credentials for
+  # a bridge YOUR account owns, then save them into certs_bridge/ as:
+  #   caPem          -> certs_bridge/ca.pem
+  #   certificatePem -> certs_bridge/client.crt
+  #   privateKey     -> certs_bridge/client.key
+  #   clusterEndpointUri -> host part = --cloud-endpoint (or edit CLOUD_ENDPOINT below)
+  # Get them with an authenticated app request:  POST /device-provisionings  body {"bridgeId":"<uuid>"}
+  #   -> {caPem, certificatePem, privateKey, clusterEndpointUri, provisioningTemplateName}
+  # (see ../../03-reverse-engineering/cloud-api.md). No script that provisions against the vendor
+  # cloud is shipped here on purpose -- do this manually against your own account only.
 
 Usage:
   python mitm_proxy.py --host <LAN-IP> --uuid <device-uuid> --cloud-dir certs_bridge
@@ -216,8 +226,11 @@ def main():
     if not args.no_cloud:
         for n in ("ca.pem", "client.crt", "client.key"):
             if not os.path.exists(os.path.join(args.cloud_dir, n)):
-                sys.exit(f"missing {n} in {args.cloud_dir} -- provision a cloud cert for the uuid first:\n"
-                         f"  python ../obi_mqtt_client.py provision --thing-name {args.uuid} --out-dir {args.cloud_dir}")
+                sys.exit(f"missing {n} in {args.cloud_dir} -- put the vendor fleet-provisioning cert for "
+                         f"{args.uuid} there first (caPem->ca.pem, certificatePem->client.crt, "
+                         f"privateKey->client.key; POST /device-provisionings body {{\"bridgeId\":\"{args.uuid}\"}}).\n"
+                         f"See this file's header / ../../03-reverse-engineering/cloud-api.md. "
+                         f"Run with --no-cloud to skip the cloud side.")
         cloud = make_cloud(os.path.join(args.cloud_dir, "ca.pem"),
                            os.path.join(args.cloud_dir, "client.crt"),
                            os.path.join(args.cloud_dir, "client.key"), args.uuid)

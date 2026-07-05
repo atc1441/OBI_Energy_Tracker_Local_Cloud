@@ -56,6 +56,17 @@ python ble_provision.py --config pki/ble_config.json --key <TEA-KEY> --unbind --
 ```
 `--no-cloud` runs only the local side. The proxy log shows both directions.
 
+**`--cloud-dir` (the real-cloud cert).** The cloud side authenticates as the device's own AWS-IoT
+thing, so you need that thing's client cert — the same fleet-provisioning credentials the vendor app
+pushes to the device. There is **no bundled script that provisions against the vendor cloud** (removed
+on purpose — it would be a client that mints certs on OBI's infrastructure). Fetch them yourself for a
+bridge **your account already owns** with an authenticated app request
+`POST /device-provisionings` (body `{"bridgeId":"<uuid>"}`) →
+`{caPem, certificatePem, privateKey, clusterEndpointUri, provisioningTemplateName}`, and drop the PEMs
+into the dir as `ca.pem` / `client.crt` / `client.key` (`clusterEndpointUri` host → `--cloud-endpoint`).
+Same convention as `obi_ota_download.py --from-dir`; details in
+[../../03-reverse-engineering/cloud-api.md](../../03-reverse-engineering/cloud-api.md#where-the-device-secrets-come-from).
+
 ## Test without a device (simulator)
 A companion MQTT client can run the same provisioning flow to verify the broker without hardware — see
 the comments in `mqtts_server.py`.
