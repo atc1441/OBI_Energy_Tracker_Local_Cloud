@@ -47,6 +47,11 @@ SX1262 radio = new Module(PIN_LORA_NSS, PIN_LORA_DIO1, PIN_LORA_RST, PIN_LORA_BU
 const int MAX_READERS = 64;   // ~92 B/entry -> ~6 KB RAM for 64; the real ceiling is LoRa airtime, not memory
 Reader readers[MAX_READERS];
 
+// Default upload interval (seconds) for a NEW reader that the user hasn't configured yet. A fresh reader is
+// initialised to this (see addReader) so it's shown in the UI/MQTT AND actively pushed to the reader in the
+// energy ACK. Defined up here so addReader can see it.
+#define OBI_DEFAULT_INTERVAL 25
+
 // An UNBOUND reader (never accepted onto this gateway) that goes silent this long is almost certainly a
 // mis-decoded frame — bogus ids like FFFFFD that never really existed — so it is auto-pruned (see loop()).
 static const uint32_t READER_STALE_MS = 400000;   // ~400 s
@@ -126,7 +131,8 @@ static Reader *addReader(const uint8_t h[3]) {
     x = Reader{}; x.used = true; x.lastSeenMs = millis(); memcpy(x.handle, h, 3);   // stamp now so a fresh entry isn't instantly pruned
     if (loadUuid(h, x.uuid)) x.haveUuid = true;     // restore a previously-seen UUID
     x.assigned = loadAssigned(h);                   // restore the accept flag (auto-binds on sight)
-    x.setInterval = loadInterval(h);                // restore the persisted upload interval (survives reboot + re-pair)
+    uint16_t iv = loadInterval(h);                  // persisted upload interval (0 = never configured)
+    x.setInterval = iv ? iv : OBI_DEFAULT_INTERVAL; // new/unconfigured reader -> default, so it's shown in UI/MQTT AND pushed in the ACK
     return &x;
   }
   return nullptr;
@@ -262,9 +268,6 @@ void gw_pair_all(uint16_t seconds) {
 }
 uint32_t gw_pair_remaining_s() { return pairWindowActive() ? (g_pairUntil - millis()) / 1000 : 0; }
 
-// default upload interval (seconds) when the user hasn't set one for a reader
-#define OBI_DEFAULT_INTERVAL 10
-
 // Energy ACK (cmd 38 for cmd37-family, cmd 40 for the live/39 family). The reader WAITS for this
 // after every report; without it, it retries every ~5-6 s. The ack carries the upload interval
 // (reader applies it directly) and a firmware version (== current 57 = no OTA; != 57 triggers OTA).
@@ -350,13 +353,14 @@ static uint32_t g_otaSize = 0, g_otaGot = 0, g_otaServed = 0;
 static uint8_t  g_otaTarget[3] = {0};
 static uint8_t  g_otaVersion = 1;
 static bool     g_otaActive = false;
+static bool     g_otaPulled = false;   // target actually requested a block (entered its bootloader for THIS OTA)
 
 bool gw_ota_begin(const uint8_t handle[3], uint32_t total, uint8_t version) {
   if (g_ota) { free(g_ota); g_ota = nullptr; }
   if (!total || total > 512u * 1024) return false;
   g_ota = (uint8_t *)malloc(total);
   if (!g_ota) return false;
-  g_otaSize = total; g_otaGot = 0; g_otaServed = 0;
+  g_otaSize = total; g_otaGot = 0; g_otaServed = 0; g_otaPulled = false;
   memcpy(g_otaTarget, handle, 3); g_otaVersion = version ? version : 1; g_otaActive = false;
   Serial.printf("[ota] begin %u B -> %02X%02X%02X ver %u\n", total, handle[0], handle[1], handle[2], g_otaVersion);
   return true;
@@ -370,7 +374,7 @@ bool gw_ota_arm() {
   Serial.println("[ota] armed — advertising new version in the ACK; reader will reset & pull");
   return true;
 }
-void gw_ota_cancel() { g_otaActive = false; if (g_ota) { free(g_ota); g_ota = nullptr; } g_otaSize = 0; }
+void gw_ota_cancel() { g_otaActive = false; g_otaPulled = false; if (g_ota) { free(g_ota); g_ota = nullptr; } g_otaSize = 0; }
 bool gw_ota_active() { return g_otaActive; }
 uint32_t gw_ota_size() { return g_otaSize; }
 uint32_t gw_ota_progress() { return g_otaServed > g_otaSize ? g_otaSize : g_otaServed; }
@@ -670,14 +674,14 @@ static void handleRx() {
     case 33: {                                             // reader bootloader OTA pull (metadata/block)
       Reader *r = addReader(handle);                         // show a stuck-in-bootloader reader in the UI
       if (r) { r->lastRssi = rssi; r->lastSeenMs = millis(); r->inBootloader = true; }
-      if (g_otaActive && !memcmp(handle, g_otaTarget, 3)) serveOtaRequest(handle, d + 4, len - 4);
+      if (g_otaActive && !memcmp(handle, g_otaTarget, 3)) { g_otaPulled = true; serveOtaRequest(handle, d + 4, len - 4); }
       else Serial.printf("  cmd33 (OTA pull) but no armed image for %02X%02X%02X\n", handle[0], handle[1], handle[2]);
       break;
     }
     case 20: case 21: {                                    // LEGACY bootloader OTA pull (cmd 20/21)
       Reader *r = addReader(handle);
       if (r) { r->lastRssi = rssi; r->lastSeenMs = millis(); r->inBootloader = true; }
-      if (g_otaActive && !memcmp(handle, g_otaTarget, 3)) serveOtaLegacy(handle, cmd, d + 4, len - 4);
+      if (g_otaActive && !memcmp(handle, g_otaTarget, 3)) { g_otaPulled = true; serveOtaLegacy(handle, cmd, d + 4, len - 4); }
       else Serial.printf("  cmd%u (OTA pull) but no armed image for %02X%02X%02X\n", cmd, handle[0], handle[1], handle[2]);
       break;
     }
@@ -740,6 +744,14 @@ static void handleRx() {
           Serial.printf("  energy [%s]: ", how); hexdump(p, plen); Serial.println();
           if (legacy) printEnergyOld(p, plen); else printEnergy(p, plen);
           r->decoded = true; r->decFails = 0; r->inBootloader = false;   // back to normal app operation
+          // OTA auto-finish: if THIS reader pulled our armed image (was in its bootloader for the OTA) and is
+          // now decoding energy again, it has flashed + rebooted into the new firmware -> the update is done.
+          // Disarm so the GUI/MQTT stop showing "OTA in progress" and we stop advertising the update version.
+          if (g_otaActive && g_otaPulled && !memcmp(r->handle, g_otaTarget, 3)) {
+            Serial.printf("  [ota] %02X%02X%02X back in app after pull — update complete, disarming\n",
+                          r->handle[0], r->handle[1], r->handle[2]);
+            gw_ota_cancel();
+          }
           // store telemetry for the dashboard / MQTT
           r->haveData = true; r->legacy = legacy; r->lastSeenMs = millis(); r->lastRssi = rssi;
           if (legacy) { r->softver = p[0]; r->hardver = p[1]; r->battery_mV = 20 * p[2]; r->flags = p[3];
