@@ -11,6 +11,9 @@
   spielt den OTA‑Client des Geräts nach und speichert das App‑Image, das der Hersteller für *deine* Bridge
   ausliefert (braucht ein Provisioning‑Cert für die UUID deiner Bridge — siehe
   [03-cloud-api.md](03-cloud-api.md)).
+- **Vom eigenen Gerät dumpen, sobald die Custom‑Firmware läuft**: die Web‑Debug‑Seite liest den ganzen
+  SPI‑Flash (beide OTA‑Slots → laufende *und* vorherige Version). Kein Cert, kein esptool nötig — Schritte
+  + Partitions‑Splitter in [04-flash-dumpen.md](04-flash-dumpen.md).
 - Oder ein bereits vorhandenes Dump. Der ROM‑Download‑Modus ist auf Serien‑Geräten per eFuse gesperrt
   (siehe [03-firmware-layout.md](03-firmware-layout.md)), daher ist kein UART/JTAG‑Auslesen möglich; der
   OTA‑Weg oben ist der praktikable.

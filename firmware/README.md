@@ -11,6 +11,10 @@
   it replays the device's OTA client and saves the app image the vendor serves for *your* bridge
   (needs a provisioning cert for your bridge's UUID — see
   [../03-reverse-engineering/cloud-api.md](../03-reverse-engineering/cloud-api.md)).
+- **Dump it from your own device once the custom firmware runs**: the web debug page reads the whole SPI
+  flash (both OTA slots → running *and* previous version). No cert or esptool needed — steps + a
+  partition splitter in
+  [../04-connect-your-own-cloud/dump-your-flash.md](../04-connect-your-own-cloud/dump-your-flash.md).
 - Or use a dump you already have. The ROM download mode is fused off on shipped units
   (locked bootloader — see [../03-reverse-engineering/firmware-layout.md](../03-reverse-engineering/firmware-layout.md)),
   so UART/JTAG readout is not available; the OTA path above is the practical route.
