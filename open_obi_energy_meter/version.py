@@ -8,7 +8,7 @@ import os, subprocess, datetime
 
 Import("env")  # noqa: F821  (injected by PlatformIO/SCons)
 
-BASE_VERSION = "1.0"                       # major.minor — raise by hand for a release
+BASE_VERSION = "1.1"                       # major.minor — raise by hand for a release
 
 proj         = env["PROJECT_DIR"]
 counter_file = os.path.join(proj, "version.txt")
@@ -38,8 +38,11 @@ if git("status", "--porcelain"):
     ghash += "-dirty"
 
 target  = env["PIOENV"]
-version = "%s.%d" % (BASE_VERSION, build)
-date    = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+# A release/CI build can pin the exact version via env (e.g. the git tag), overriding the local counter.
+# Local builds leave FW_VERSION_OVERRIDE unset and keep the "BASE_VERSION.build" behaviour unchanged.
+override = os.environ.get("FW_VERSION_OVERRIDE", "").strip().lstrip("v")
+version  = override if override else "%s.%d" % (BASE_VERSION, build)
+date     = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
 print("version.py: fw %s  target=%s  git=%s" % (version, target, ghash))
 

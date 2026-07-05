@@ -102,7 +102,12 @@ static int fillEfuses(EfuseKV *o, int max) {
 #else
   add("DIS_DOWNLOAD_MODE", esp_efuse_read_field_bit(ESP_EFUSE_DIS_DOWNLOAD_MODE));
   add("DIS_DIRECT_BOOT",   esp_efuse_read_field_bit(ESP_EFUSE_DIS_DIRECT_BOOT));
-#if defined(CONFIG_IDF_TARGET_ESP32C3)
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+  // On the S3 the pad-JTAG fuse is split into HARD/SOFT (DIS_PAD_JTAG was
+  // removed from the efuse table in newer IDF releases).
+  add("HARD_DIS_JTAG",     esp_efuse_read_field_bit(ESP_EFUSE_HARD_DIS_JTAG));
+  add("SOFT_DIS_JTAG",     esp_efuse_read_field_bit(ESP_EFUSE_SOFT_DIS_JTAG));
+#else
   add("DIS_PAD_JTAG",      esp_efuse_read_field_bit(ESP_EFUSE_DIS_PAD_JTAG));
 #endif
 #if defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32S3)

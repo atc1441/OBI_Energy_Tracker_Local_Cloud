@@ -47,6 +47,11 @@ SX1262 radio = new Module(PIN_LORA_NSS, PIN_LORA_DIO1, PIN_LORA_RST, PIN_LORA_BU
 const int MAX_READERS = 64;   // ~92 B/entry -> ~6 KB RAM for 64; the real ceiling is LoRa airtime, not memory
 Reader readers[MAX_READERS];
 
+// Default upload interval (seconds) for a NEW reader that the user hasn't configured yet. A fresh reader is
+// initialised to this (see addReader) so it's shown in the UI/MQTT AND actively pushed to the reader in the
+// energy ACK. Defined up here so addReader can see it.
+#define OBI_DEFAULT_INTERVAL 25
+
 // An UNBOUND reader (never accepted onto this gateway) that goes silent this long is almost certainly a
 // mis-decoded frame — bogus ids like FFFFFD that never really existed — so it is auto-pruned (see loop()).
 static const uint32_t READER_STALE_MS = 400000;   // ~400 s
@@ -98,6 +103,22 @@ static bool loadAssigned(const uint8_t h[3]) {
   return v;
 }
 
+// Per-reader upload interval (seconds), PERSISTED in NVS so it survives both a gateway reboot AND a re-pair
+// (the RAM reader slot is recreated on re-pair, which would otherwise reset the interval to the default).
+// Local Preferences per call for the same cross-core reason as saveAssigned (web task core 0 / LoRa core 1).
+static void saveInterval(const uint8_t h[3], uint16_t secs) {
+  char k[8]; uuidKey(h, k);
+  Preferences p; p.begin("obiival", false);
+  if (secs) p.putUShort(k, secs); else p.remove(k);
+  p.end();
+}
+static uint16_t loadInterval(const uint8_t h[3]) {
+  char k[8]; uuidKey(h, k);
+  Preferences p; p.begin("obiival", true);
+  uint16_t v = p.getUShort(k, 0); p.end();
+  return v;
+}
+
 // Auto-pair window: while active, every reader that announces is accepted automatically.
 static uint32_t g_pairUntil = 0;
 static bool pairWindowActive() { return g_pairUntil && (int32_t)(millis() - g_pairUntil) < 0; }
@@ -110,6 +131,8 @@ static Reader *addReader(const uint8_t h[3]) {
     x = Reader{}; x.used = true; x.lastSeenMs = millis(); memcpy(x.handle, h, 3);   // stamp now so a fresh entry isn't instantly pruned
     if (loadUuid(h, x.uuid)) x.haveUuid = true;     // restore a previously-seen UUID
     x.assigned = loadAssigned(h);                   // restore the accept flag (auto-binds on sight)
+    uint16_t iv = loadInterval(h);                  // persisted upload interval (0 = never configured)
+    x.setInterval = iv ? iv : OBI_DEFAULT_INTERVAL; // new/unconfigured reader -> default, so it's shown in UI/MQTT AND pushed in the ACK
     return &x;
   }
   return nullptr;
@@ -211,6 +234,7 @@ static void storeAnnounce(Reader *r, uint8_t cmd, const uint8_t *pl, size_t plen
 // ---- web-UI hooks (declared in reader.h) -----------------------------------
 uint32_t gw_uptime_s() { return millis() / 1000; }
 void gw_request_interval(const uint8_t handle[3], uint16_t seconds) {
+  saveInterval(handle, seconds);        // persist so it survives a reboot AND a re-pair (RAM slot is recreated)
   for (auto &r : readers)
     if (r.used && !memcmp(r.handle, handle, 3)) { r.setInterval = seconds; return; }
 }
@@ -219,6 +243,7 @@ void gw_request_interval(const uint8_t handle[3], uint16_t seconds) {
 // so a real reader keeps its identity if you re-bind it later.
 bool gw_delete_reader(const uint8_t handle[3]) {
   saveAssigned(handle, false);        // remove the persisted binding
+  saveInterval(handle, 0);            // forget the persisted upload interval too
   bool found = false;
   for (auto &r : readers)
     if (r.used && !memcmp(r.handle, handle, 3)) { r.assigned = false; r.haveKey = false; r.used = false; found = true; }
@@ -242,9 +267,6 @@ void gw_pair_all(uint16_t seconds) {
   Serial.printf("[pair] auto-pair window open for %u s\n", seconds);
 }
 uint32_t gw_pair_remaining_s() { return pairWindowActive() ? (g_pairUntil - millis()) / 1000 : 0; }
-
-// default upload interval (seconds) when the user hasn't set one for a reader
-#define OBI_DEFAULT_INTERVAL 10
 
 // Energy ACK (cmd 38 for cmd37-family, cmd 40 for the live/39 family). The reader WAITS for this
 // after every report; without it, it retries every ~5-6 s. The ack carries the upload interval
@@ -280,7 +302,16 @@ static void sendLegacyAck(Reader *r, uint8_t rxcmd, uint8_t version, float rssi)
   if (!r->haveKey) return;                           // ack is TEA-encrypted with the reader's key
   uint8_t b[8] = {0};
   b[0] = version;
-  b[1] = 0xFF;
+  // b[1] = interval byte. The v38-family meter reader applies interval = 2 * b[1] seconds (sub_600C;
+  // byte 0 or 255 -> its 300 s default). The stock value here was 0xFF (=300 s); send the user-configured
+  // interval instead so the dashboard interval control also works for the cmd-24/25 readers. The old
+  // v1.0.1/v32 readers ignore b[1] (they only check version + crc), so this stays safe for them; the CRC
+  // below is recomputed over the new bytes either way.
+  uint16_t secs = r->setInterval ? r->setInterval : OBI_DEFAULT_INTERVAL;
+  uint16_t half = secs / 2;                            // firmware doubles it: interval = 2 * byte
+  if (half < 1)   half = 1;                            // 0/255 would select the reader's 300 s default
+  if (half > 254) half = 254;
+  b[1] = (uint8_t)half;
   b[2] = (uint8_t)(rssi < 0 ? -rssi : rssi);
   uint16_t c = obi_crc16(b, 3);
   b[3] = c & 0xFF; b[4] = c >> 8;
@@ -322,13 +353,14 @@ static uint32_t g_otaSize = 0, g_otaGot = 0, g_otaServed = 0;
 static uint8_t  g_otaTarget[3] = {0};
 static uint8_t  g_otaVersion = 1;
 static bool     g_otaActive = false;
+static bool     g_otaPulled = false;   // target actually requested a block (entered its bootloader for THIS OTA)
 
 bool gw_ota_begin(const uint8_t handle[3], uint32_t total, uint8_t version) {
   if (g_ota) { free(g_ota); g_ota = nullptr; }
   if (!total || total > 512u * 1024) return false;
   g_ota = (uint8_t *)malloc(total);
   if (!g_ota) return false;
-  g_otaSize = total; g_otaGot = 0; g_otaServed = 0;
+  g_otaSize = total; g_otaGot = 0; g_otaServed = 0; g_otaPulled = false;
   memcpy(g_otaTarget, handle, 3); g_otaVersion = version ? version : 1; g_otaActive = false;
   Serial.printf("[ota] begin %u B -> %02X%02X%02X ver %u\n", total, handle[0], handle[1], handle[2], g_otaVersion);
   return true;
@@ -342,7 +374,7 @@ bool gw_ota_arm() {
   Serial.println("[ota] armed — advertising new version in the ACK; reader will reset & pull");
   return true;
 }
-void gw_ota_cancel() { g_otaActive = false; if (g_ota) { free(g_ota); g_ota = nullptr; } g_otaSize = 0; }
+void gw_ota_cancel() { g_otaActive = false; g_otaPulled = false; if (g_ota) { free(g_ota); g_ota = nullptr; } g_otaSize = 0; }
 bool gw_ota_active() { return g_otaActive; }
 uint32_t gw_ota_size() { return g_otaSize; }
 uint32_t gw_ota_progress() { return g_otaServed > g_otaSize ? g_otaSize : g_otaServed; }
@@ -642,14 +674,14 @@ static void handleRx() {
     case 33: {                                             // reader bootloader OTA pull (metadata/block)
       Reader *r = addReader(handle);                         // show a stuck-in-bootloader reader in the UI
       if (r) { r->lastRssi = rssi; r->lastSeenMs = millis(); r->inBootloader = true; }
-      if (g_otaActive && !memcmp(handle, g_otaTarget, 3)) serveOtaRequest(handle, d + 4, len - 4);
+      if (g_otaActive && !memcmp(handle, g_otaTarget, 3)) { g_otaPulled = true; serveOtaRequest(handle, d + 4, len - 4); }
       else Serial.printf("  cmd33 (OTA pull) but no armed image for %02X%02X%02X\n", handle[0], handle[1], handle[2]);
       break;
     }
     case 20: case 21: {                                    // LEGACY bootloader OTA pull (cmd 20/21)
       Reader *r = addReader(handle);
       if (r) { r->lastRssi = rssi; r->lastSeenMs = millis(); r->inBootloader = true; }
-      if (g_otaActive && !memcmp(handle, g_otaTarget, 3)) serveOtaLegacy(handle, cmd, d + 4, len - 4);
+      if (g_otaActive && !memcmp(handle, g_otaTarget, 3)) { g_otaPulled = true; serveOtaLegacy(handle, cmd, d + 4, len - 4); }
       else Serial.printf("  cmd%u (OTA pull) but no armed image for %02X%02X%02X\n", cmd, handle[0], handle[1], handle[2]);
       break;
     }
@@ -662,11 +694,14 @@ static void handleRx() {
       // the new version so it resets after 3 acks and pulls the firmware.
       // Only ack ASSIGNED readers — an unassigned one is left to search (so another gateway can take it).
       if (r && acceptReader(r)) {
-        // no-op version = the reader's own reported softver (so it's a no-op both before AND after an
-        // OTA, whatever version the new image reports — avoids a reflash loop). OTA target gets the
-        // new version to trigger the update.
-        uint8_t cur = r->softver ? r->softver : 57;
-        uint8_t ver = (g_otaActive && !memcmp(r->handle, g_otaTarget, 3)) ? g_otaVersion : cur;
+        // no-op version = 0, the UNIVERSAL no-op: every reader generation treats 0 (and its own softver)
+        // as "no OTA available". Advertising a fixed 57 / the reader's softver is unsafe for a reader whose
+        // no-op magic differs — e.g. the v38 meter reader treats only 0 or 38 as no-op, so a stray 57 (sent
+        // in the window before we've decoded its softver, or by a plain default) looks like a real firmware
+        // offer; after 3 such acks it arms its OTA marker and resets into the bootloader to pull an image
+        // that isn't there, getting stuck in a cmd-33 loop (IR never reads -> no values). 0 avoids that for
+        // all generations. The OTA target still gets the real new version to trigger a genuine update.
+        uint8_t ver = (g_otaActive && !memcmp(r->handle, g_otaTarget, 3)) ? g_otaVersion : 0;
         if (cmd == 24 || cmd == 25) sendLegacyAck(r, cmd, ver, rssi);   // old v32 _c reader: cmd 56/57 TEA
         else                        sendEnergyAck(r, cmd, ver);          // 1.2.x _d reader: cmd 38/40 TEA
         // A keyless v3x reader (plaintext energy, never did ECDH) never gets the TEA ack above — both
@@ -709,6 +744,14 @@ static void handleRx() {
           Serial.printf("  energy [%s]: ", how); hexdump(p, plen); Serial.println();
           if (legacy) printEnergyOld(p, plen); else printEnergy(p, plen);
           r->decoded = true; r->decFails = 0; r->inBootloader = false;   // back to normal app operation
+          // OTA auto-finish: if THIS reader pulled our armed image (was in its bootloader for the OTA) and is
+          // now decoding energy again, it has flashed + rebooted into the new firmware -> the update is done.
+          // Disarm so the GUI/MQTT stop showing "OTA in progress" and we stop advertising the update version.
+          if (g_otaActive && g_otaPulled && !memcmp(r->handle, g_otaTarget, 3)) {
+            Serial.printf("  [ota] %02X%02X%02X back in app after pull — update complete, disarming\n",
+                          r->handle[0], r->handle[1], r->handle[2]);
+            gw_ota_cancel();
+          }
           // store telemetry for the dashboard / MQTT
           r->haveData = true; r->legacy = legacy; r->lastSeenMs = millis(); r->lastRssi = rssi;
           if (legacy) { r->softver = p[0]; r->hardver = p[1]; r->battery_mV = 20 * p[2]; r->flags = p[3];
@@ -760,6 +803,7 @@ static void doFactoryReset() {
   Serial.println("\n[btn] factory reset — wiping WiFi + MQTT + reader list + assignments");
   g_uuidStore.begin("obiuuid", false); g_uuidStore.clear(); g_uuidStore.end();      // stored reader UUIDs
   { Preferences p; p.begin("obiassign", false); p.clear(); p.end(); }                       // reader assignments
+  { Preferences p; p.begin("obiival", false); p.clear(); p.end(); }                         // persisted upload intervals
   web_factory_reset();                                                          // WiFi + MQTT settings
   for (int i = 0; i < 20; i++) { led_write(i & 1); delay(100); }                // ~2 s blink = confirmed
   Serial.println("[btn] done — rebooting into setup portal");
@@ -830,6 +874,16 @@ void setup() {
   radio.setDio2AsRfSwitch(true);
 #endif
   radio.setCRC(2);
+  // --- max out the SX1262 PA to match the stock firmware's range -------------------------------------
+  // OBI_TXPWR_DBM is already at the SX1262 ceiling (+22 dBm), but RadioLib's begin() clamps the PA
+  // over-current protection (OCP) to 60 mA. The SX1262 draws ~118 mA at +22 dBm, so a 60 mA limit trips
+  // the PA and the REAL output/range falls well short of +22 dBm — this is why range was worse than the
+  // stock firmware, which leaves OCP at the SX1262 140 mA reset default. Raise it to the datasheet max so
+  // the PA can actually reach full +22 dBm.
+  radio.setCurrentLimit(140.0);
+  // Range is bidirectional: also enable the SX126x RX boosted-gain LNA (~+2 dB sensitivity) so the gateway
+  // HEARS distant readers better. The gateway is mains-powered, so the extra RX current costs nothing.
+  radio.setRxBoostedGainMode(true);
   g_loraSem = xSemaphoreCreateBinary();
   radio.setDio1Action(onDio1);
 

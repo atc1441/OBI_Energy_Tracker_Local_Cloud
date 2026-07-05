@@ -1,0 +1,139 @@
+name: Build firmware
+
+# Builds every board variant of the gateway firmware.
+#  - on push to main      -> build all variants AND publish a GitHub release v1.0.<run_number>
+#                            with the .bin files attached (version is stamped into the firmware too)
+#  - on pull_request      -> build all variants, keep the .bin files as workflow artifacts (CI check only,
+#                            no release)
+#  - on a PUBLISHED RELEASE-> build all variants and attach the .bin files to that release; the firmware's
+#                            reported version is taken from the tag
+#
+# The firmware version is major.minor (BASE_VERSION in open_obi_energy_meter/version.py) + a patch number
+# derived from the existing git tags: the next release is (highest v<base>.<n> tag) + 1, or <base>.0 if no
+# such tag exists yet. So the very first release of a new major.minor starts at .0 and climbs monotonically
+# from there. Bump BASE_VERSION by hand to start a fresh major/minor line (e.g. 1.1 -> first tag v1.1.0).
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'open_obi_energy_meter/**'
+      - '.github/workflows/build.yml'
+  pull_request:
+    paths:
+      - 'open_obi_energy_meter/**'
+      - '.github/workflows/build.yml'
+  release:
+    types: [ published ]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed so the release job can create tags / upload assets
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need the full tag list to compute the next patch number
+
+      - name: Compute firmware version
+        id: v
+        run: |
+          base=$(grep -oP 'BASE_VERSION\s*=\s*"\K[^"]+' open_obi_energy_meter/version.py)
+          if [ "${{ github.event_name }}" = "release" ]; then
+            # a manually published release pins the firmware to its own tag
+            ver="${{ github.ref_name }}"; ver="${ver#v}"
+          else
+            # next patch = highest existing v<base>.<n> tag + 1, or 0 if none yet
+            latest=$(git tag -l "v${base}.*" | sed "s#^v${base}\.##" | grep -E '^[0-9]+$' | sort -n | tail -1)
+            if [ -z "$latest" ]; then patch=0; else patch=$((latest + 1)); fi
+            ver="${base}.${patch}"
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "tag=v$ver"    >> "$GITHUB_OUTPUT"
+          echo "Firmware version: $ver"
+
+  build:
+    name: Build ${{ matrix.variant }}
+    needs: version
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - obi_gateway_c3
+          - vision_master_e290
+          - ttgo_tbeam_sx1262
+          - generic_esp32s3
+          - generic_esp32
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('open_obi_energy_meter/platformio.ini') }}
+          restore-keys: pio-${{ runner.os }}-
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Pin firmware version
+        run: echo "FW_VERSION_OVERRIDE=${{ needs.version.outputs.version }}" >> "$GITHUB_ENV"
+
+      - name: Build ${{ matrix.variant }}
+        working-directory: open_obi_energy_meter
+        run: pio run -e ${{ matrix.variant }}
+
+      - name: Stage binary
+        working-directory: open_obi_energy_meter
+        run: |
+          mkdir -p dist
+          cp ".pio/build/${{ matrix.variant }}/firmware.bin" \
+             "dist/${{ matrix.variant }}-${{ needs.version.outputs.version }}.bin"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.variant }}
+          path: open_obi_energy_meter/dist/*.bin
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [ version, build ]
+    # Auto-release on every push to main; also attach to a manually published release.
+    # PRs and plain workflow_dispatch runs only produce artifacts (no release).
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all built binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish / update the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: Open OBI Energy Meter ESP32 Firmware ${{ needs.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          files: dist/*.bin
+          fail_on_unmatched_files: true
