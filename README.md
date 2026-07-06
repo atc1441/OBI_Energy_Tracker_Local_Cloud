@@ -195,12 +195,11 @@ firmware/                   Loader script + IDA notes (no vendor binaries — du
   which is what makes custom firmware via your own cloud possible. This could change.
 - ✅ **Energy data over MQTT is decoded** — JSON telemetry confirmed on a live device (meter readings on
   `EnergyTrackingSensor/.../state`; schema in [cloud-api.md](03-reverse-engineering/cloud-api.md#telemetry-payloads-decoded--confirmed-on-a-live-device)).
-- 🚧 **In progress:** **talking to the bridge over MQTT** — two downlink commands are reversed & verified:
+- ✅ **Talking to the bridge over MQTT is done** — the downlink/command path is fully reversed & verified:
   change the reader **upload interval** (`mqtts_server.py --set-interval N`) and **push firmware over OTA**
   (`mqtts_server.py --ota-firmware fw.bin` — unsigned self-update, so a real custom-firmware path; see
   [flash firmware](04-connect-your-own-cloud/README.md#flash-your-own-firmware) /
-  [OTA protocol](03-reverse-engineering/cloud-api.md#ota)). Remaining command payloads and pinning the
-  `energy` **unit** still open. Roadmap in [STATUS.md](STATUS.md).
+  [OTA protocol](03-reverse-engineering/cloud-api.md#ota)). Full coverage in [STATUS.md](STATUS.md).
 
 ## Security posture (factual summary)
 The BLE control channel uses **TEA** (single 16-byte key per device, and that key is also retrievable from

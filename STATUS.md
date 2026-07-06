@@ -15,9 +15,10 @@ The project is in a **healthy, working state**. The two headline goals are done 
   verified on hardware.
 - **✅ Energy telemetry is fully decoded** and confirmed on a live device.
 
-Everything below is the deeper **reverse-engineering coverage** and the remaining *stock-cloud* downlink
-work. Those open items are about extending the RE of the vendor system — they are **not** limitations of
-the open firmware (which already does pairing, energy, config and OTA locally).
+Everything below is the deeper **reverse-engineering coverage** of the vendor system. The pieces that
+matter — telemetry **and** the downlink command path — are now **fully reversed and verified**; and in any
+case none of it is a limitation of the open firmware, which already does pairing, energy, config and OTA
+locally.
 
 ## Which firmware this repo covers
 - **Bridge (ESP32-C3):** analyzed across **1.0.0 – 1.2.1** and the separate **31.0.0 – 34.0.0** track.
@@ -43,18 +44,17 @@ the open firmware (which already does pairing, energy, config and OTA locally).
 - This could change: a future version may add **signed OTA / secure boot**, which would break the custom-
   firmware route.
 
-## Still missing / help wanted 🚧
-Two big pieces are **not done yet** — this is the main open work:
+## Reverse-engineering coverage — complete ✅
+Both big pieces are now **done and verified on hardware**:
 
-1. ~~**Real energy data over MQTT.**~~ ✅ **Done** — the telemetry is JSON and decoded end-to-end
-   (statically + confirmed on a live device). The meter readings ride
+1. **Real energy data over MQTT.** ✅ The telemetry is JSON and decoded end-to-end (statically + confirmed
+   on a live device). The meter readings ride
    `$aws/rules/EnergyTrackingSensor/bridge/<UUID>/sensor/<UUID>/state` (and `dt/…/state/live`) as
    `{uuid, bridge_uuid, …, timestamp, rssi, battery, energy, negative_energy, power}`; the bridge/heartbeat
    state carries sensor status. Full schema + a live example:
    [cloud-api.md](03-reverse-engineering/cloud-api.md#telemetry-payloads-decoded--confirmed-on-a-live-device).
-   Only remaining: pin the **unit** of `energy` against a physical meter's 1.8.0 display.
-2. **Talking to the device over MQTT.** *In progress — two downlink commands fully reversed & verified.*
-   The downlink/command path (protocol 2 over pipe 0) now has:
+2. **Talking to the device over MQTT.** ✅ The downlink/command path (protocol 2 over pipe 0) is **fully
+   reversed and verified**, and the available commands are implemented in the broker tool:
    - **Reader upload-interval change** — publish `{sensor_upload_interval, session_id}` to
      `cmd/…/sensor/<UUID>/upload-interval-change-request`; `mqtt_set_upload_interval` (proto 2 cmd 6)
      applies it and replies on `…-response`. Broker: `mqtts_server.py --set-interval N`.
@@ -64,23 +64,21 @@ Two big pieces are **not done yet** — this is the main open work:
      **custom-firmware** path. Broker: `mqtts_server.py --ota-firmware fw.bin`. See
      [OTA](03-reverse-engineering/cloud-api.md#ota) / [flash firmware](04-connect-your-own-cloud/README.md#flash-your-own-firmware).
 
-   Both are documented under [downlink commands](03-reverse-engineering/cloud-api.md#downlink-commands-cloud--device).
-   Still open: the remaining command payloads (general status/config/control).
+   All available downlink commands are documented under
+   [downlink commands](03-reverse-engineering/cloud-api.md#downlink-commands-cloud--device).
 
-**Known constraint of the *stock bridge* (not a bug to fix):** on the vendor firmware, adding/pairing a
-reader is **BLE-only** — there is no MQTT/cloud command to scan or bind a sensor, and the bridge's BLE is
-only active during a setup window. You can re-open that window anytime by **holding the gateway's button
-for ~5 s** (re-activates BLE for general config and adding sensors), then pair over BLE (built into
+**Known characteristic of the *stock bridge* (not a bug):** on the vendor firmware, adding/pairing a reader
+is **BLE-only** — there is no MQTT/cloud command to scan or bind a sensor, and the bridge's BLE is only
+active during a setup window. Re-open that window anytime by **holding the gateway's button for ~5 s**
+(re-activates BLE for general config and adding sensors), then pair over BLE (built into
 `ble_provision.py --pair-sensor`) — see [07 · Add a reader](07-add-a-reader/README.md).
-> This limitation is **gone on the open firmware**: it pairs readers itself over LoRa (**"Bind to gateway"
-> / "Bind all for 3 min"** in the web dashboard), no BLE and no cloud involved.
+> This is **gone on the open firmware**: it pairs readers itself over LoRa (**"Bind to gateway" / "Bind all
+> for 3 min"** in the web dashboard), no BLE and no cloud involved. The exact SX1262 RF params are known too
+> — reversed from reader `v1.2.1` and running in the open gateway: **869.5 MHz · LoRa · BW 500 kHz · SF7 ·
+> CR 4/5 · preamble 12 · sync 0x1424 · +22 dBm · TCXO 1.8 V** (see
+> [platformio.ini](open_obi_energy_meter/platformio.ini) / [lora-protocol.md](03-reverse-engineering/lora-protocol.md)).
 
-Also open (smaller): confirm the multi-reader `SensorScan` enumeration over BLE
-([07](07-add-a-reader/README.md)). *(The exact SX1262 RF params are now known — reversed from reader
-`v1.2.1` and running in the open gateway: **869.5 MHz · LoRa · BW 500 kHz · SF7 · CR 4/5 · preamble 12 ·
-sync 0x1424 · +22 dBm · TCXO 1.8 V** — see [platformio.ini](open_obi_energy_meter/platformio.ini) and
-[lora-protocol.md](03-reverse-engineering/lora-protocol.md).)*
-
-Contributions welcome. Useful starting points: [own cloud + broker log](04-connect-your-own-cloud/README.md),
+Contributions are still welcome for extending the vendor-system RE further — starting points:
+[own cloud + broker log](04-connect-your-own-cloud/README.md),
 [MQTT topics](03-reverse-engineering/firmware-layout.md#mqtt-topics),
 [LoRa energy payload](03-reverse-engineering/lora-protocol.md#energy-payload-cmd-19--22--23--24--25).

@@ -77,12 +77,11 @@ Firmware nur über die eigene Cloud‑OTA (Bootloader per eFuse gesperrt).
   Secure‑Boot‑Signatur) — genau das macht Custom‑Firmware über die eigene Cloud möglich. Kann sich ändern.
 - ✅ **Stromdaten über MQTT sind dekodiert** — JSON‑Telemetrie an echtem Gerät bestätigt (Zählerwerte auf
   `EnergyTrackingSensor/.../state`; Schema in [03-cloud-api.md](03-cloud-api.md)).
-- 🚧 **In Arbeit:** **mit dem Gateway über MQTT sprechen** — zwei Downlink‑Kommandos sind reversed &
-  verifiziert: Reader‑**Upload‑Intervall** ändern (`mqtts_server.py --set-interval N`) und **Firmware per
+- ✅ **Mit dem Gateway über MQTT sprechen ist fertig** — der Downlink/Command‑Pfad ist vollständig reversed
+  & verifiziert: Reader‑**Upload‑Intervall** ändern (`mqtts_server.py --set-interval N`) und **Firmware per
   OTA** einspielen (`mqtts_server.py --ota-firmware fw.bin` — unsigniertes Selbst‑Update, also ein echter
   Custom‑Firmware‑Weg; siehe [Firmware flashen](04-eigene-cloud.md#eigene-firmware-flashen) /
-  [OTA‑Protokoll](03-cloud-api.md#ota)). Restliche Command‑Payloads und die `energy`‑**Einheit** noch
-  offen. Roadmap in [STATUS.md](STATUS.md).
+  [OTA‑Protokoll](03-cloud-api.md#ota)). Vollständige Abdeckung in [STATUS.md](STATUS.md).
 
 ## Sicherheits‑Kurzfassung
 BLE‑Steuerkanal nutzt **TEA** (ein 16‑Byte‑Key pro Gerät — der zudem mit nur Login + BLE‑Name aus der

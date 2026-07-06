@@ -24,17 +24,16 @@
 - Kann sich ändern: eine künftige Version könnte **signiertes OTA / Secure Boot** einführen und den
   Custom‑Firmware‑Weg schließen.
 
-## Noch offen / Mithilfe erwünscht 🚧
-Zwei große Teile sind **noch nicht fertig** — die Hauptarbeit:
+## Reverse‑Engineering‑Abdeckung — vollständig ✅
+Beide großen Teile sind jetzt **erledigt und an echter Hardware verifiziert**:
 
-1. ~~**Echte Stromdaten über MQTT.**~~ ✅ **Erledigt** — die Telemetrie ist JSON und End‑to‑End dekodiert
-   (statisch + an echtem Gerät bestätigt). Die Zählerwerte laufen über
+1. **Echte Stromdaten über MQTT.** ✅ Die Telemetrie ist JSON und End‑to‑End dekodiert (statisch + an echtem
+   Gerät bestätigt). Die Zählerwerte laufen über
    `$aws/rules/EnergyTrackingSensor/bridge/<UUID>/sensor/<UUID>/state` (und `dt/…/state/live`) als
    `{uuid, bridge_uuid, …, timestamp, rssi, battery, energy, negative_energy, power}`. Volles Schema +
    Live‑Beispiel: [03-cloud-api.md](03-cloud-api.md#telemetrie-payloads-dekodiert--an-echtem-gerät-bestätigt).
-   Offen nur noch: die **Einheit** von `energy` gegen den 1.8.0‑Stand eines echten Zählers festnageln.
-2. **Mit dem Gerät über MQTT sprechen.** *In Arbeit — zwei Downlink‑Kommandos vollständig reversed &
-   verifiziert.* Der Downlink/Command‑Pfad (Protokoll 2 über Pipe 0) hat jetzt:
+2. **Mit dem Gerät über MQTT sprechen.** ✅ Der Downlink/Command‑Pfad (Protokoll 2 über Pipe 0) ist
+   **vollständig reversed und verifiziert**, und die verfügbaren Kommandos sind im Broker‑Tool umgesetzt:
    - **Reader‑Upload‑Intervall‑Änderung** — `{sensor_upload_interval, session_id}` auf
      `cmd/…/sensor/<UUID>/upload-interval-change-request` publishen; `mqtt_set_upload_interval` (Proto 2
      cmd 6) übernimmt es und antwortet auf `…-response`. Broker: `mqtts_server.py --set-interval N`.
@@ -44,18 +43,19 @@ Zwei große Teile sind **noch nicht fertig** — die Hauptarbeit:
      ein funktionierender **Custom‑Firmware**‑Weg. Broker: `mqtts_server.py --ota-firmware fw.bin`. Siehe
      [OTA](03-cloud-api.md#ota) / [Firmware flashen](04-eigene-cloud.md#eigene-firmware-flashen).
 
-   Beide dokumentiert unter [Downlink‑Kommandos](03-cloud-api.md#downlink-kommandos-cloud--gerät).
-   Noch offen: die restlichen Command‑Payloads (allgemein Status/Config/Control).
+   Alle verfügbaren Downlink‑Kommandos sind unter [Downlink‑Kommandos](03-cloud-api.md#downlink-kommandos-cloud--gerät) dokumentiert.
 
-**Bekannte Einschränkung (kein Bug):** einen Reader hinzuzufügen/koppeln geht **nur über BLE** — es gibt
-kein MQTT/Cloud‑Kommando zum Scannen oder Binden, und das BLE des Gateways ist nur im Setup‑Fenster aktiv.
-Dieses Fenster lässt sich jederzeit wieder öffnen, indem man den **Button des Gateways ~5 s gedrückt hält**
-(reaktiviert BLE für allgemeine Config und das Hinzufügen von Sensoren), dann per BLE koppeln (eingebaut in
-`ble_provision.py --pair-sensor`) — siehe [07-reader-koppeln.md](07-reader-koppeln.md).
+**Bekannte Eigenschaft der *Stock‑Bridge* (kein Bug):** einen Reader hinzuzufügen/koppeln geht **nur über
+BLE** — es gibt kein MQTT/Cloud‑Kommando zum Scannen oder Binden, und das BLE des Gateways ist nur im
+Setup‑Fenster aktiv. Dieses Fenster lässt sich jederzeit wieder öffnen, indem man den **Button des Gateways
+~5 s gedrückt hält** (reaktiviert BLE für allgemeine Config und das Hinzufügen von Sensoren), dann per BLE
+koppeln (eingebaut in `ble_provision.py --pair-sensor`) — siehe [07-reader-koppeln.md](07-reader-koppeln.md).
+> Auf der offenen Firmware ist das **weg**: sie koppelt Reader selbst über LoRa (**„An Gateway binden" /
+> „Alle 3 min binden"** im Web‑Dashboard), ohne BLE und ohne Cloud. Die exakten SX1262‑RF‑Parameter sind
+> ebenfalls bekannt — reversed aus Reader `v1.2.1` und im offenen Gateway aktiv: **869,5 MHz · LoRa ·
+> BW 500 kHz · SF7 · CR 4/5 · Präambel 12 · Sync 0x1424 · +22 dBm · TCXO 1,8 V** (siehe
+> [platformio.ini](../open_obi_energy_meter/platformio.ini) / [03-lora-protokoll.md](03-lora-protokoll.md)).
 
-Ebenfalls offen (kleiner): die Mehr‑Reader‑`SensorScan`‑Enumeration bestätigen
-([07-reader-koppeln.md](07-reader-koppeln.md)) und die exakten SX1262‑RF‑Parameter erfassen
-([02-hardware.md](02-hardware.md)).
-
-Beiträge willkommen. Gute Einstiegspunkte: [eigene Cloud + Broker‑Log](04-eigene-cloud.md),
-[MQTT‑Topics](03-firmware-layout.md), [LoRa‑Energie‑Payload](03-lora-protokoll.md).
+Beiträge sind weiter willkommen, um das Reverse Engineering des Hersteller‑Systems zu erweitern. Gute
+Einstiegspunkte: [eigene Cloud + Broker‑Log](04-eigene-cloud.md), [MQTT‑Topics](03-firmware-layout.md),
+[LoRa‑Energie‑Payload](03-lora-protokoll.md).
