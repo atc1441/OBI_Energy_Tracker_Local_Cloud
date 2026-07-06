@@ -1601,18 +1601,20 @@ async function load(silent){
  let last=S.length?S[S.length-1]:null;
  let totImp=last?last[1]/1000:(days.length?days[days.length-1].imp/1000:0);
  let totExp=last?last[2]/1000:(days.length?days[days.length-1].exp/1000:0);
- // "today so far" from the samples of the current local day (works from day one, before a full-day delta exists)
+ // "today so far": PRIMARY source is the kWh-counter baseline — previous day's closing reading up to the
+ // latest reading. This matches the daily chart and, crucially, does NOT depend on how far back the sample
+ // ring buffer still reaches: that file is capped (~8 KB), so on a busy meter it only spans the last few
+ // hours, which made the old sample-delta "today" far too small (e.g. 0.3 kWh instead of 3 kWh). The samples
+ // are only a fallback for the very first day, before any previous daily row exists.
  const dayKey=ep=>{let d=D(ep);return d.getFullYear()+'-'+d.getMonth()+'-'+d.getDate();};
- let today=null;
- if(S.length){let tk=dayKey(h.now),td=S.filter(s=>dayKey(s[0])===tk);
-  if(td.length>=2)today=Math.max(0,(td[td.length-1][1]-td[0][1])/1000);}
- if(today==null&&cons.length&&dayKey(cons[cons.length-1].ep)===dayKey(h.now))today=cons[cons.length-1].imp;
- // feed-in today so far (same logic on the export counter)
  let anyExp=S.some(s=>s[2]>0)||days.some(d=>d.exp>0);
- let todayExp=null;
- if(S.length){let tk=dayKey(h.now),td=S.filter(s=>dayKey(s[0])===tk);
-  if(td.length>=2)todayExp=Math.max(0,(td[td.length-1][2]-td[0][2])/1000);}
- if(todayExp==null&&cons.length&&dayKey(cons[cons.length-1].ep)===dayKey(h.now))todayExp=cons[cons.length-1].exp;
+ let today=null,todayExp=null;
+ if(days.length>=2&&dayKey(days[days.length-1].ep)===dayKey(h.now)){
+  const base=days[days.length-2];                               // counter at the start of today (yesterday's close)
+  const curImp=last?last[1]:days[days.length-1].imp,curExp=last?last[2]:days[days.length-1].exp;
+  today=Math.max(0,(curImp-base.imp)/1000);todayExp=Math.max(0,(curExp-base.exp)/1000);}
+ if(today==null&&S.length){let tk=dayKey(h.now),td=S.filter(s=>dayKey(s[0])===tk);   // first-day fallback
+  if(td.length>=2){today=Math.max(0,(td[td.length-1][1]-td[0][1])/1000);todayExp=Math.max(0,(td[td.length-1][2]-td[0][2])/1000);}}
  let lastPow=last&&last[3]!=null?last[3]:null;
  html+='<div class=kpis>'+
   `<div class=kpi><div class=v>${nf(totImp,2)}</div><div class=l>${t('kImp')}</div></div>`+
@@ -1940,10 +1942,15 @@ static void publishGatewayDiscovery() {
     String p = "{\"name\":\"Free memory\",\"uniq_id\":\"" + uid + "_heap\",\"stat_t\":\"" + stt +
                "\",\"val_tpl\":\"{{ value_json.heap_free }}\",\"unit_of_meas\":\"B\",\"dev_cla\":\"data_size\",\"stat_cla\":\"measurement\",\"ent_cat\":\"diagnostic\"" + availa + "," + dev + "}";
     mqtt.publish(t.c_str(), p.c_str(), true); }
-  // reader count
+  // reader count — total heard (bound or greyed)
   { String t = "homeassistant/sensor/" + uid + "/readers/config";
-    String p = "{\"name\":\"Readers\",\"uniq_id\":\"" + uid + "_readers\",\"stat_t\":\"" + stt +
-               "\",\"val_tpl\":\"{{ value_json.readers }}\",\"stat_cla\":\"measurement\",\"icon\":\"mdi:counter\"" + availa + "," + dev + "}";
+    String p = "{\"name\":\"Readers (all)\",\"uniq_id\":\"" + uid + "_readers\",\"stat_t\":\"" + stt +
+               "\",\"val_tpl\":\"{{ value_json.readers_all }}\",\"stat_cla\":\"measurement\",\"icon\":\"mdi:counter\"" + availa + "," + dev + "}";
+    mqtt.publish(t.c_str(), p.c_str(), true); }
+  // reader count — only bound/assigned to this gateway
+  { String t = "homeassistant/sensor/" + uid + "/readers_bound/config";
+    String p = "{\"name\":\"Readers (bound)\",\"uniq_id\":\"" + uid + "_readers_bound\",\"stat_t\":\"" + stt +
+               "\",\"val_tpl\":\"{{ value_json.readers_bound }}\",\"stat_cla\":\"measurement\",\"icon\":\"mdi:link-variant\"" + availa + "," + dev + "}";
     mqtt.publish(t.c_str(), p.c_str(), true); }
   // uptime
   { String t = "homeassistant/sensor/" + uid + "/uptime/config";
@@ -2016,8 +2023,11 @@ static void mqttService() {
     mqtt.loop();
     if (now - lastPub > (uint32_t)g_pubEvery * 1000) {
       lastPub = now;
-      // gateway state (retained) — temp, uptime, heap, wifi rssi, reader count; keyed by MAC via the topic
-      { int rc = 0; for (int i = 0; i < MAX_READERS; i++) if (readers[i].used) rc++;
+      // gateway state (retained) — temp, uptime, heap, wifi rssi, reader counts; keyed by MAC via the topic.
+      // Two reader counts: readers_all = every reader we've heard (bound or greyed), readers_bound = only the
+      // ones actually assigned/bound to THIS gateway. `readers` is kept = readers_all for backward compat.
+      { int rcAll = 0, rcBound = 0;
+        for (int i = 0; i < MAX_READERS; i++) if (readers[i].used) { rcAll++; if (readers[i].assigned) rcBound++; }
         float t = gwTempC();
         String gp = "{\"mac\":\"" + String(gwMac()) + "\",\"gw\":\"" + String(gwId()) + "\""
                     ",\"temp_c\":" + (isnan(t) ? String("null") : String(t, 1)) +
@@ -2025,7 +2035,9 @@ static void mqttService() {
                     ",\"heap_free\":" + String(ESP.getFreeHeap()) +
                     ",\"wifi_rssi\":" + String(WiFi.RSSI()) +
                     ",\"ip\":\"" + WiFi.localIP().toString() + "\"" +
-                    ",\"readers\":" + String(rc) + "," + fwJson() + "}";
+                    ",\"readers\":" + String(rcAll) +
+                    ",\"readers_all\":" + String(rcAll) +
+                    ",\"readers_bound\":" + String(rcBound) + "," + fwJson() + "}";
         if (mqtt.publish(gwStateTopic().c_str(), gp.c_str(), true)) g_mqttPubCount++; }
       for (int i = 0; i < MAX_READERS; i++) {
         Reader &r = readers[i];

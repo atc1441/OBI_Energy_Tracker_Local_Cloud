@@ -8,3 +8,4 @@ version.txt
 include/fw_version.h
 # CI staging dir for release binaries (.github/workflows/build.yml)
 dist/
+PROJECT_NOTES.md
