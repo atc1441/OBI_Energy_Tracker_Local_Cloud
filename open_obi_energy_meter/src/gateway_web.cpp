@@ -834,7 +834,27 @@ static bool githubLatest(String &tag, String &url, int *codeOut = nullptr) {
   int code = http.GET();
   if (codeOut) *codeOut = code;
   if (code != 200) { Serial.printf("[gh] latest -> HTTP %d\n", code); http.end(); return false; }
-  String body = http.getString();
+  // Read the body straight off the (TLS) stream ourselves. http.getString() intermittently returns an
+  // empty String here with WiFiClientSecure even though Content-Length is set — read until we have the
+  // whole body (or the stream idles), which is reliable.
+  int clen = http.getSize();
+  WiFiClient *st = http.getStreamPtr();
+  String body; if (clen > 0 && clen < 40000) body.reserve(clen + 1);
+  uint8_t tmp[512];
+  uint32_t last = millis();
+  while (st && (millis() - last) < 8000) {
+    int n = st->available();
+    if (n > 0) {
+      n = st->readBytes(tmp, (size_t)(n > (int)sizeof(tmp) ? (int)sizeof(tmp) : n));
+      if (n > 0) { body.concat((const char *)tmp, (unsigned)n); last = millis(); }
+    } else if (clen > 0 && (int)body.length() >= clen) {
+      break;                                   // got the whole body
+    } else if (!http.connected()) {
+      break;                                   // server closed and nothing more buffered
+    } else {
+      delay(3);
+    }
+  }
   http.end();
   tag = jsonField(body, "tag_name");
   url = findAssetUrl(body, FW_BUILD_TARGET);
@@ -858,6 +878,10 @@ static volatile uint32_t g_ghDone = 0, g_ghTotal = 0;
 
 static void ghOtaTask(void *) {
   g_ghDone = 0; g_ghTotal = 0;
+  // Single-core C3: free the CPU + heap by dropping the MQTTS/MQTT link for the duration of the download
+  // (mqttService() also skips while g_ghState==1, so it won't reconnect mid-flash). On success we reboot;
+  // on failure MQTT reconnects on its own.
+  mqtt.disconnect();
   bool ok = false;
   String tag, url;
   if (githubLatest(tag, url) && url.length()) {
@@ -875,17 +899,26 @@ static void ghOtaTask(void *) {
         uint8_t buf[1024];
         size_t written = 0; uint32_t lastData = millis();
         while (written < (size_t)len) {
-          size_t avail = st->available();
-          if (avail) {
-            int n = st->readBytes(buf, avail > sizeof(buf) ? sizeof(buf) : avail);
-            if (n <= 0 || Update.write(buf, n) != (size_t)n) break;
+          // Read straight off the TLS stream. Do NOT gate on available() — for WiFiClientSecure it can
+          // stay 0 forever (its 0-byte ssl_read doesn't always pump a record), which is the 0%-stall.
+          int n = st->read(buf, sizeof buf);
+          if (n > 0) {
+            if (Update.write(buf, n) != (size_t)n) break;
             written += n; g_ghDone = written; lastData = millis();
-          } else if (!st->connected()) break;
-          else if (millis() - lastData > 20000) break;   // stall
-          else delay(3);                                  // yield so the web task can serve /progress polls
+          } else if (!st->connected() && st->available() == 0) {
+            break;                                         // server closed, nothing left
+          } else if (millis() - lastData > 20000) {
+            break;                                         // stall
+          } else {
+            delay(2);                                      // yield; wait for the next TLS record
+          }
         }
-        ok = (written == (size_t)len) && Update.end(true);
-        if (!ok) Update.printError(Serial);
+        if (written == (size_t)len && Update.end(true)) {
+          ok = true;
+        } else {
+          Update.printError(Serial);
+          Update.abort();     // release the OTA slot so a stalled/partial download can't block the next OTA/self-update
+        }
         Serial.printf("[ghota] wrote %u/%d ok=%d\n", (unsigned)written, len, ok);
       } else Serial.println("[ghota] no image / Update.begin failed");
     }
@@ -1088,7 +1121,8 @@ async function ghCheck(){const box=$('ghbox');box.className='msg';box.textConten
   if(!r.ok){box.textContent=t('Keine Release-Info von GitHub (evtl. noch kein Release veröffentlicht).','No release info from GitHub (maybe no release published yet).');return;}
   if(r.newer&&r.asset){box.className='upd';box.innerHTML=`<b>⬆ ${t('Update verfügbar','Update available')}: ${r.version}</b><br><span class=msg>${t('Aktuell','current')}: ${r.current}</span><button onclick=ghUpdate()>${t('Jetzt aktualisieren','Update now')}</button>`;}
   else if(r.newer&&!r.asset){box.textContent=`${t('Release','Release')} ${r.version} ${t('gefunden, aber kein Build für dieses Board im Release.','found, but no build for this board in the release.')}`;}
-  else{box.className='msg okrow';box.innerHTML=`✓ ${t('Aktuell','Up to date')} (${r.current}) — ${t('neuestes Release','latest release')}: ${r.version}`;}
+  else{box.className='msg okrow';box.innerHTML=`✓ ${t('Aktuell','Up to date')} (${r.current}) — ${t('neuestes Release','latest release')}: ${r.version}`
+    +(r.asset?`<br><button class=g style="margin-top:10px" onclick=ghUpdate()>${t('Neu installieren','Reinstall')}: ${r.version}</button>`:'');}
  }catch(e){box.textContent=t('GitHub-Prüfung fehlgeschlagen','GitHub check failed');}}
 async function ghUpdate(){if(!confirm(t('Firmware von GitHub laden und flashen? Das Gerät startet danach neu.','Download & flash firmware from GitHub? The device reboots afterwards.')))return;
  const box=$('ghbox');box.className='msg';
@@ -2222,6 +2256,7 @@ static void handleRediscover() {
 }
 
 static void mqttService() {
+  if (g_ghState == 1) return;          // a GitHub OTA download is running — don't fight it for CPU/heap/TLS
   static uint32_t lastTry = 0, lastPub = 0;
   uint32_t now = millis();
   g_mqttState = mqtt.state();
