@@ -169,18 +169,18 @@ static void hexdump(const uint8_t *p, size_t n) {
 
 // ---- live radio log ring buffer (served by the /radio web page) ------------
 static const int RAW_MAX = 255;   // store the whole packet (LoRa RX buffer is 256 B) so nothing is truncated
-struct Rlog { uint32_t seq, ms; char dir; uint8_t h[3]; int16_t cmd, len, rssi; char note[20];
+struct Rlog { uint32_t seq, ms; char dir; uint8_t h[3]; int16_t cmd, len, rssi, snr; char note[20];
               uint8_t rawLen; uint8_t raw[RAW_MAX]; };
 static const int RLOG_N = 96;     // ~96 * ~280 B ≈ 27 KB RAM; client keeps its own 800-row history anyway
 static Rlog g_rl[RLOG_N];
 static volatile uint32_t g_rlSeq = 0;
 static int g_rlHead = 0;
-void gw_radio_log(char dir, const uint8_t h[3], int cmd, int len, int rssi, const char *note,
+void gw_radio_log(char dir, const uint8_t h[3], int cmd, int len, int rssi, int snr, const char *note,
                   const uint8_t *raw, int rawLen) {
   Rlog &e = g_rl[g_rlHead];
   e.seq = ++g_rlSeq; e.ms = millis(); e.dir = dir;
   if (h) memcpy(e.h, h, 3); else { e.h[0] = e.h[1] = e.h[2] = 0; }
-  e.cmd = (int16_t)cmd; e.len = (int16_t)len; e.rssi = (int16_t)rssi;
+  e.cmd = (int16_t)cmd; e.len = (int16_t)len; e.rssi = (int16_t)rssi; e.snr = (int16_t)snr;
   strncpy(e.note, note ? note : "", sizeof e.note - 1); e.note[sizeof e.note - 1] = 0;
   int n = rawLen < 0 ? 0 : (rawLen > RAW_MAX ? RAW_MAX : rawLen);
   e.rawLen = (uint8_t)n;
@@ -198,7 +198,7 @@ String gw_radio_json(uint32_t since) {
     first = false;
     j += "{\"s\":" + String(e.seq) + ",\"t\":" + String(e.ms) + ",\"d\":\"" + String(e.dir) +
          "\",\"h\":\"" + String(hs) + "\",\"c\":" + String(e.cmd) + ",\"l\":" + String(e.len) +
-         ",\"r\":" + String(e.rssi) + ",\"n\":\"" + String(e.note) + "\",\"b\":\"";
+         ",\"r\":" + String(e.rssi) + ",\"sn\":" + String(e.snr) + ",\"n\":\"" + String(e.note) + "\",\"b\":\"";
     char bb[3];
     for (int k = 0; k < e.rawLen; k++) { snprintf(bb, sizeof bb, "%02X", e.raw[k]); j += bb; }
     j += "\"}";
@@ -211,7 +211,7 @@ static void txFrame(const uint8_t *buf, size_t len, const char *what) {
   int st = radio.transmit((uint8_t *)buf, len);
   radio.startReceive();
   g_rx = false;                 // discard the TxDone that also pulses DIO1
-  gw_radio_log('T', buf, -1, (int)len, 0, what, buf, (int)len);   // buf[0..2] = target handle (plaintext)
+  gw_radio_log('T', buf, -1, (int)len, 0, 0, what, buf, (int)len);   // buf[0..2] = target handle (plaintext); no SNR on TX
   Serial.printf("  TX %-6s len=%d -> %d\n", what, (int)len, st);   // note carries offset+latency for OTA blocks
 }
 
@@ -603,6 +603,7 @@ static void handleRx() {
 
   led_blip();                        // brief LED flash on any received LoRa frame (activity indicator)
   float rssi = radio.getRSSI();
+  float snr  = radio.getSNR();       // SX1262 packet SNR (dB) — link margin, more telling than RSSI near the limit
   uint8_t handle[3] = { buf[0], buf[1], buf[2] };
 
   if (isIgnoredHandle(handle)) return;   // phantom id FFFFFD — drop entirely: no radio log, no reader, no reply
@@ -613,11 +614,11 @@ static void handleRx() {
   obi_xor(d, len, handle, 3);
   uint8_t cmd = d[3] & 0x3F;
 
-  gw_radio_log('R', handle, cmd, len, (int)rssi, "", d, len);   // live radio view (/radio) — d = XOR-decoded frame
+  gw_radio_log('R', handle, cmd, len, (int)rssi, (int)snr, "", d, len);   // live radio view (/radio) — d = XOR-decoded frame
   // Always mark a known reader "seen" on ANY frame it sends (even ones we can't decode / don't ack),
   // so the UI keeps it fresh whether or not it's assigned/keyed.
   { Reader *seen = findReader(handle);
-    if (seen) { seen->lastSeenMs = millis(); seen->lastRssi = rssi; } }
+    if (seen) { seen->lastSeenMs = millis(); seen->lastRssi = rssi; seen->lastSnr = snr; } }
 
   Serial.printf("\nRX %02X%02X%02X cmd=%u len=%d rssi=%.0f\n", handle[0], handle[1], handle[2], cmd, len, rssi);
 
@@ -632,26 +633,26 @@ static void handleRx() {
     // matching reply EVERY time (even when already keyed) or it stalls in the announce phase.
     // Reply per-command; do NOT touch an existing key here (a reset shows up as failed decrypts).
     case OBI_CMD_READER_ANNOUNCE: {                         // 17 legacy announce -> cmd 49
-      Reader *r = addReader(handle); if (!r) break; r->lastRssi = rssi;
+      Reader *r = addReader(handle); if (!r) break; r->lastRssi = rssi; r->lastSnr = snr;
       storeAnnounce(r, cmd, d + 4, len - 4);                 // legacy announce carries the UUID too
       Serial.printf("  %02X%02X%02X announce(17)%s\n", handle[0], handle[1], handle[2],
                     acceptReader(r) ? " -> cmd49" : " (unassigned — greyed, not bound)");
       if (r->assigned) sendActivateOld(r); break;
     }
     case 18: {                                              // legacy reconnect -> cmd 50
-      Reader *r = addReader(handle); if (!r) break; r->lastRssi = rssi;
+      Reader *r = addReader(handle); if (!r) break; r->lastRssi = rssi; r->lastSnr = snr;
       Serial.printf("  %02X%02X%02X reconnect(18)\n", handle[0], handle[1], handle[2]);
       if (acceptReader(r)) sendReconnectAck(r, rssi); break;
     }
     case 35: {                                              // 1.2.x DevicesScan announce -> cmd 36 + bind
-      Reader *r = addReader(handle); if (!r) break; r->lastRssi = rssi;
+      Reader *r = addReader(handle); if (!r) break; r->lastRssi = rssi; r->lastSnr = snr;
       storeAnnounce(r, cmd, d + 4, len - 4);                 // grab the 16-byte UUID + type + version
       Serial.printf("  %02X%02X%02X announce(35)%s\n", handle[0], handle[1], handle[2],
                     acceptReader(r) ? " -> cmd36+bind" : " (unassigned — greyed, not bound)");
       if (r->assigned) { sendScanAck(r); sendBind(r); } break;
     }
     case 58: {                                              // 1.2.x reconnect -> bind
-      Reader *r = addReader(handle); if (!r) break; r->lastRssi = rssi;
+      Reader *r = addReader(handle); if (!r) break; r->lastRssi = rssi; r->lastSnr = snr;
       Serial.printf("  %02X%02X%02X reconnect(58)\n", handle[0], handle[1], handle[2]);
       if (acceptReader(r)) sendBind(r); break;
     }
@@ -673,14 +674,14 @@ static void handleRx() {
     }
     case 33: {                                             // reader bootloader OTA pull (metadata/block)
       Reader *r = addReader(handle);                         // show a stuck-in-bootloader reader in the UI
-      if (r) { r->lastRssi = rssi; r->lastSeenMs = millis(); r->inBootloader = true; }
+      if (r) { r->lastRssi = rssi; r->lastSnr = snr; r->lastSeenMs = millis(); r->inBootloader = true; }
       if (g_otaActive && !memcmp(handle, g_otaTarget, 3)) { g_otaPulled = true; serveOtaRequest(handle, d + 4, len - 4); }
       else Serial.printf("  cmd33 (OTA pull) but no armed image for %02X%02X%02X\n", handle[0], handle[1], handle[2]);
       break;
     }
     case 20: case 21: {                                    // LEGACY bootloader OTA pull (cmd 20/21)
       Reader *r = addReader(handle);
-      if (r) { r->lastRssi = rssi; r->lastSeenMs = millis(); r->inBootloader = true; }
+      if (r) { r->lastRssi = rssi; r->lastSnr = snr; r->lastSeenMs = millis(); r->inBootloader = true; }
       if (g_otaActive && !memcmp(handle, g_otaTarget, 3)) { g_otaPulled = true; serveOtaLegacy(handle, cmd, d + 4, len - 4); }
       else Serial.printf("  cmd%u (OTA pull) but no armed image for %02X%02X%02X\n", cmd, handle[0], handle[1], handle[2]);
       break;
@@ -753,7 +754,7 @@ static void handleRx() {
             gw_ota_cancel();
           }
           // store telemetry for the dashboard / MQTT
-          r->haveData = true; r->legacy = legacy; r->lastSeenMs = millis(); r->lastRssi = rssi;
+          r->haveData = true; r->legacy = legacy; r->lastSeenMs = millis(); r->lastRssi = rssi; r->lastSnr = snr;
           if (legacy) { r->softver = p[0]; r->hardver = p[1]; r->battery_mV = 20 * p[2]; r->flags = p[3];
                         r->import_ = rd_be32(p + 4); r->export_ = rd_be32(p + 8); r->power = rd_be32(p + 12); }
           else        { r->softver = p[2]; r->hardver = p[3]; r->battery_mV = 20 * p[4]; r->flags = p[5];

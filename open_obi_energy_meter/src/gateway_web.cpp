@@ -145,6 +145,7 @@ static String readersJson() {
     j += ",\"softver\":" + String(r.softver) + ",\"hardver\":" + String(r.hardver);
     j += ",\"battery_mV\":" + String(r.battery_mV);
     j += ",\"rssi\":" + String((int)r.lastRssi);
+    j += ",\"snr\":" + String(r.lastSnr, 1);
     j += ",\"infrared\":" + String((r.flags & 1) ? "true" : "false");
     j += ",\"import\":" + jnum(r.import_) + ",\"export\":" + jnum(r.export_) + ",\"power\":" + jnum(r.power);
     j += ",\"has_data\":" + String(r.haveData ? "true" : "false");
@@ -428,7 +429,7 @@ function card(r){
   <div class="hd"><span class="id">${r.id.toUpperCase()}</span>
    <span class="tag ${r.type}">${r.type}</span>
    ${r.assigned?'':`<span class="tag pend">${L.pending}</span>`}
-   <span class="meta">FW ${r.softver} · HW ${r.hardver}${r.legacy?' · legacy':''} · ${r.rssi} dBm${r.paired?' · 🔒':''}</span>
+   <span class="meta">FW ${r.softver} · HW ${r.hardver}${r.legacy?' · legacy':''} · ${r.rssi} dBm · ${r.snr} dB${r.paired?' · 🔒':''}</span>
    <button class="del" onclick="delReader('${r.id}')" title="${L.del}">✕</button></div>
   <div class="uuid">${r.uuid?('<b>UUID</b> '+r.uuid):L.uuidwait}</div>
   ${r.bootloader?`<div class="boot">⚙ ${L.boot}</div>`:''}
@@ -1033,7 +1034,7 @@ td.bytes{white-space:normal;word-break:break-all;color:var(--dim);font-size:11px
 <header><b>📡 Radio live</b><span class=dim id=stat></span><span class=sp></span>
 <input class=filt id=filt placeholder="filter id/cmd"><button id=pause onclick=togglePause()>⏸ Pause</button>
 <button onclick="rows=[];render()">Clear</button><a href="/">← dashboard</a></header>
-<div class=wrap><table><thead><tr><th>t (ms)</th><th>dir</th><th>id</th><th>cmd</th><th>len</th><th>rssi</th><th>note</th><th>bytes</th></tr></thead>
+<div class=wrap><table><thead><tr><th>t (ms)</th><th>dir</th><th>id</th><th>cmd</th><th>len</th><th>rssi</th><th>snr</th><th>note</th><th>bytes</th></tr></thead>
 <tbody id=tb></tbody></table></div>
 <script>
 const CN={15:'beacon',17:'announce',18:'reconnect',19:'energy',22:'energy',23:'energy',24:'energy',25:'energy',
@@ -1044,7 +1045,7 @@ function cname(e){return e.d==='T'?(e.n||'tx'):(CN[e.c]||('cmd'+e.c));}
 const fmtB=b=>b?b.replace(/(..)/g,'$1 ').trim():'';   // "AABBCC" -> "AA BB CC"
 function render(){let f=$('filt').value.trim().toLowerCase();
  let html=rows.slice(-400).filter(e=>!f||(e.h.toLowerCase().includes(f)||cname(e).toLowerCase().includes(f)||(''+e.c)===f||(e.b||'').toLowerCase().includes(f))).reverse()
-  .map(e=>`<tr class=${e.d}><td class=dim>${e.t}</td><td class=d>${e.d==='T'?'» TX':'« RX'}</td><td class=hl>${e.h}</td><td class=d>${cname(e)}${e.d==='R'?' <span class=dim>('+e.c+')</span>':''}</td><td>${e.l}</td><td>${e.d==='R'?e.r:''}</td><td class=dim>${e.n||''}</td><td class=bytes>${fmtB(e.b)}</td></tr>`).join('');
+  .map(e=>`<tr class=${e.d}><td class=dim>${e.t}</td><td class=d>${e.d==='T'?'» TX':'« RX'}</td><td class=hl>${e.h}</td><td class=d>${cname(e)}${e.d==='R'?' <span class=dim>('+e.c+')</span>':''}</td><td>${e.l}</td><td>${e.d==='R'?e.r:''}</td><td>${e.d==='R'?e.sn:''}</td><td class=dim>${e.n||''}</td><td class=bytes>${fmtB(e.b)}</td></tr>`).join('');
  $('tb').innerHTML=html;}
 async function poll(){if(paused)return;
  try{let r=await(await fetch('/api/radio?since='+since)).json();
@@ -1856,6 +1857,8 @@ static void publishDiscovery(const Reader &r) {
        "{{ (value_json['battery_mV']|float(0))/1000 }}", true},
     {"rssi",     "RSSI",      "signal_strength", "dBm", "measurement",
        "{{ value_json['rssi'] }}", true},
+    {"snr",      "SNR",       nullptr,           "dB",  "measurement",   // no signal_strength dc: that forces dBm; SNR is dB
+       "{{ value_json['snr'] }}", true},
     {"lastseen", "Last seen", "duration",        "s",   "measurement",
        "{{ value_json['age_s'] }}", true},
     {"uuid",     "UUID",      nullptr,           nullptr, nullptr,
@@ -1967,7 +1970,7 @@ static void publishGatewayDiscovery() {
 // Remove a reader's discovery entities from HA by publishing empty retained configs.
 // Mirrors the topics created by publishDiscovery() — keep the two lists in sync.
 static void clearDiscovery(const String &uid) {
-  static const char *sensors[]  = {"import","export","power","battery","rssi","lastseen","uuid","type","firmware","hardware"};
+  static const char *sensors[]  = {"import","export","power","battery","rssi","snr","lastseen","uuid","type","firmware","hardware"};
   static const char *binaries[] = {"infrared","paired","legacy","bootloader"};
   for (const char *k : sensors)  { String t = "homeassistant/sensor/"        + uid + "/" + k + "/config"; mqtt.publish(t.c_str(), "", true); }
   for (const char *k : binaries) { String t = "homeassistant/binary_sensor/" + uid + "/" + k + "/config"; mqtt.publish(t.c_str(), "", true); }
@@ -2047,7 +2050,7 @@ static void mqttService() {
         String p = "{\"id\":\"" + hex(r.handle, 3) + "\",\"uuid\":" +
                    (r.haveUuid ? "\"" + uuidStr(r.uuid) + "\"" : "null") +
                    ",\"type\":\"" + typeName(r.devType) + "\",\"battery_mV\":" + r.battery_mV +
-                   ",\"rssi\":" + (int)r.lastRssi + ",\"infrared\":" + ((r.flags & 1) ? "true" : "false") +
+                   ",\"rssi\":" + (int)r.lastRssi + ",\"snr\":" + String(r.lastSnr, 1) + ",\"infrared\":" + ((r.flags & 1) ? "true" : "false") +
                    ",\"import\":" + jnum(r.import_) + ",\"export\":" + jnum(r.export_) +
                    ",\"power\":" + jnum(r.power) +
                    ",\"softver\":" + String(r.softver) + ",\"hardver\":" + String(r.hardver) +

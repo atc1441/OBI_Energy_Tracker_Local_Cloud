@@ -14,6 +14,7 @@ struct Reader {
   uint8_t  decFails = 0;
   uint32_t lastBind = 0;
   float    lastRssi = -70;
+  float    lastSnr  = 0;         // SX1262 packet SNR (dB) of the last frame from this reader
   uint8_t  key[16];
   // identity (from the announce: cmd 17/35)
   bool     haveUuid = false;
@@ -49,7 +50,7 @@ void gw_pair_all(uint16_t seconds);                                   // open a 
 uint32_t gw_pair_remaining_s();                                       // seconds left in the auto-pair window (0 = off)
 
 // live radio log (ring buffer) for the /radio web page
-void   gw_radio_log(char dir, const uint8_t h[3], int cmd, int len, int rssi, const char *note,
+void   gw_radio_log(char dir, const uint8_t h[3], int cmd, int len, int rssi, int snr, const char *note,
                     const uint8_t *raw, int rawLen);                  // dir 'R'/'T'; raw = full packet bytes
 String gw_radio_json(uint32_t since);                                 // {seq, e:[...]} — entries newer than `since`
 
