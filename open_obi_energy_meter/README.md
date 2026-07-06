@@ -7,6 +7,11 @@ serves a **web dashboard + MQTT**, lets you **set each reader's upload interval*
 firmware over the air** — including rescuing a reader that is stuck in its bootloader. No vendor bridge, no
 vendor cloud.
 
+> ✅ **You don't need any new hardware — it also runs on the *original* OBI/heyOBI ESP32-C3 gateway.**
+> Flash the stock unit you already own (env `obi_gateway_c3`) and your **entire** setup — readers, gateway
+> and Home Assistant — becomes **100 % local, with no cloud ever again.** See
+> [**Run it on the original OBI gateway**](#stock-c3) below.
+
 **🌐 Language:** **English** (below) · **[Deutsch ↓](#deutsch)**
 
 > ⚠️ **Use on your own devices only.** Region-regulated RF — operate within your local 868 MHz ISM rules
@@ -76,16 +81,46 @@ pio run -e vision_master_e290 -t upload      # Heltec Vision Master E290 (ESP32-
 pio run -e ttgo_tbeam_sx1262  -t upload      # LILYGO T-Beam / T3
 pio run -e generic_esp32s3    -t upload      # your own wiring (edit board_config.h → OBI_BOARD_CUSTOM)
 pio run -e generic_esp32      -t upload      # classic ESP32 + your own wiring
+pio run -e obi_gateway_c3                    # ★ the ORIGINAL OBI/heyOBI C3 gateway — flashed differently, see below
 
 # 3. Watch the serial log
 pio device monitor -b 115200
 ```
+
+> ★ The stock `obi_gateway_c3` build has **no `-t upload`** — the original gateway's bootloader is locked,
+> so it's flashed over the network instead. See [**Run it on the original OBI gateway**](#stock-c3).
 
 **First boot:** the device opens a WiFi setup portal named **`OpenOBI-<MAC>`** (e.g. `OpenOBI-3AF4C2`, the
 last 3 bytes of the device MAC so two gateways never clash) at `192.168.4.1`. Join it,
 enter your WiFi (and optionally MQTT), save. The dashboard is then at the IP printed on the serial log
 (`http://<device-ip>/`). LoRa runs immediately — turn the vendor bridge **off** and the readers will
 re-pair to this gateway on their own within a minute.
+
+## Run it on the *original* OBI gateway (locked C3) → fully local <a id="stock-c3"></a>
+
+**No extra hardware needed:** this firmware also runs on the **stock OBI/heyOBI ESP32-C3 gateway** you
+already bought. Convert it once and the whole chain — readers → gateway → Home Assistant — is **100 %
+local, no cloud, ever.**
+
+The stock C3 has a **locked bootloader** (ROM download mode fused off → **no UART/JTAG flashing**), so the
+open image is delivered **one time** over the device's **own cloud-OTA path — pointed at *your* server, not
+the vendor's.** OTA on the stock firmware is unsigned (integrity CRC only), which is exactly what makes this
+self-update possible. The full step-by-step (back up the stock image → bring the device onto your own cloud
+→ build → push the image) is in the top-level README:
+
+- 🇬🇧 / 🇩🇪 **[Stock gateway → custom firmware, step by step](../README.md#stock-to-custom)**
+
+Build the C3 image:
+
+```bash
+pio run -e obi_gateway_c3     # -> .pio/build/obi_gateway_c3/firmware.bin  (no -t upload: the C3 can't take UART)
+```
+
+**After that first cloud-OTA it is 100 % local — it never needs a cloud again.** The firmware carries its
+own web updater, so every later update just goes through **Settings → Firmware** (upload a `.bin` or pull a
+GitHub release), or a `POST /api/selfupdate` with the new `firmware.bin`. A wrong image is rejected and the
+running firmware kept (brick-safe dual-OTA). The build → flash → verify loop and endpoint details live in
+[`PROJECT_NOTES.md`](PROJECT_NOTES.md).
 
 ## Web dashboard
 
@@ -236,6 +271,11 @@ Energie-Dekodierung), bietet ein **Web-Dashboard + MQTT**, lässt das **Upload-I
 und kann **Reader-Firmware über die Luft flashen** — inklusive Rettung eines Readers, der in seinem Bootloader
 festhängt. Keine Hersteller-Bridge, keine Hersteller-Cloud.
 
+> ✅ **Du brauchst keine neue Hardware — sie läuft auch auf dem *originalen* OBI/heyOBI-ESP32-C3-Gateway.**
+> Flashe das Stock-Gerät, das du ohnehin besitzt (Env `obi_gateway_c3`), und dein **gesamtes** Setup —
+> Reader, Gateway und Home Assistant — wird **zu 100 % lokal, ganz ohne Cloud.** Siehe
+> [**Auf dem originalen OBI-Gateway betreiben**](#stock-c3-de) unten.
+
 **🌐 Sprache:** [English ↑](#english) · **Deutsch** (unten)
 
 > ⚠️ **Nur an eigenen Geräten verwenden.** Regulierte Funkfrequenzen — halte die lokalen 868-MHz-ISM-Regeln
@@ -305,10 +345,14 @@ pio run -e vision_master_e290 -t upload      # Heltec Vision Master E290 (ESP32-
 pio run -e ttgo_tbeam_sx1262  -t upload      # LILYGO T-Beam / T3
 pio run -e generic_esp32s3    -t upload      # eigene Verdrahtung (board_config.h → OBI_BOARD_CUSTOM)
 pio run -e generic_esp32      -t upload      # klassischer ESP32 + eigene Verdrahtung
+pio run -e obi_gateway_c3                    # ★ das ORIGINALE OBI/heyOBI-C3-Gateway — anders geflasht, siehe unten
 
 # 3. Serielles Log ansehen
 pio device monitor -b 115200
 ```
+
+> ★ Der Stock-Build `obi_gateway_c3` hat **kein `-t upload`** — der Bootloader des Originals ist gesperrt,
+> deshalb wird es übers Netzwerk geflasht. Siehe [**Auf dem originalen OBI-Gateway betreiben**](#stock-c3-de).
 
 **Erster Start:** das Gerät öffnet ein WLAN-Einrichtungsportal namens **`OpenOBI-<MAC>`** (z. B.
 `OpenOBI-3AF4C2`, die letzten 3 Bytes der Geräte-MAC, damit sich zwei Gateways nie in die Quere kommen)
@@ -316,6 +360,33 @@ unter `192.168.4.1`. Verbinde dich damit, gib dein WLAN (und optional MQTT) ein,
 dann unter der im seriellen Log ausgegebenen IP erreichbar (`http://‹geräte-ip›/`). LoRa läuft sofort —
 schalte die Hersteller-Bridge **aus**, und die Reader koppeln sich innerhalb einer Minute von selbst an
 dieses Gateway.
+
+## Auf dem *originalen* OBI-Gateway betreiben (gesperrter C3) → komplett lokal <a id="stock-c3-de"></a>
+
+**Keine zusätzliche Hardware nötig:** diese Firmware läuft auch auf dem **originalen OBI/heyOBI-ESP32-C3-
+Gateway**, das du bereits gekauft hast. Einmal umgeflasht ist die ganze Kette — Reader → Gateway → Home
+Assistant — **zu 100 % lokal, ohne Cloud.**
+
+Der Stock-C3 hat einen **gesperrten Bootloader** (ROM-Download-Modus per eFuse deaktiviert → **kein Flashen
+über UART/JTAG**). Die offene Firmware wird deshalb **einmalig** über den **geräteeigenen Cloud-OTA-Weg
+aufgespielt — gerichtet auf *deinen* Server, nicht den des Herstellers.** Das OTA der Stock-Firmware ist
+unsigniert (nur Integritäts-CRC), was dieses Self-Update überhaupt erst möglich macht. Die vollständige
+Schritt-für-Schritt-Anleitung (Stock-Image sichern → Gerät auf eigene Cloud → bauen → Image pushen) steht im
+Haupt-README:
+
+- 🇩🇪 / 🇬🇧 **[Stock-Gateway → eigene Firmware, Schritt für Schritt](../README.md#stock-to-custom)**
+
+C3-Image bauen:
+
+```bash
+pio run -e obi_gateway_c3     # -> .pio/build/obi_gateway_c3/firmware.bin  (kein -t upload: der C3 nimmt kein UART)
+```
+
+**Nach diesem ersten Cloud-OTA ist es zu 100 % lokal — nie wieder eine Cloud nötig.** Die Firmware bringt
+einen eigenen Web-Updater mit, jedes spätere Update läuft einfach über **Einstellungen → Firmware** (`.bin`
+hochladen oder GitHub-Release ziehen) oder ein `POST /api/selfupdate` mit der neuen `firmware.bin`. Ein
+falsches Image wird abgelehnt, die laufende Firmware bleibt erhalten (brick-sicheres Dual-OTA). Der
+Build-→-Flash-→-Verify-Ablauf und die Endpoint-Details stehen in [`PROJECT_NOTES.md`](PROJECT_NOTES.md).
 
 ## Web-Dashboard
 
