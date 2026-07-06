@@ -119,6 +119,8 @@ static uint32_t g_mqttLastPubMs = 0;
 static uint32_t g_mqttPubCount  = 0;
 static int      g_mqttState     = -1;
 static bool     g_mqttReconnect = false;   // set after a config change -> mqttService reconnects at once (skip the 8 s backoff)
+static uint32_t g_authFailCount = 0;        // wrong web logins since boot; sent as an MQTT event + in the gateway state
+static void publishAuthEvent(const String &user);   // fwd: emit a failed-login event on <base>/gateway/<gwid>/auth
 
 // ---------------------------------------------------------------- helpers
 static String hex(const uint8_t *p, size_t n, const char *sep = "") {
@@ -403,8 +405,7 @@ function setLang(x){lang=x;L=T[x];localStorage.setItem('lang',x);applyLang();tic
 function applyLang(){$('#lde').className=lang=='de'?'act':'';$('#len').className=lang=='en'?'act':'';
  $('#pair_btn').textContent=L.pairall;}
 function rebootGw(){if(!confirm(lang=='de'?'Gateway jetzt neu starten?':'Restart the gateway now?'))return;
- fetch('/api/reboot',{method:'POST'}).catch(()=>{});
- alert(lang=='de'?'Neustart läuft… in ~10 s wieder erreichbar.':'Restarting… back in ~10 s.');}
+ fetch('/api/reboot',{method:'POST'}).catch(()=>{});}
 async function doLogout(){await fetch('/api/logout',{method:'POST'}).catch(()=>{});location.href='/login';}
 async function scanWifi(){$('#wf_msg').textContent=lang=='de'?'suche…':'scanning…';$('#wf_scanb').disabled=true;
  try{let n=await(await fetch('/api/wifi/scan')).json();n.sort((a,b)=>b.rssi-a.rssi);
@@ -614,6 +615,8 @@ static void handleLogin() {
     server.sendHeader("Set-Cookie", "obi_sess=" + newSession() + "; Path=/; Max-Age=604800; HttpOnly; SameSite=Lax");
     server.send(200, "application/json", "{\"ok\":true}");
   } else {
+    g_authFailCount++;
+    publishAuthEvent(u);   // notify the broker/HA of the wrong password or username
     server.send(401, "application/json", "{\"ok\":false}");
   }
 }
@@ -676,10 +679,17 @@ static void handleMqttCfg() {
 // Blank username disables auth (open access). Password is only overwritten when a non-empty one is posted,
 // so the UI can change the username without forcing the password to be re-typed.
 static void handleAuthCfg() {
-  if (server.hasArg("user")) strlcpy(g_authUser, server.arg("user").c_str(), sizeof g_authUser);
-  if (server.hasArg("pass") && server.arg("pass").length())
-    strlcpy(g_authPass, server.arg("pass").c_str(), sizeof g_authPass);
-  if (!g_authUser[0]) g_authPass[0] = 0;                    // no user -> clear the password too
+  String u = server.hasArg("user") ? server.arg("user") : String(g_authUser);
+  // keep the stored password if the field was left blank (editing the username without re-typing it)
+  String p = (server.hasArg("pass") && server.arg("pass").length()) ? server.arg("pass") : String(g_authPass);
+  u.trim();
+  if (u.length() && !p.length()) {                          // enabling auth requires BOTH a user and a password
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"nopass\"}");
+    return;
+  }
+  strlcpy(g_authUser, u.c_str(), sizeof g_authUser);
+  strlcpy(g_authPass, p.c_str(), sizeof g_authPass);
+  if (!g_authUser[0]) g_authPass[0] = 0;                    // no user -> open access, clear the password too
   for (int i = 0; i < OBI_SESS_MAX; i++) g_sess[i] = "";    // credential change -> invalidate all sessions
   prefs.begin("obigw", false);
   prefs.putString("au", g_authUser); prefs.putString("ap", g_authPass);
@@ -1055,7 +1065,7 @@ button:disabled{opacity:.5;cursor:default}
  <div class=card>
   <h3>⬆ Firmware</h3>
   <div class=stat id=fwcur>…</div>
-  <div class=row style="margin-top:2px"><button class=g id=ghbtn onclick=ghCheck()>Auf Updates prüfen</button></div>
+  <div class=row style="margin-top:2px"><button class=g id=ghbtn onclick=ghCheck()>Auf Updates prüfen</button><button class=g id=ghdl onclick=ghUpdate()>Neueste neu laden</button></div>
   <div id=ghbox class=msg>GitHub wird geprüft…</div>
   <hr>
   <label id=lman2>Manuell flashen (.bin dieses Boards)</label>
@@ -1088,7 +1098,7 @@ $('hauth').textContent=t('Web-Zugang','Web access');$('lauser').textContent=t('B
 $('lman2').textContent=t('Manuell flashen (.bin dieses Boards)','Manual flash (.bin for this board)');$('bflash').textContent=t('Flashen & neustart','Flash & reboot');
 $('lfr').textContent=t('Werkseinstellungen','Factory reset');$('bfr').textContent=t('Auf Werkseinstellungen zurücksetzen','Reset to factory settings');
 $('frnote').textContent=t('Löscht WLAN, MQTT, Login, gebundene Reader und den Verlauf — dann Neustart ins Setup-Portal.','Erases WiFi, MQTT, login, bound readers and history — then reboots into the setup portal.');
-$('ghbtn').textContent=t('Auf Updates prüfen','Check for updates');
+$('ghbtn').textContent=t('Auf Updates prüfen','Check for updates');$('ghdl').textContent=t('Neueste neu laden','Redownload latest');
 $('htime').textContent=t('Zeit','Time');$('ltz').textContent=t('Zeitzone','Timezone');$('btz').textContent=t('Speichern','Save');
 let cfg=false,tzc=false;
 async function load(){try{
@@ -1125,19 +1135,22 @@ function portal(){fetch('/api/wifi',{method:'POST'}).then(r=>r.json()).then(d=>{
 async function saveMqtt(){const b=new URLSearchParams();b.set('host',$('mh').value);b.set('port',$('mp').value||1883);b.set('user',$('mu').value);b.set('topic',$('mt').value);if($('mpw').value)b.set('pass',$('mpw').value);
  b.set('tls',$('mtls').checked?'1':'0');if($('mca').value.trim())b.set('ca',$('mca').value.trim());  // blank CA = keep existing / encrypt-only
  $('mqmsg').textContent='…';await fetch('/api/mqtt',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b});$('mpw').value='';$('mqmsg').textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>$('mqmsg').textContent='',3000);load();}
-async function saveAuth(){const u=$('au').value.trim();const b=new URLSearchParams();b.set('user',u);if($('ap').value)b.set('pass',$('ap').value);
- $('aumsg').textContent='…';await fetch('/api/auth',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b});$('ap').value='';
+async function saveAuth(){const u=$('au').value.trim(),p=$('ap').value;
+ if(u&&!p){$('aumsg').textContent=t('Benutzer und Passwort nötig','user and password required');return;}   // no user-without-password
+ const b=new URLSearchParams();b.set('user',u);if(p)b.set('pass',p);
+ $('aumsg').textContent='…';const r=await(await fetch('/api/auth',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b})).json();$('ap').value='';
+ if(!r.ok){$('aumsg').textContent=t('Benutzer und Passwort nötig','user and password required');return;}
  if(u){location.href='/login';return;}   // auth on -> (re)login with the new credentials
  $('aumsg').textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>$('aumsg').textContent='',4000);load();}
 async function logout(){await fetch('/api/logout',{method:'POST'});location.href='/login';}
 async function disc(){$('mqmsg').textContent='…';try{const r=await(await fetch('/api/rediscover',{method:'POST'})).json();$('mqmsg').textContent=r.ok?t('Discovery gesendet ✓','discovery sent ✓')+' ('+r.count+')':t('MQTT nicht verbunden','MQTT not connected');}catch(e){$('mqmsg').textContent='error';}setTimeout(()=>$('mqmsg').textContent='',4000);}
 async function ghCheck(){const box=$('ghbox');box.className='msg';box.textContent=t('GitHub wird geprüft…','checking GitHub…');
  try{const r=await(await fetch('/api/github/latest')).json();
+  if(r.version&&r.asset)$('ghdl').textContent=t('Neueste neu laden','Redownload latest')+': '+r.version;
   if(!r.ok){box.textContent=t('Keine Release-Info von GitHub (evtl. noch kein Release veröffentlicht).','No release info from GitHub (maybe no release published yet).');return;}
   if(r.newer&&r.asset){box.className='upd';box.innerHTML=`<b>⬆ ${t('Update verfügbar','Update available')}: ${r.version}</b><br><span class=msg>${t('Aktuell','current')}: ${r.current}</span><button onclick=ghUpdate()>${t('Jetzt aktualisieren','Update now')}</button>`;}
   else if(r.newer&&!r.asset){box.textContent=`${t('Release','Release')} ${r.version} ${t('gefunden, aber kein Build für dieses Board im Release.','found, but no build for this board in the release.')}`;}
-  else{box.className='msg okrow';box.innerHTML=`✓ ${t('Aktuell','Up to date')} (${r.current}) — ${t('neuestes Release','latest release')}: ${r.version}`
-    +(r.asset?`<br><button class=g style="margin-top:10px" onclick=ghUpdate()>${t('Neu installieren','Reinstall')}: ${r.version}</button>`:'');}
+  else{box.className='msg okrow';box.innerHTML=`✓ ${t('Aktuell','Up to date')} (${r.current}) — ${t('neuestes Release','latest release')}: ${r.version}`;}
  }catch(e){box.textContent=t('GitHub-Prüfung fehlgeschlagen','GitHub check failed');}}
 async function ghUpdate(){if(!confirm(t('Firmware von GitHub laden und flashen? Das Gerät startet danach neu.','Download & flash firmware from GitHub? The device reboots afterwards.')))return;
  const box=$('ghbox');box.className='msg';
@@ -2075,6 +2088,20 @@ static void runPortal() {
 static String gwStateTopic() { return String(g_mqttTopic) + "/gateway/" + gwId(); }
 static String avtTopic()     { return gwStateTopic() + "/status"; }
 static String rebootTopic()  { return gwStateTopic() + "/reboot"; }
+static String authTopic()    { return gwStateTopic() + "/auth"; }
+
+// Emit a wrong-web-login event on <base>/gateway/<gwid>/auth. Not retained — it's a point-in-time
+// event (HA's `event` platform consumes it). Payload carries the attempted username, client IP and the
+// running fail counter. Safe to call from the web handler: server.handleClient() and mqttService() both
+// run on webTask, so there's no cross-task PubSubClient access.
+static void publishAuthEvent(const String &user) {
+  if (!mqtt.connected()) return;
+  String p = "{\"event_type\":\"login_failed\",\"user\":" + jstr(user.c_str()) +
+             ",\"ip\":\"" + server.client().remoteIP().toString() + "\"" +
+             ",\"fail_count\":" + String(g_authFailCount) +
+             ",\"uptime_s\":" + String(gw_uptime_s()) + "}";
+  if (mqtt.publish(authTopic().c_str(), p.c_str())) g_mqttPubCount++;
+}
 
 static void mqttCallback(char *topic, byte *payload, unsigned int len) {
   String t(topic);
@@ -2235,6 +2262,16 @@ static void publishGatewayDiscovery() {
     String p = "{\"name\":\"Restart\",\"uniq_id\":\"" + uid + "_restart\",\"cmd_t\":\"" + rebootTopic() +
                "\",\"pl_prs\":\"reboot\",\"dev_cla\":\"restart\",\"ent_cat\":\"config\"" + availa + "," + dev + "}";
     mqtt.publish(t.c_str(), p.c_str(), true); }
+  // failed web-login — fires in HA the moment a wrong password/username is entered (event platform)
+  { String t = "homeassistant/event/" + uid + "/auth/config";
+    String p = "{\"name\":\"Login attempt\",\"uniq_id\":\"" + uid + "_auth\",\"stat_t\":\"" + authTopic() +
+               "\",\"event_types\":[\"login_failed\"],\"icon\":\"mdi:account-alert\",\"ent_cat\":\"diagnostic\"" + availa + "," + dev + "}";
+    mqtt.publish(t.c_str(), p.c_str(), true); }
+  // running count of wrong logins since boot (from the retained gateway state)
+  { String t = "homeassistant/sensor/" + uid + "/auth_fail/config";
+    String p = "{\"name\":\"Failed since reboot\",\"uniq_id\":\"" + uid + "_auth_fail\",\"stat_t\":\"" + stt +
+               "\",\"val_tpl\":\"{{ value_json.auth_fail_count }}\",\"stat_cla\":\"total_increasing\",\"icon\":\"mdi:shield-alert\",\"ent_cat\":\"diagnostic\"" + availa + "," + dev + "}";
+    mqtt.publish(t.c_str(), p.c_str(), true); }
 }
 
 // Remove a reader's discovery entities from HA by publishing empty retained configs.
@@ -2312,7 +2349,8 @@ static void mqttService() {
                     ",\"ip\":\"" + WiFi.localIP().toString() + "\"" +
                     ",\"readers\":" + String(rcAll) +
                     ",\"readers_all\":" + String(rcAll) +
-                    ",\"readers_bound\":" + String(rcBound) + "," + fwJson() + "}";
+                    ",\"readers_bound\":" + String(rcBound) +
+                    ",\"auth_fail_count\":" + String(g_authFailCount) + "," + fwJson() + "}";
         if (mqtt.publish(gwStateTopic().c_str(), gp.c_str(), true)) g_mqttPubCount++; }
       for (int i = 0; i < MAX_READERS; i++) {
         Reader &r = readers[i];
