@@ -105,12 +105,13 @@ local, no cloud, ever.**
 The stock C3 has a **locked bootloader** (ROM download mode fused off → **no UART/JTAG flashing**), so the
 open image is delivered **one time** over the device's **own cloud-OTA path — pointed at *your* server, not
 the vendor's.** OTA on the stock firmware is unsigned (integrity CRC only), which is exactly what makes this
-self-update possible. The full step-by-step (back up the stock image → bring the device onto your own cloud
-→ build → push the image) is in the top-level README:
+self-update possible. The full step-by-step (bring the device onto your own cloud → get the `.bin` → push it →
+optionally back up the stock image afterward from the device's Debug page) is in the top-level README:
 
 - 🇬🇧 / 🇩🇪 **[Stock gateway → custom firmware, step by step](../README.md#stock-to-custom)**
 
-Build the C3 image:
+You don't even need the toolchain — **download the prebuilt C3 image from the
+[Releases page](https://github.com/atc1441/OBI_Energy_Tracker_Local_Cloud/releases)**, or build it yourself:
 
 ```bash
 pio run -e obi_gateway_c3     # -> .pio/build/obi_gateway_c3/firmware.bin  (no -t upload: the C3 can't take UART)
@@ -371,12 +372,13 @@ Der Stock-C3 hat einen **gesperrten Bootloader** (ROM-Download-Modus per eFuse d
 über UART/JTAG**). Die offene Firmware wird deshalb **einmalig** über den **geräteeigenen Cloud-OTA-Weg
 aufgespielt — gerichtet auf *deinen* Server, nicht den des Herstellers.** Das OTA der Stock-Firmware ist
 unsigniert (nur Integritäts-CRC), was dieses Self-Update überhaupt erst möglich macht. Die vollständige
-Schritt-für-Schritt-Anleitung (Stock-Image sichern → Gerät auf eigene Cloud → bauen → Image pushen) steht im
-Haupt-README:
+Schritt-für-Schritt-Anleitung (Gerät auf eigene Cloud → `.bin` besorgen → Image pushen → danach optional das
+Stock-Image über die Debug-Seite des Geräts sichern) steht im Haupt-README:
 
 - 🇩🇪 / 🇬🇧 **[Stock-Gateway → eigene Firmware, Schritt für Schritt](../README.md#stock-to-custom)**
 
-C3-Image bauen:
+Du brauchst nicht mal die Toolchain — **lade das fertige C3-Image von der
+[Releases-Seite](https://github.com/atc1441/OBI_Energy_Tracker_Local_Cloud/releases)**, oder bau es selbst:
 
 ```bash
 pio run -e obi_gateway_c3     # -> .pio/build/obi_gateway_c3/firmware.bin  (kein -t upload: der C3 nimmt kein UART)

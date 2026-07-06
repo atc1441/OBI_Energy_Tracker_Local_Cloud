@@ -109,21 +109,29 @@ The stock C3 has a **locked bootloader** (ROM download mode fused off → no UAR
 custom image is delivered **once**, through the device's own (now *yours*) **cloud OTA** path. After that
 the firmware has its own built-in web updater and never needs a cloud again.
 
-1. **Back up the stock image first** (so you can always restore / downgrade):
-   `python 04-connect-your-own-cloud/tools/obi_ota_download.py`
-2. **Get the device onto your own cloud** — follow **[04 · Connect your own cloud](04-connect-your-own-cloud/)**:
+1. **Get the device onto your own cloud** — follow **[04 · Connect your own cloud](04-connect-your-own-cloud/)**:
    fetch the TEA key → `gen_certs.py` → run `mqtts_server.py` → BLE-provision your WiFi + broker + CA.
-3. **Build the firmware:**
-   `cd open_obi_energy_meter && pio run -e obi_gateway_c3` → `.pio/build/obi_gateway_c3/firmware.bin`
-4. **Push it over the cloud OTA path** (unsigned self-update → your image is accepted):
-   `python 04-connect-your-own-cloud/tools/mqtts_server.py --host 0.0.0.0 --port 8883 --ota-firmware open_obi_energy_meter/.pio/build/obi_gateway_c3/firmware.bin`
+2. **Get the C3 `firmware.bin`** — either is fine:
+   - **Download it** (easiest): grab the prebuilt `obi_gateway_c3` firmware from the
+     **[Releases page](https://github.com/atc1441/OBI_Energy_Tracker_Local_Cloud/releases)** — no toolchain needed.
+   - **Or build it yourself:** `cd open_obi_energy_meter && pio run -e obi_gateway_c3` →
+     `.pio/build/obi_gateway_c3/firmware.bin`
+3. **Push that `.bin` over the cloud OTA path** (unsigned self-update → your image is accepted):
+   `python 04-connect-your-own-cloud/tools/mqtts_server.py --host 0.0.0.0 --port 8883 --ota-firmware <firmware.bin>`
    On its next connect the device pulls the image in chunks and reboots into it.
-5. **Done — it's now an open local gateway.** It comes up as the **`OpenOBI-XXXXXX`** WiFi setup portal →
+4. **Done — it's now an open local gateway.** It comes up as the **`OpenOBI-XXXXXX`** WiFi setup portal →
    join it, set your WiFi / MQTT, open the dashboard. From now on **all** updates go through
    **Settings → Firmware** (upload a `.bin` or pull a GitHub release) — **no cloud needed**.
+5. **Back up the stock image — now straight from the device.** The partition table is **dual-OTA**, so your
+   original firmware is still sitting untouched in the *other* app slot after the flash. Open the custom
+   firmware's **🐞 Debug** page → **Dump full flash** to download a complete backup (bootloader + partition
+   table + both app slots + NVS) for restore/downgrade. Do this **before** any further self-update, which
+   reuses that spare slot. *(The old pre-flash method — `python 04-connect-your-own-cloud/tools/obi_ota_download.py`
+   over your cloud — still works but is no longer needed.)*
 
-> ⚠️ Step 4 is the only destructive step — a wrong image can't be re-flashed over UART. Keep the stock
-> backup from step 1.
+> ⚠️ Step 3 is the only hard-to-reverse step — a wrong image can't be re-flashed over UART. It is brick-safe
+> (a bad image is rejected and the running firmware kept), and you can still pull a full stock backup
+> afterward via **Debug → Dump full flash** (step 5).
 
 ### 🇩🇪 Vom Stock-Gateway → eigene Firmware (Schritt für Schritt)
 
@@ -131,21 +139,30 @@ Der originale C3 hat einen **gesperrten Bootloader** (ROM-Download-Modus per eFu
 Flashen über UART/JTAG). Die eigene Firmware wird deshalb **einmalig über den Cloud-OTA-Weg** aufgespielt —
 über *deine* eigene Cloud. Danach hat die Firmware ihren eigenen Web-Updater und braucht nie wieder eine Cloud.
 
-1. **Zuerst das Stock-Image sichern** (zum Wiederherstellen / Downgraden):
-   `python 04-connect-your-own-cloud/tools/obi_ota_download.py`
-2. **Gerät auf deine eigene Cloud bringen** — nach **[04 · Connect your own cloud](04-connect-your-own-cloud/)**:
+1. **Gerät auf deine eigene Cloud bringen** — nach **[04 · Connect your own cloud](04-connect-your-own-cloud/)**:
    TEA-Key holen → `gen_certs.py` → `mqtts_server.py` starten → per BLE WLAN + Broker + CA provisionieren.
-3. **Firmware bauen:**
-   `cd open_obi_energy_meter && pio run -e obi_gateway_c3` → `.pio/build/obi_gateway_c3/firmware.bin`
-4. **Über den Cloud-OTA-Weg aufspielen** (unsigniertes Self-Update → dein Image wird akzeptiert):
-   `python 04-connect-your-own-cloud/tools/mqtts_server.py --host 0.0.0.0 --port 8883 --ota-firmware open_obi_energy_meter/.pio/build/obi_gateway_c3/firmware.bin`
+2. **C3-`firmware.bin` besorgen** — beides geht:
+   - **Herunterladen** (am einfachsten): die fertige `obi_gateway_c3`-Firmware von der
+     **[Releases-Seite](https://github.com/atc1441/OBI_Energy_Tracker_Local_Cloud/releases)** holen — keine Toolchain nötig.
+   - **Oder selbst bauen:** `cd open_obi_energy_meter && pio run -e obi_gateway_c3` →
+     `.pio/build/obi_gateway_c3/firmware.bin`
+3. **Diese `.bin` über den Cloud-OTA-Weg aufspielen** (unsigniertes Self-Update → dein Image wird akzeptiert):
+   `python 04-connect-your-own-cloud/tools/mqtts_server.py --host 0.0.0.0 --port 8883 --ota-firmware <firmware.bin>`
    Beim nächsten Verbinden zieht das Gerät das Image in Blöcken und startet damit neu.
-5. **Fertig — jetzt ein offenes lokales Gateway.** Es startet als WLAN-Setup-Portal **`OpenOBI-XXXXXX`** →
+4. **Fertig — jetzt ein offenes lokales Gateway.** Es startet als WLAN-Setup-Portal **`OpenOBI-XXXXXX`** →
    verbinden, WLAN / MQTT einstellen, Dashboard öffnen. Ab jetzt laufen **alle** Updates über
    **Einstellungen → Firmware** (`.bin` hochladen oder GitHub-Release ziehen) — **ohne Cloud**.
+5. **Stock-Image sichern — jetzt direkt vom Gerät.** Die Partitionstabelle ist **Dual-OTA**, deine originale
+   Firmware liegt nach dem Flashen also unangetastet im *anderen* App-Slot. Öffne die **🐞 Debug**-Seite der
+   eigenen Firmware → **Dump full flash** und lade ein vollständiges Backup herunter (Bootloader +
+   Partitionstabelle + beide App-Slots + NVS) zum Wiederherstellen/Downgraden. Mach das **vor** dem nächsten
+   Self-Update, das diesen freien Slot wiederverwendet. *(Die alte Vorab-Methode —
+   `python 04-connect-your-own-cloud/tools/obi_ota_download.py` über deine Cloud — funktioniert weiter, ist
+   aber nicht mehr nötig.)*
 
-> ⚠️ Schritt 4 ist der einzige unumkehrbare Schritt — ein falsches Image lässt sich nicht über UART neu
-> flashen. Sicherung aus Schritt 1 aufbewahren.
+> ⚠️ Schritt 3 ist der einzige schwer umkehrbare Schritt — ein falsches Image lässt sich nicht über UART neu
+> flashen. Er ist brick-sicher (ein kaputtes Image wird abgelehnt, die laufende Firmware bleibt), und ein
+> volles Stock-Backup kannst du danach jederzeit über **Debug → Dump full flash** ziehen (Schritt 5).
 
 ## Repository layout
 
