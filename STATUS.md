@@ -1,5 +1,24 @@
 # Status, firmware coverage & roadmap
 
+## TL;DR — what works today ✅
+The project is in a **healthy, working state**. The two headline goals are done and verified on real hardware:
+
+- **✅ Open ESP32-C3 gateway firmware is complete and runs in daily use** — it fully replaces the vendor
+  bridge. Pairs the LoRa readers itself, decrypts the energy, and serves a local **web dashboard (DE/EN)**,
+  **MQTT + MQTTS (TLS)** with Home-Assistant auto-discovery, a session **login**, per-reader energy
+  **history** (daily kWh + cost), **reader-OTA over LoRa**, gateway **self-OTA** (web upload / GitHub
+  release), a web **factory reset**, and **RSSI + SNR** per reader. Builds cleanly for **6 board targets**
+  (stock OBI C3, Heltec Vision Master E290, LILYGO T-Beam, Seeed XIAO S3, generic ESP32 / ESP32-S3).
+  → [`open_obi_energy_meter/`](open_obi_energy_meter/).
+- **✅ Own-cloud path for the *stock* bridge is complete** — TEA key → PKI → MQTTS broker → BLE
+  provisioning → live telemetry, and the **custom-firmware OTA** that installs the firmware above. All
+  verified on hardware.
+- **✅ Energy telemetry is fully decoded** and confirmed on a live device.
+
+Everything below is the deeper **reverse-engineering coverage** and the remaining *stock-cloud* downlink
+work. Those open items are about extending the RE of the vendor system — they are **not** limitations of
+the open firmware (which already does pairing, energy, config and OTA locally).
+
 ## Which firmware this repo covers
 - **Bridge (ESP32-C3):** analyzed across **1.0.0 – 1.2.1** and the separate **31.0.0 – 34.0.0** track.
 - **Protocol details and function addresses are from `1.0.2`** (the primary reversed image). Findings were
@@ -48,14 +67,19 @@ Two big pieces are **not done yet** — this is the main open work:
    Both are documented under [downlink commands](03-reverse-engineering/cloud-api.md#downlink-commands-cloud--device).
    Still open: the remaining command payloads (general status/config/control).
 
-**Known constraint (not a bug to fix):** adding/pairing a reader is **BLE-only** — there is no MQTT/cloud
-command to scan or bind a sensor, and the bridge's BLE is only active during a setup window. You can re-open
-that window anytime by **holding the gateway's button for ~5 s** (re-activates BLE for general config and
-adding sensors), then pair over BLE (built into `ble_provision.py --pair-sensor`) — see
-[07 · Add a reader](07-add-a-reader/README.md).
+**Known constraint of the *stock bridge* (not a bug to fix):** on the vendor firmware, adding/pairing a
+reader is **BLE-only** — there is no MQTT/cloud command to scan or bind a sensor, and the bridge's BLE is
+only active during a setup window. You can re-open that window anytime by **holding the gateway's button
+for ~5 s** (re-activates BLE for general config and adding sensors), then pair over BLE (built into
+`ble_provision.py --pair-sensor`) — see [07 · Add a reader](07-add-a-reader/README.md).
+> This limitation is **gone on the open firmware**: it pairs readers itself over LoRa (**"Bind to gateway"
+> / "Bind all for 3 min"** in the web dashboard), no BLE and no cloud involved.
 
-Also open (smaller): confirm the multi-reader `SensorScan` enumeration ([07](07-add-a-reader/README.md)),
-and capture the exact SX1262 RF params ([02-hardware](02-hardware/README.md)).
+Also open (smaller): confirm the multi-reader `SensorScan` enumeration over BLE
+([07](07-add-a-reader/README.md)). *(The exact SX1262 RF params are now known — reversed from reader
+`v1.2.1` and running in the open gateway: **869.5 MHz · LoRa · BW 500 kHz · SF7 · CR 4/5 · preamble 12 ·
+sync 0x1424 · +22 dBm · TCXO 1.8 V** — see [platformio.ini](open_obi_energy_meter/platformio.ini) and
+[lora-protocol.md](03-reverse-engineering/lora-protocol.md).)*
 
 Contributions welcome. Useful starting points: [own cloud + broker log](04-connect-your-own-cloud/README.md),
 [MQTT topics](03-reverse-engineering/firmware-layout.md#mqtt-topics),
