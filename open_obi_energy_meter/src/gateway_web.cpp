@@ -226,7 +226,7 @@ static String statusJson() {
 
 // ---------------------------------------------------------------- dashboard
 static const char INDEX_HTML[] PROGMEM = R"HTML(
-<!doctype html><html><head><meta charset="utf-8">
+<!doctype html><html><head><meta charset="utf-8"><link rel="icon" href="/favicon.svg">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Open OBI Energy Tracker</title>
 <style>
 :root{--bg:#0a0e14;--panel:#141a23;--panel2:#1b2430;--line:#232e3c;--txt:#eaf0f7;--dim:#7d8da0;
@@ -566,7 +566,7 @@ static WebServer::THandlerFunction guard(WebServer::THandlerFunction h) {
 }
 
 // ---- /login page + /api/login + /api/logout (all UNguarded) --------------------------------------------
-static const char LOGIN_HTML[] PROGMEM = R"HTML(<!doctype html><html><head><meta charset=utf-8>
+static const char LOGIN_HTML[] PROGMEM = R"HTML(<!doctype html><html><head><meta charset=utf-8><link rel=icon href=/favicon.svg>
 <meta name=viewport content='width=device-width,initial-scale=1'><title>Open OBI Energy Tracker — Login</title><style>
 :root{--bg:#0a0e14;--panel:#141a23;--panel2:#1b2430;--line:#232e3c;--txt:#eaf0f7;--dim:#7d8da0;--accent:#31d07a;--accent2:#12a35a;--red:#f0616d}
 *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:
@@ -628,6 +628,21 @@ static void handleLogout() {
 static void handleReaders() { server.send(200, "application/json", readersJson()); }
 static void handleStatus()  { server.send(200, "application/json", statusJson()); }
 static void handleIndex()   { server.send_P(200, "text/html", INDEX_HTML); }
+
+// A tiny SVG favicon: a green lightning bolt on the dashboard's dark panel colour
+// (accent #31d07a on #0a0e14). Served unguarded so browsers get it on the login page
+// too, and shared by /favicon.svg (linked from every <head>) and the automatic
+// /favicon.ico probe.
+static const char FAVICON_SVG[] PROGMEM =
+  "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>"
+  "<rect width='32' height='32' rx='7' fill='#0a0e14'/>"
+  "<path d='M18.5 3 L8 18 h6 l-2.5 11 L24 13 h-6.5 l2.5-10 z' "
+  "fill='#31d07a' stroke='#12a35a' stroke-width='0.6' stroke-linejoin='round'/>"
+  "</svg>";
+static void handleFavicon() {
+  server.sendHeader("Cache-Control", "public, max-age=86400");
+  server.send_P(200, "image/svg+xml", FAVICON_SVG);
+}
 
 static void handleInterval() {
   String id = server.arg("id"); long secs = server.arg("seconds").toInt();
@@ -741,7 +756,7 @@ static void handleSelfOtaDone() {
   if (ok) { delay(300); ESP.restart(); }
 }
 static void handleUpdatePage() {   // firmware self-update uploader (dark theme, upload progress)
-  server.send(200, "text/html", R"HTML(<!doctype html><html><head><meta charset=utf-8>
+  server.send(200, "text/html", R"HTML(<!doctype html><html><head><meta charset=utf-8><link rel=icon href=/favicon.svg>
 <meta name=viewport content='width=device-width,initial-scale=1'><title>Open OBI Energy Tracker — Firmware Update</title><style>
 :root{--bg:#0a0e14;--panel:#141a23;--panel2:#1b2430;--line:#232e3c;--txt:#eaf0f7;--dim:#7d8da0;--accent:#31d07a;--mono:ui-monospace,Menlo,Consolas,monospace}
 *{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:0;background:var(--bg);color:var(--txt)}
@@ -944,7 +959,7 @@ static void handleGithubProgress() {
 }
 
 // ---- /settings — WiFi, MQTT and Firmware in one tidy place ------------------------------------------
-static const char SETTINGS_HTML[] PROGMEM = R"HTML(<!doctype html><html><head><meta charset=utf-8>
+static const char SETTINGS_HTML[] PROGMEM = R"HTML(<!doctype html><html><head><meta charset=utf-8><link rel=icon href=/favicon.svg>
 <meta name=viewport content='width=device-width,initial-scale=1'><title>Open OBI Energy Tracker — Settings</title><style>
 :root{--bg:#0a0e14;--panel:#141a23;--panel2:#1b2430;--line:#232e3c;--txt:#eaf0f7;--dim:#7d8da0;--accent:#31d07a;--amber:#e3b341;--red:#f0616d;--mono:ui-monospace,Menlo,Consolas,monospace}
 *{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:0;background:var(--bg);color:var(--txt)}
@@ -1249,7 +1264,7 @@ static void handleRadioApi() {
   server.send(200, "application/json", gw_radio_json(since));
 }
 static void handleRadioPage() {
-  server.send(200, "text/html", R"HTML(<!doctype html><html><head><meta charset=utf-8>
+  server.send(200, "text/html", R"HTML(<!doctype html><html><head><meta charset=utf-8><link rel=icon href=/favicon.svg>
 <meta name=viewport content='width=device-width,initial-scale=1'><title>Open OBI Energy Tracker — Radio</title><style>
 :root{--bg:#0a0e14;--panel:#141a23;--line:#232e3c;--txt:#eaf0f7;--dim:#7d8da0;--rx:#4fd6c2;--tx:#f0a63c;--mono:ui-monospace,Menlo,Consolas,monospace}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,sans-serif}
@@ -1300,7 +1315,7 @@ setInterval(poll,600);poll();
 </script></body></html>)HTML");
 }
 static void handleDebugPage() {
-  server.send(200, "text/html", R"HTML(<!doctype html><html><head><meta charset=utf-8>
+  server.send(200, "text/html", R"HTML(<!doctype html><html><head><meta charset=utf-8><link rel=icon href=/favicon.svg>
 <meta name=viewport content='width=device-width,initial-scale=1'><title>Open OBI Energy Tracker — Flash Debug</title><style>
 :root{--bg:#0a0e14;--panel:#141a23;--panel2:#1b2430;--line:#232e3c;--txt:#eaf0f7;--dim:#7d8da0;--accent:#31d07a;--amber:#e3b341;--red:#f0616d;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 *{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:0;background:var(--bg);color:var(--txt)}
@@ -1641,7 +1656,7 @@ static void handlePrice() {
 }
 
 static void handleHistoryPage() {
-  server.send(200, "text/html", R"HIST(<!doctype html><html><head><meta charset=utf-8>
+  server.send(200, "text/html", R"HIST(<!doctype html><html><head><meta charset=utf-8><link rel=icon href=/favicon.svg>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <title>OBI · History</title>
 <style>
@@ -1938,6 +1953,8 @@ static void startServices() {
   // Every route is wrapped in guard() so HTTP Basic Auth (when a username is set) protects the whole
   // dashboard/API. The two multipart upload routes additionally reject the body stream in their upload
   // callback (authValid) so an unauthenticated POST can't push firmware before the guard runs.
+  server.on("/favicon.svg", HTTP_GET, handleFavicon);    // site icon (unguarded — shown on login too)
+  server.on("/favicon.ico", HTTP_GET, handleFavicon);    // fallback for the browser's automatic probe
   server.on("/login",     HTTP_GET,  handleLoginPage);   // login form (unguarded)
   server.on("/api/login", HTTP_POST, handleLogin);       // verify credentials -> session cookie (unguarded)
   server.on("/api/logout",HTTP_POST, handleLogout);      // drop the session cookie
