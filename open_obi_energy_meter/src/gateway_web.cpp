@@ -163,6 +163,7 @@ static String readersJson() {
     first = false;
     uint32_t age = (millis() - r.lastSeenMs) / 1000;
     j += "{\"id\":\"" + hex(r.handle, 3) + "\"";
+    j += ",\"name\":" + jstr(r.name);
     j += ",\"uuid\":" + (r.haveUuid ? "\"" + uuidStr(r.uuid) + "\"" : "null");
     j += ",\"type\":\"" + String(typeName(r.devType)) + "\"";
     j += ",\"paired\":" + String(r.haveKey ? "true" : "false");
@@ -655,6 +656,16 @@ static void handleInterval() {
     gw_request_interval(h, (uint16_t)secs);
     server.send(200, "application/json", "{\"ok\":true}");
   } else server.send(400, "application/json", "{\"ok\":false}");
+}
+
+// Set (or clear, empty name) a reader's friendly display name. WebServer already url-decodes arg().
+static void handleName() {
+  String id = server.arg("id");
+  if (id.length() != 6) { server.send(400, "application/json", "{\"ok\":false}"); return; }
+  uint8_t h[3];
+  for (int i = 0; i < 3; i++) h[i] = (uint8_t)strtol(id.substring(i * 2, i * 2 + 2).c_str(), nullptr, 16);
+  gw_set_reader_name(h, server.arg("name").c_str());
+  server.send(200, "application/json", "{\"ok\":true}");
 }
 
 static void handleMqttCfg() {
@@ -2000,6 +2011,7 @@ static void startServices() {
   server.on("/api/reboot",      HTTP_POST, guard(handleReboot));   // restart the gateway from the dashboard
   server.on("/api/factory_reset", HTTP_POST, guard(handleFactoryReset));  // wipe all settings + reboot to setup portal
   server.on("/api/assign",      HTTP_POST, guard(handleAssign));   // accept/drop a reader onto this gateway
+  server.on("/api/name",        HTTP_POST, guard(handleName));    // set/clear a reader's friendly name
   server.on("/api/pairall",     HTTP_POST, guard(handlePairAll));  // open the 3-min auto-accept window
   server.on("/radio",           HTTP_GET,  guard(handleRadioPage));  // live radio message view
   server.on("/api/radio",       HTTP_GET,  guard(handleRadioApi));
