@@ -2169,8 +2169,11 @@ static void publishDiscovery(const Reader &r) {
   String stt = String(g_mqttTopic) + "/" + id;         // state topic (the JSON)
   String cmd = stt + "/set_interval";                  // command topic (number -> interval)
   String avt = avtTopic();                             // per-gateway LWT: online/offline
-  String dev = "\"dev\":{\"ids\":[\"" + uid + "\"],\"name\":\"OBI " + typeName(r.devType) + " " + id +
-               "\",\"mf\":\"OBI\",\"mdl\":\"" + typeName(r.devType) +
+  // device name: the user-set friendly name when present (Tasmota-style), else the technical default.
+  // Safe to change later: entity ids/history hang off uniq_id + state topic, both stay untouched.
+  String dev = "\"dev\":{\"ids\":[\"" + uid + "\"],\"name\":" +
+               (r.name[0] ? jstr(r.name) : "\"OBI " + String(typeName(r.devType)) + " " + id + "\"") +
+               ",\"mf\":\"OBI\",\"mdl\":\"" + String(typeName(r.devType)) +
                "\",\"sw\":\"" + String(r.softver) + "\",\"hw\":\"" + String(r.hardver) + "\"}";
 
   // --- sensors (dc/unit/sc == nullptr -> that field is omitted from the config) ---

@@ -297,6 +297,7 @@ bool gw_set_reader_name(const uint8_t handle[3], const char *name) {
     if (r.used && !memcmp(r.handle, handle, 3)) {
       saveName(handle, buf);
       strlcpy(r.name, buf, sizeof r.name);
+      r.mqttDiscovered = false;   // re-announce HA discovery so the device shows the new name
       return true;
     }
   return false;
