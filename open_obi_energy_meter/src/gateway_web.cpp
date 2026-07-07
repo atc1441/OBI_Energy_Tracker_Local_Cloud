@@ -278,6 +278,7 @@ h1{font-size:16px;margin:0;font-weight:650}.sub{color:var(--dim);font-size:12px}
 .del:hover{border-color:var(--red);color:var(--red)}
 .ren{background:transparent;border:1px solid var(--line);color:var(--dim);border-radius:7px;padding:3px 8px;cursor:pointer;font-size:12px;line-height:1}
 .ren:hover{border-color:var(--accent);color:var(--accent)}
+.nmi{width:210px;max-width:55vw;font-size:16px;font-weight:600;padding:6px 9px}
 .uuid{font-family:var(--mono);font-size:11.5px;color:var(--dim);word-break:break-all;margin:7px 0 13px;
  padding:6px 9px;background:#0d131b;border-radius:8px;border:1px solid #1a222d}
 .uuid b{color:#9fb0c4;letter-spacing:.5px}
@@ -381,7 +382,7 @@ const T={
   vnote:'Die Firmware-Version MUSS im Dateinamen stehen, z.B. reader_v55.bin.',
   novers:'Keine Version im Dateinamen gefunden.\nBitte die richtige Firmware-Version in den Dateinamen schreiben, z.B. reader_v55.bin',
   vmiss:'Version fehlt im Dateinamen',
-  ren:'Name ändern',renq:'Name für Reader %i (leer = Standard):',
+  ren:'Name ändern',abort:'Abbrechen',
   samever:'Der Reader läuft bereits auf v%v — er akzeptiert dieselbe Version nicht (kein Reflash).\n\nTrotzdem versuchen?'},
  en:{sub:'869.5 MHz · SF7 · reading your meters directly',wifi:'WiFi',mqtt:'MQTT',radio:'Radio',readers:'Readers',
   offline:'offline',fw:'Firmware',batt:'Battery',opt:'Sensor',active:'active',nosig:'no signal',
@@ -403,7 +404,7 @@ const T={
   vnote:'The firmware version MUST be in the filename, e.g. reader_v55.bin.',
   novers:'No version found in the filename.\nPut the correct firmware version in the filename, e.g. reader_v55.bin',
   vmiss:'version missing in filename',
-  ren:'Rename',renq:'Name for reader %i (empty = default):',
+  ren:'Rename',abort:'Cancel',
   samever:'The reader is already on v%v — it will not accept the same version (no reflash).\n\nTry anyway?'}};
 let lang=localStorage.getItem('lang')||'de',L=T[lang];
 function setLang(x){lang=x;L=T[x];localStorage.setItem('lang',x);applyLang();tick();}
@@ -454,8 +455,9 @@ async function tick(){try{
  ].concat(st.temp_c!=null?[['Temp',`<b>${st.temp_c} °C</b>`]]:[])
   .map(p=>`<div class="pill"><span class="k">${p[0]}</span>${p[1]}</div>`).join('');
  $('#pair_st').textContent=st.pair_remaining_s>0?L.pairon.replace('%s',st.pair_remaining_s):L.pairoff;
- // don't blow away a reader card while its interval/file input is focused (you'd never finish typing)
- const ae=document.activeElement, editing=ae&&/^(iv_|fw_)/.test(ae.id||'');
+ // don't blow away a reader card while its interval/file input is focused (you'd never finish typing);
+ // renId keeps the inline rename field alive even if it loses focus (e.g. after tapping elsewhere on mobile)
+ const ae=document.activeElement, editing=renId!==null||(ae&&/^(iv_|fw_)/.test(ae.id||''));
  if(!editing && !uploading) $('#list').innerHTML=rs.length?rs.map(card).join(''):`<div class="card"><div class="hd"><span class="id">—</span></div><div class="uuid" style="border:0;background:0">${L.waiting}</div></div>`;
  if(st.ota&&st.ota.active){const el=$('#op_'+st.ota.target);if(el){const p=st.ota.size?Math.min(100,Math.max(0,Math.round(st.ota.served/st.ota.size*100))):0;el.textContent=L.otarun+' '+p+'%';}}
 }catch(e){}}
@@ -464,8 +466,12 @@ function card(r){
  const sens=r.infrared?`<span class="dot on"></span>${L.active}`:`<span class="dot idle"></span>${L.nosig}`;
  const nm=r.name?esc(r.name):'';
  return `<div class="card${r.assigned?'':' pending'}">
-  <div class="hd"><span class="id">${nm||r.id.toUpperCase()}</span>
-   <button class="ren" onclick="renameRd('${r.id}')" title="${L.ren}">✎</button>
+  <div class="hd">${renId===r.id
+   ?`<input class="nmi" id="nm_${r.id}" maxlength="24" value="${esc(r.name||'')}" placeholder="${r.id.toUpperCase()}" onkeydown="nmKey(event,'${r.id}')">
+   <button class="ren" onclick="nmSave('${r.id}')" title="${L.save}">✓</button>
+   <button class="ren" onclick="nmCancel()" title="${L.abort}">✕</button>`
+   :`<span class="id">${nm||r.id.toUpperCase()}</span>
+   <button class="ren" onclick="renameRd('${r.id}')" title="${L.ren}">✎</button>`}
    <span class="tag ${r.type}">${r.type}</span>
    ${r.assigned?'':`<span class="tag pend">${L.pending}</span>`}
    <span class="meta">${nm?r.id.toUpperCase()+' · ':''}FW ${r.softver} · HW ${r.hardver}${r.legacy?' · legacy':''} · ${r.rssi} dBm · ${r.snr} dB${r.paired?' · 🔒':''}</span>
@@ -492,11 +498,13 @@ function card(r){
  </div>`;
 }
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let _rs=[];
-async function renameRd(id){const r=_rs.find(x=>x.id===id)||{};
- let v=prompt(L.renq.replace('%i',id.toUpperCase()),r.name||'');if(v===null)return;
- v=v.trim().slice(0,24);
+let _rs=[],renId=null;                       // renId = reader currently in inline-rename mode (tick pauses redraws)
+function redraw(){$('#list').innerHTML=_rs.map(card).join('');}
+function renameRd(id){renId=id;redraw();const el=$('#nm_'+id);if(el){el.focus();el.select();}}
+function nmCancel(){renId=null;redraw();}
+async function nmSave(id){const v=$('#nm_'+id).value.trim().slice(0,24);renId=null;
  await fetch('/api/name?id='+id+'&name='+encodeURIComponent(v),{method:'POST'});tick();}
+function nmKey(e,id){if(e.key==='Enter')nmSave(id);else if(e.key==='Escape')nmCancel();}
 async function setIv(id){const v=$('#iv_'+id).value;if(!v)return;await fetch('/api/interval?id='+id+'&seconds='+v,{method:'POST'});tick();}
 async function assignRd(id,on){await fetch('/api/assign?id='+id+'&on='+on,{method:'POST'});tick();}
 async function pairAll(){await fetch('/api/pairall',{method:'POST'});tick();}
