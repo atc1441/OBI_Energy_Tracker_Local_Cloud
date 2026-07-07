@@ -87,7 +87,32 @@ class OBILink:
         which breaks reassembly. frag_delay seconds between writes avoids that."""
         n = self.txn
         self.txn = (self.txn + 1) % 127
-        frames = list(encode_request(obj, self.key, n, self.chunk_size))
+        # The fragment index is a single header byte (0..255 -> max 256 fragments). When the ATT
+        # MTU never got negotiated and stayed at the BLE default 23, the auto chunk size becomes
+        # tiny (mtu-13 = 10B). A big multi-fragment message like SetTMPCertificate then needs more
+        # than 256 fragments and encode_request raises "index must be 0..255". Guard against it by
+        # bumping the fragment size just enough to fit the whole message in <=256 fragments.
+        js = obj if isinstance(obj, str) else json.dumps(obj, separators=(",", ":"))
+        nbytes = len(js.encode("utf-8"))
+        # Hard protocol ceiling: index is 1 byte (256 fragments) x 173B max payload = 44288B.
+        # A message above that simply cannot be framed at any fragment size -- fail loudly.
+        MAX_MSG = 256 * 173
+        if nbytes > MAX_MSG:
+            raise ValueError(f"message is {nbytes}B but the BLE protocol caps a single message at "
+                             f"{MAX_MSG}B (256 fragments x 173B). Shrink the payload "
+                             f"(e.g. smaller/EC certs) -- it cannot be sent over this link.")
+        chunk = self.chunk_size
+        need = -(-nbytes // 256)                      # min payload/fragment to fit in 256 frames
+        if need > chunk:
+            chunk = min(173, need)                    # 173 = MAX_PAYLOAD (codec hard cap)
+            print(f"[!] fragment payload {self.chunk_size}B too small for this {nbytes}B message "
+                  f"(would need >256 fragments); raising to {chunk}B for this write.")
+        try:
+            frames = list(encode_request(obj, self.key, n, chunk))
+        except ValueError as e:
+            # last-resort safety net: retry once at the largest fragment size the codec allows
+            print(f"[!] framing failed ({e}); retrying at max fragment size (173B).")
+            frames = list(encode_request(obj, self.key, n, 173))
         for i, fr in enumerate(frames):
             await self.client.write_gatt_char(ABF2, fr, response=True)
             if self.frag_delay and i < len(frames) - 1:
