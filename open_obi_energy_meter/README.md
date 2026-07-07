@@ -20,6 +20,54 @@ vendor cloud.
 
 ---
 
+## Screenshots — the firmware running on a stock OBI C3
+
+Everything below is served straight from the ESP32 — no app, no cloud. Open `http://<gateway-ip>/` in any
+browser (phone or desktop), pick DE/EN with the toggle top-right.
+
+### Dashboard — live readers
+![Dashboard with live reader cards](images/Overview_main.png)
+
+The home page. A status strip up top shows **WiFi**, **MQTT** (broker + message count + last publish),
+**Radio** (869.5 MHz · SF7 · BW500), reader count and the C3's die temperature. Each meter reader gets a
+card with its **import / export / power**, **battery** (with a charge bar), **optical-sensor** state and
+**last-seen** age. New readers show up greyed-out until you press **Bind** (or *Bind all for 3 min*); a
+bound reader also exposes a **Set interval** field and a **Flash firmware** picker right on its card.
+
+### History — daily kWh & cost
+![Per-reader energy history](images/Overview_history.png)
+
+Per-reader history built on-device from the meter counters. Stat tiles for **consumed total**, **fed-in
+total**, **today's consumption**, **today's cost** (at a ct/kWh price you set), and today's feed-in.
+Below: **consumption per day** and **feed-in per day** bar charts, plus the raw **cumulative import** and
+**export** meter-reading curves. All computed from the counter deltas, so it's independent of the
+instantaneous Watt value.
+
+### Radio live — raw LoRa traffic
+![Live LoRa frame monitor](images/Overview_radio.png)
+
+A live monitor of every LoRa frame the gateway sends and receives — the master's 1 Hz **beacon** and
+**scan**, and the readers' **reconnect / energy / ack** frames — with direction, reader id, command
+name+number, length, **RSSI/SNR** and the raw bytes. Invaluable for watching a reader pair or debugging
+range. Filter by id/cmd, pause, or clear.
+
+### Settings — WiFi, MQTT(S), login, time, firmware
+![Settings page](images/Overview_settings.png)
+
+One page for everything: **WiFi** (scan/join or captive AP), **MQTT** with optional **MQTTS/TLS**, a CA
+field and *Send discovery*, a **web-access login** to lock the dashboard, **timezone**, and the **Firmware**
+block — *check for updates* / pull a GitHub release / manually flash a `.bin`, plus a **factory reset**.
+
+### Debug — raw flash tool & full backup
+![Flash debug hex tool](images/Overview_debug.png)
+
+A power-user flash inspector: browse raw flash as hex, read **eFuses**, and — most importantly — **Dump
+full flash** to pull a complete backup of the device (bootloader + partition table + both OTA app slots +
+NVS). Because the partition table is dual-OTA, your **original stock firmware is still intact in the other
+slot** after conversion, so this is how you grab a full stock backup straight from the device.
+
+---
+
 ## What it does
 
 The OBI system is a star network: a mains-powered **bridge** is the master, and battery **readers**
@@ -282,6 +330,57 @@ festhängt. Keine Hersteller-Bridge, keine Hersteller-Cloud.
 > ⚠️ **Nur an eigenen Geräten verwenden.** Regulierte Funkfrequenzen — halte die lokalen 868-MHz-ISM-Regeln
 > (Duty-Cycle usw.) ein. Es werden keine Hersteller-Firmware-Binaries mitgeliefert; Reader-Images müssen von
 > einem eigenen Gerät stammen (siehe [`../firmware/`](../firmware/)).
+
+---
+
+## Screenshots — die Firmware auf einem originalen OBI C3
+
+Alles unten kommt direkt vom ESP32 — keine App, keine Cloud. Öffne `http://‹gateway-ip›/` in einem beliebigen
+Browser (Handy oder Desktop), oben rechts per Umschalter DE/EN wählen.
+
+### Dashboard — Live-Reader
+![Dashboard mit Live-Reader-Karten](images/Overview_main.png)
+
+Die Startseite. Eine Statusleiste oben zeigt **WLAN**, **MQTT** (Broker + Nachrichtenzahl + letztes Publish),
+**Radio** (869,5 MHz · SF7 · BW500), Reader-Anzahl und die Chip-Temperatur des C3. Jeder Zähler-Reader
+bekommt eine Karte mit **Bezug / Einspeisung / Leistung**, **Batterie** (mit Ladebalken), **Optik-Sensor**-
+Status und **Zuletzt gesehen**. Neue Reader erscheinen ausgegraut, bis du **Bind** drückst (oder *Bind all
+for 3 min*); ein gekoppelter Reader zeigt zusätzlich ein **Intervall setzen**-Feld und einen **Firmware
+flashen**-Auswähler direkt auf der Karte.
+
+### History — kWh & Kosten pro Tag
+![Energie-Verlauf je Reader](images/Overview_history.png)
+
+Verlauf je Reader, auf dem Gerät aus den Zählerständen berechnet. Kacheln für **Bezug gesamt**,
+**Einspeisung gesamt**, **Verbrauch heute**, **Kosten heute** (zu einem selbst gesetzten ct/kWh-Preis) und
+Einspeisung heute. Darunter Balkendiagramme **Verbrauch pro Tag** und **Einspeisung pro Tag** sowie die
+kumulierten **Bezugs-** und **Einspeise**-Zählerkurven. Alles aus den Zähler-Deltas — unabhängig vom
+Momentan-Watt-Wert.
+
+### Radio live — roher LoRa-Verkehr
+![Live-LoRa-Frame-Monitor](images/Overview_radio.png)
+
+Ein Live-Monitor jedes LoRa-Frames, das das Gateway sendet und empfängt — das 1-Hz-**Beacon** und der
+**Scan** des Masters sowie die **reconnect / energy / ack**-Frames der Reader — mit Richtung, Reader-ID,
+Command-Name+Nummer, Länge, **RSSI/SNR** und den Rohbytes. Unbezahlbar, um eine Kopplung zu beobachten oder
+die Reichweite zu debuggen. Nach id/cmd filtern, pausieren oder leeren.
+
+### Einstellungen — WLAN, MQTT(S), Login, Zeit, Firmware
+![Einstellungsseite](images/Overview_settings.png)
+
+Eine Seite für alles: **WLAN** (Scan/Verbinden oder Captive-AP), **MQTT** mit optionalem **MQTTS/TLS**,
+CA-Feld und *Discovery senden*, ein **Web-Zugang-Login** zum Sperren des Dashboards, **Zeitzone** und der
+**Firmware**-Block — *nach Updates suchen* / GitHub-Release ziehen / manuell eine `.bin` flashen, dazu ein
+**Werksreset**.
+
+### Debug — Roh-Flash-Tool & Voll-Backup
+![Flash-Debug-Hex-Tool](images/Overview_debug.png)
+
+Ein Flash-Inspektor für Power-User: Roh-Flash als Hex ansehen, **eFuses** lesen und — am wichtigsten —
+**Dump full flash**, um ein vollständiges Backup des Geräts zu ziehen (Bootloader + Partitionstabelle +
+beide OTA-App-Slots + NVS). Da die Partitionstabelle Dual-OTA ist, liegt deine **originale Stock-Firmware
+nach dem Umflashen weiter unangetastet im anderen Slot** — so holst du ein volles Stock-Backup direkt vom
+Gerät.
 
 ---
 

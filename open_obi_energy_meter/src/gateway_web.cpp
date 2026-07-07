@@ -1791,17 +1791,21 @@ document.querySelectorAll('.langtog button').forEach(b=>b.onclick=()=>{lang=b.da
 
 // ---- inline SVG line chart: series=[{name,color,pts:[[xEpoch,y]...]}] ----
 function lineChart(series,unit){
- const W=760,H=300,pl=58,pr=16,pt=16,pb=34;
+ const W=760,H=300,pl=76,pr=16,pt=16,pb=34;   // wider left margin: labels can be e.g. "83,077.992"
  let xs=[],ys=[];series.forEach(s=>s.pts.forEach(p=>{xs.push(p[0]);ys.push(p[1]);}));
  if(xs.length<2)return '<div class=empty>'+t('fewPts')+'</div>';
  let x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);
  if(x1===x0)x1=x0+1;
- let pad=(y1-y0)*0.08||Math.abs(y1)*0.05||1;y0-=pad;y1+=pad;if(Math.min(...ys)>=0&&y0<0)y0=0;if(y1===y0)y1=y0+1;
+ // decimals + padding from the REAL data span (before padding). A cumulative meter reading is huge
+ // (~83000) but the change lives in the 3rd decimal; and a flat series (e.g. export that barely moves)
+ // must NOT be inflated to 5% of its absolute value — that hid the fine values behind 1 decimal.
+ const dr=y1-y0,ydec=dr>=100?0:dr>=10?1:dr>=1?2:3;
+ let pad=dr>0?dr*0.08:0.002;y0-=pad;y1+=pad;if(Math.min(...ys)>=0&&y0<0)y0=0;if(y1===y0)y1=y0+1;
  const X=v=>pl+(v-x0)/(x1-x0)*(W-pl-pr),Y=v=>pt+(1-(v-y0)/(y1-y0))*(H-pt-pb);
  let g='';const ny=4;
  for(let i=0;i<=ny;i++){const yv=y0+(y1-y0)*i/ny,yy=Y(yv);
   g+=`<line x1=${pl} y1=${yy.toFixed(1)} x2=${W-pr} y2=${yy.toFixed(1)} stroke="#232e3c"/>`;
-  g+=`<text x=${pl-8} y=${(yy+4).toFixed(1)} text-anchor=end fill="#7d8da0" font-size=11>${nf(yv,yv>=100?0:2)}</text>`;}
+  g+=`<text x=${pl-8} y=${(yy+4).toFixed(1)} text-anchor=end fill="#7d8da0" font-size=11>${nf(yv,ydec)}</text>`;}
  const span=x1-x0,useDay=span>2*86400,nx=4;
  for(let i=0;i<=nx;i++){const xv=x0+span*i/nx,xx=X(xv);
   g+=`<text x=${xx.toFixed(1)} y=${H-12} text-anchor=middle fill="#7d8da0" font-size=11>${useDay?dm(xv):hm(xv)}</text>`;}
