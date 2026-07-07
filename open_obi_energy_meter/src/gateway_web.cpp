@@ -679,15 +679,28 @@ static void handleInterval() {
   } else server.send(400, "application/json", "{\"ok\":false}");
 }
 
+static void publishDiscovery(const Reader &r);   // fwd: publish one reader's HA discovery config (immediate rename push)
+
 // Set (or clear, empty name) a reader's friendly display name. WebServer already url-decodes arg().
 static void handleName() {
   String id = server.arg("id");
   if (id.length() != 6) { server.send(400, "application/json", "{\"ok\":false}"); return; }
   uint8_t h[3];
   for (int i = 0; i < 3; i++) h[i] = (uint8_t)strtol(id.substring(i * 2, i * 2 + 2).c_str(), nullptr, 16);
-  if (gw_set_reader_name(h, server.arg("name").c_str()))
+  if (gw_set_reader_name(h, server.arg("name").c_str())) {
+    // Push the new name to HA right away instead of waiting for the next publish cycle:
+    // re-publish this reader's discovery config so the device is renamed immediately.
+    if (mqtt.connected())
+      for (int i = 0; i < MAX_READERS; i++) {
+        Reader &r = readers[i];
+        if (r.used && r.haveData && !memcmp(r.handle, h, 3)) {
+          publishDiscovery(r);
+          r.mqttDiscovered = true;    // already up to date; skip the redundant re-announce in mqttService
+          break;
+        }
+      }
     server.send(200, "application/json", "{\"ok\":true}");
-  else server.send(400, "application/json", "{\"ok\":false}");
+  } else server.send(400, "application/json", "{\"ok\":false}");
 }
 
 static void handleMqttCfg() {
@@ -2211,6 +2224,8 @@ static void publishDiscovery(const Reader &r) {
        "{{ value_json['snr'] }}", true},
     {"lastseen", "Last seen", "duration",        "s",   "measurement",
        "{{ value_json['age_s'] }}", true},
+    {"id",       "ID",        nullptr,           nullptr, nullptr,   // original 3-byte LoRa id; stays visible after a rename
+       "{{ value_json['id'] }}", true},
     {"uuid",     "UUID",      nullptr,           nullptr, nullptr,
        "{% if value_json['uuid'] %}{{ value_json['uuid'] }}{% endif %}", true},
     {"type",     "Type",      nullptr,           nullptr, nullptr,
@@ -2330,7 +2345,7 @@ static void publishGatewayDiscovery() {
 // Remove a reader's discovery entities from HA by publishing empty retained configs.
 // Mirrors the topics created by publishDiscovery() — keep the two lists in sync.
 static void clearDiscovery(const String &uid) {
-  static const char *sensors[]  = {"import","export","power","battery","rssi","snr","lastseen","uuid","type","firmware","hardware"};
+  static const char *sensors[]  = {"import","export","power","battery","rssi","snr","lastseen","id","uuid","type","firmware","hardware"};
   static const char *binaries[] = {"infrared","paired","legacy","bootloader"};
   for (const char *k : sensors)  { String t = "homeassistant/sensor/"        + uid + "/" + k + "/config"; mqtt.publish(t.c_str(), "", true); }
   for (const char *k : binaries) { String t = "homeassistant/binary_sensor/" + uid + "/" + k + "/config"; mqtt.publish(t.c_str(), "", true); }
