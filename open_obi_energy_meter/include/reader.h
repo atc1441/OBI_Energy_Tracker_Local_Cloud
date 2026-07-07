@@ -32,6 +32,7 @@ struct Reader {
   // config
   uint16_t setInterval = 0;      // last upload-interval requested (shown in UI)
   uint8_t  intervalTx  = 0;      // remaining cmd-14 retransmits to send
+  char     name[25] = {0};       // user-set friendly name ("" = unset); persisted in NVS ns "obiname"
   bool     mqttDiscovered = false;  // HA discovery config already published (reset on each MQTT connect)
 };
 
@@ -46,6 +47,7 @@ bool gw_delete_reader(const uint8_t handle[3]);                       // drop a 
 uint32_t gw_uptime_s();
 // reader pairing gating (opt-in): a reader is only bound/keyed once assigned to this gateway
 bool gw_assign_reader(const uint8_t handle[3], bool on);              // accept (or drop) a reader onto this gateway
+void gw_set_reader_name(const uint8_t handle[3], const char *name);   // set ("" clears) the friendly name
 void gw_pair_all(uint16_t seconds);                                   // open a window that auto-assigns every reader
 uint32_t gw_pair_remaining_s();                                       // seconds left in the auto-pair window (0 = off)
 
