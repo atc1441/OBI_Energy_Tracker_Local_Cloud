@@ -276,6 +276,8 @@ h1{font-size:16px;margin:0;font-weight:650}.sub{color:var(--dim);font-size:12px}
 .meta{color:var(--dim);font-size:12px;font-family:var(--mono)}
 .del{margin-left:auto;background:transparent;border:1px solid var(--line);color:var(--dim);border-radius:7px;padding:3px 9px;cursor:pointer;font-size:13px;line-height:1}
 .del:hover{border-color:var(--red);color:var(--red)}
+.ren{background:transparent;border:1px solid var(--line);color:var(--dim);border-radius:7px;padding:3px 8px;cursor:pointer;font-size:12px;line-height:1}
+.ren:hover{border-color:var(--accent);color:var(--accent)}
 .uuid{font-family:var(--mono);font-size:11.5px;color:var(--dim);word-break:break-all;margin:7px 0 13px;
  padding:6px 9px;background:#0d131b;border-radius:8px;border:1px solid #1a222d}
 .uuid b{color:#9fb0c4;letter-spacing:.5px}
@@ -379,6 +381,7 @@ const T={
   vnote:'Die Firmware-Version MUSS im Dateinamen stehen, z.B. reader_v55.bin.',
   novers:'Keine Version im Dateinamen gefunden.\nBitte die richtige Firmware-Version in den Dateinamen schreiben, z.B. reader_v55.bin',
   vmiss:'Version fehlt im Dateinamen',
+  ren:'Name ändern',renq:'Name für Reader %i (leer = Standard):',
   samever:'Der Reader läuft bereits auf v%v — er akzeptiert dieselbe Version nicht (kein Reflash).\n\nTrotzdem versuchen?'},
  en:{sub:'869.5 MHz · SF7 · reading your meters directly',wifi:'WiFi',mqtt:'MQTT',radio:'Radio',readers:'Readers',
   offline:'offline',fw:'Firmware',batt:'Battery',opt:'Sensor',active:'active',nosig:'no signal',
@@ -400,6 +403,7 @@ const T={
   vnote:'The firmware version MUST be in the filename, e.g. reader_v55.bin.',
   novers:'No version found in the filename.\nPut the correct firmware version in the filename, e.g. reader_v55.bin',
   vmiss:'version missing in filename',
+  ren:'Rename',renq:'Name for reader %i (empty = default):',
   samever:'The reader is already on v%v — it will not accept the same version (no reflash).\n\nTry anyway?'}};
 let lang=localStorage.getItem('lang')||'de',L=T[lang];
 function setLang(x){lang=x;L=T[x];localStorage.setItem('lang',x);applyLang();tick();}
@@ -433,7 +437,7 @@ function bcol(p){return p>50?'var(--accent)':p>20?'var(--amber)':'var(--red)'}
 function fmt(s){const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return (d?d+'d ':'')+(h?h+'h ':'')+m+'m'}
 let cfgLoaded=false;
 async function tick(){try{
- const st=await (await fetch('/api/status')).json(), rs=await (await fetch('/api/readers')).json();
+ const st=await (await fetch('/api/status')).json(), rs=await (await fetch('/api/readers')).json();_rs=rs;
  $('#logout_btn').style.display=(st.auth&&st.auth.enabled)?'':'none';   // only show logout when a login is required
  $('#sub').textContent='OBI Gateway '+(st.gw||st.gwid).toUpperCase();
  $('#gw').textContent=st.gwid_ascii+' · '+(st.mac||st.gwid);
@@ -458,11 +462,13 @@ async function tick(){try{
 function card(r){
  const p=Math.max(0,Math.min(100,Math.round((r.battery_mV-2400)/8)));
  const sens=r.infrared?`<span class="dot on"></span>${L.active}`:`<span class="dot idle"></span>${L.nosig}`;
+ const nm=r.name?esc(r.name):'';
  return `<div class="card${r.assigned?'':' pending'}">
-  <div class="hd"><span class="id">${r.id.toUpperCase()}</span>
+  <div class="hd"><span class="id">${nm||r.id.toUpperCase()}</span>
+   <button class="ren" onclick="renameRd('${r.id}')" title="${L.ren}">✎</button>
    <span class="tag ${r.type}">${r.type}</span>
    ${r.assigned?'':`<span class="tag pend">${L.pending}</span>`}
-   <span class="meta">FW ${r.softver} · HW ${r.hardver}${r.legacy?' · legacy':''} · ${r.rssi} dBm · ${r.snr} dB${r.paired?' · 🔒':''}</span>
+   <span class="meta">${nm?r.id.toUpperCase()+' · ':''}FW ${r.softver} · HW ${r.hardver}${r.legacy?' · legacy':''} · ${r.rssi} dBm · ${r.snr} dB${r.paired?' · 🔒':''}</span>
    <button class="del" onclick="delReader('${r.id}')" title="${L.del}">✕</button></div>
   <div class="uuid">${r.uuid?('<b>UUID</b> '+r.uuid):L.uuidwait}</div>
   ${r.bootloader?`<div class="boot">⚙ ${L.boot}</div>`:''}
@@ -485,6 +491,12 @@ function card(r){
   ${r.assigned&&!r.has_data&&!r.bootloader?`<div class="hint">⚠ ${L.irhint}</div>`:''}
  </div>`;
 }
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let _rs=[];
+async function renameRd(id){const r=_rs.find(x=>x.id===id)||{};
+ let v=prompt(L.renq.replace('%i',id.toUpperCase()),r.name||'');if(v===null)return;
+ v=v.trim().slice(0,24);
+ await fetch('/api/name?id='+id+'&name='+encodeURIComponent(v),{method:'POST'});tick();}
 async function setIv(id){const v=$('#iv_'+id).value;if(!v)return;await fetch('/api/interval?id='+id+'&seconds='+v,{method:'POST'});tick();}
 async function assignRd(id,on){await fetch('/api/assign?id='+id+'&on='+on,{method:'POST'});tick();}
 async function pairAll(){await fetch('/api/pairall',{method:'POST'});tick();}
