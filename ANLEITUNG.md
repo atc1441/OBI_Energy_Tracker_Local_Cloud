@@ -8,14 +8,16 @@ Schritt für Schritt abarbeiten. Alle Keys/Zertifikate hier sind Platzhalter —
 ---
 
 ## Was du brauchst
-- Die **Bridge** (ESP32‑C3 Gateway) und dein WLAN.
+- Die **Bridge** (ESP32‑C3 Gateway), den Reader zum koppeln und dein WLAN.
 - Einen **Rechner im selben LAN** (dein Broker‑Host), Port **8883** offen.
 - **Python 3** und einmalig:
   ```bash
   pip install cryptography bleak paho-mqtt
   ```
+  Diesen MQTT-broker benutzt Du auf Deinem Rechner während der Einrichtung, um vom der Bridge zu lesen / darauf zu schreiben.
 - Bluetooth am Rechner (für den BLE‑Push) **oder** ein Handy/Browser mit Web‑Bluetooth.
 - Den **BLE‑Namen** des Geräts: `OBI-XXXXXX` (mit einem beliebigen BLE‑Scanner auslesen — er steht *nicht* auf dem Gerät).
+- Ein heyObi-Konto **oder** ein UART interface an Deinem Rechner
 
 ---
 
@@ -65,7 +67,7 @@ und einen **Reader koppeln**:
 python ble_provision.py --config pki/ble_config.json --key <DEIN-TEA-KEY> --unbind \
     --ssid <dein-wlan> --password <dein-wlan-passwort>
 ```
-Das Reader‑Koppeln läuft **standardmäßig mit** (es muss — BLE geht aus, sobald das Gerät in Betrieb ist,
+Der Reader muss eingeschaltet und in der Nähe der Bridge sein; das Reader‑Koppeln läuft **standardmäßig mit** (es muss — BLE geht aus, sobald das Gerät in Betrieb ist,
 und es gibt **keinen MQTT‑Weg, einen Reader hinzuzufügen**, [07](de/07-reader-koppeln.md)). Das Tool scannt
 und zeigt dann eine **Auswahl der gefundenen Reader**, aus der du den richtigen wählst:
 ```
@@ -113,22 +115,24 @@ Ab jetzt läuft **alles über deinen Server** (Status, Konfig, OTA).
 
 ---
 
-## Optional — Eigene Firmware flashen
+## Optional Schritt 6 — Eigene Firmware flashen
 Direktes Flashen über UART/JTAG geht **nicht** (Bootloader per eFuse gesperrt). Aber das MQTT‑OTA ist
 **unsigniert**, also flasht dein Gerät jedes Image aus *deiner* Cloud:
 ```bash
 python mqtts_server.py --host 0.0.0.0 --port 8883 --ota-firmware fw.bin
 ```
+```fw.bin``` ist Platzhalter für Dein gewähltes Firmware image. Das aktuellste hat ein wartungsfreundliches **Webinterface** mit dem Du z. B. den OBI Energy Tracker einfach mit Deinem **Home Assistant** verbinden kannst. Herunterladen bei [Releases](/releases).
+
 Der Broker schickt den Offer, das Gerät zieht das Image in 512‑Byte‑Chunks und rebootet bei 100 %.
 Stock‑Image zum Flashen holst du mit `tools/obi_ota_download.py`.
-⚠️ Das flasht die Bridge wirklich neu — vorher das aktuelle Image sichern. Details:
+⚠️ Das flasht die Bridge wirklich neu — es ist möglich, das aktuelle Image sichern. Details:
 [04 · Eigene Firmware flashen](de/04-eigene-cloud.md#eigene-firmware-flashen) ·
 [Protokoll](de/03-cloud-api.md#ota).
 
 ---
 
 ## Troubleshooting
-- **`bad certificate` / mbedTLS `-0x2700`:** Nach **jedem** `gen_certs.py` entsteht eine **neue CA** →
+- **`bad certificate` / mbedTLS `-0x2700`:** Nach **jedem** `gen_certs.py` entsteht eine **neue CA** → 
   Schritt 4 (BLE‑Push) **erneut** ausführen, **dann** den Server neu starten. Server‑Cert muss die IP
   enthalten, zu der das Gerät verbindet (macht `gen_certs.py --host` automatisch).
 - **Gerät verbindet nicht:** WLAN korrekt gesetzt? Firewall auf **8883** offen? Broker‑Host im selben Netz?
