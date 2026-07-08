@@ -125,7 +125,7 @@ python mqtts_server.py --host 0.0.0.0 --port 8883 --ota-firmware fw.bin
 
 Der Broker schickt den Offer, das Gerät zieht das Image in 512‑Byte‑Chunks und rebootet bei 100 %.
 Stock‑Image zum Flashen holst du mit `tools/obi_ota_download.py`.
-⚠️ Das flasht die Bridge wirklich neu — vorher das aktuelle Image sichern. Details:
+⚠️ Das flasht die Bridge wirklich neu — es ist möglich, das aktuelle Image sichern. Details:
 [04 · Eigene Firmware flashen](de/04-eigene-cloud.md#eigene-firmware-flashen) ·
 [Protokoll](de/03-cloud-api.md#ota).
 
