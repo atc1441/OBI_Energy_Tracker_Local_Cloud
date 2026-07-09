@@ -1,66 +1,67 @@
-# reader_sdk — C-Hook-Framework für die BAT32G135-Reader-Firmware
+# reader_sdk — a C-hook framework for the BAT32G135 reader firmware
 
-Ziel: statt jede Änderung an der (quelloffenen? nein, closed) Vendor-Firmware
-per Hand in Thumb-1-Opcodes zu übersetzen, schreiben wir den Hook-Code in C,
-kompilieren ihn mit dem echten `arm-none-eabi-gcc` (Cortex-M0+/ARMv6-M,
-Thumb-1, kein FPU) und splicen das Ergebnis in die Firmware.
+> ➡️ **Deutsche Version: [de/README.md](de/README.md)**
 
-## Ordnerlayout
+Goal: instead of hand-translating every change to the (closed-source) vendor
+firmware into Thumb-1 opcodes, write the hook code in C, compile it with a
+real `arm-none-eabi-gcc` (Cortex-M0+/ARMv6-M, Thumb-1, no FPU), and splice the
+result into the firmware.
 
-- `reader_stock_v57.bin` — unveränderte Original-Firmware (Quelle für
-  `splice.py`).
-- `reader_modded_v87.bin` — fertiges Ergebnis: nur der int24-Fix
-  (SML TL=0x54), Softver auf 87 gesetzt, IDA-verifiziert. Das ist die
-  einzige Datei, die zum Flashen gebraucht wird.
+## Folder layout
+
+- `reader_stock_v57.bin` — unmodified original firmware (the source
+  `splice.py` patches).
+- `reader_modded_v87.bin` — finished result: just the int24 fix (SML
+  TL=0x54), softver set to 87, IDA-verified. This is the only file you
+  actually need to flash.
 - `hooks.c`, `entry.S`, `link.ld`, `vendor.h`, `build.sh`, `splice.py` —
-  Quelltext und Build-Skripte, liegen direkt hier.
-- `build/` — NUR kompilierte Zwischendateien (`hooks.o`, `entry.o`,
-  `hooks.elf`, `hooks.map`, `hooks.sym`, `hooks.bin`). `build.sh` legt den
-  Ordner bei Bedarf selbst an.
+  source and build scripts, live directly here.
+- `build/` — ONLY compiled intermediate files (`hooks.o`, `entry.o`,
+  `hooks.elf`, `hooks.map`, `hooks.sym`, `hooks.bin`). `build.sh` creates
+  the folder itself if needed.
 
-## Bausteine
+## Building blocks
 
-- `hooks.c`       — die eigentlichen Hook-Funktionen (C, AAPCS, normale
-                    Prologe/Epiloge — der Compiler kümmert sich darum).
-- `entry.S`        — winzige Glue-Trampoline (Handassembler, wenige Zeilen
-                    pro Hook). Diese respektieren die Register-Konvention der
-                    jeweiligen Call-Site in der Vendor-Firmware (z.B. "R4 =
-                    Ausgabe-Zeiger, R0 = Rückgabewert, POP{R3-R7,PC} am Ende")
-                    und rufen dann ganz normal per `bl` in die C-Funktion.
-                    Neue Hooks brauchen hier nur ein paar Zeilen.
-- `link.ld`        — Linker-Script, das den Code an eine feste Adresse im
-                    freien Flash-Bereich hinter dem jeweiligen Firmware-Image
-                    legt (aktuell: reader_meter_v57.bin, 44552 B -> Basis
+- `hooks.c`       — the actual hook functions (plain C, AAPCS, normal
+                    prologues/epilogues — the compiler handles those).
+- `entry.S`        — tiny glue trampolines (hand-written asm, a few lines
+                    per hook). These adapt the specific vendor call site's
+                    register convention (e.g. "R4 = output pointer, R0 =
+                    return value, ends with `pop {r3-r7,pc}`") and then do
+                    a normal `bl` into the C function. A new hook only
+                    needs a few lines here.
+- `link.ld`        — linker script that places the code at a fixed address
+                    in the free flash space right after the firmware image
+                    (currently: reader_meter_v57.bin, 44552 B -> base
                     0x4000 + 44552 = 0xEE08).
-- `build.sh`       — kompiliert+linkt zu `hooks.elf`, extrahiert `hooks.bin`
-                    (roher Maschinencode) und `hooks.map`/`hooks.sym`
-                    (Symboladressen für splice.py).
-- `splice.py`       — hängt hooks.bin ans Firmware-Image an und patcht die
-                    Call-Sites (BL-Encoding wie bisher programmatisch
-                    berechnet) auf die Einsprungpunkte aus entry.S.
+- `build.sh`       — compiles+links to `hooks.elf`, extracts `hooks.bin`
+                    (raw machine code) and `hooks.map`/`hooks.sym` (symbol
+                    addresses for splice.py).
+- `splice.py`       — appends hooks.bin to the firmware image and patches
+                    the call sites (BL encoding computed programmatically,
+                    same as before) to jump into the entry points from
+                    entry.S.
 
-## Ablauf für einen neuen Hook
+## Adding a new hook
 
-1. Funktion in `hooks.c` schreiben (normales C, keine libc außer was in
-   `vendor.h` deklariert ist).
-2. Falls die Call-Site eine Vendor-spezifische Register-Konvention hat
-   (nicht AAPCS-Standardaufruf): kleinen Trampolin-Stub in `entry.S`
-   ergänzen, der die Register in AAPCS-Argumente (R0,R1,R2,R3) umlegt, `bl`
-   in die C-Funktion macht, und danach die von der Call-Site erwartete
-   Rückkehr-Sequenz (z.B. `pop {r3-r7,pc}`) ausführt.
-3. In `splice.py` unter `HOOKS = [...]` die Call-Site-Adresse + den Namen
-   des entry.S-Symbols eintragen.
-4. `./build.sh && python splice.py` — Ergebnis ist eine neue,
-   gepatchte `.bin`.
-5. **Immer** per IDA (`idalib_open` + `disasm`) gegenprüfen, bevor geflasht
-   wird — das Splicen selbst validiert nur Byte-Encoding, nicht Semantik.
+1. Write the function in `hooks.c` (plain C, no libc other than what
+   `vendor.h` declares).
+2. If the call site doesn't use plain AAPCS (e.g. a vendor-specific
+   register convention): add a small trampoline stub in `entry.S` that
+   moves the registers into AAPCS arguments (R0,R1,R2,R3), `bl`s into the
+   C function, then performs whatever return sequence the call site
+   expects (e.g. `pop {r3-r7,pc}`).
+3. Add the call-site address + the entry.S symbol name to `HOOKS = [...]`
+   in `splice.py`.
+4. `./build.sh && python splice.py` — produces a new, patched `.bin`.
+5. **Always** cross-check with IDA (`idalib_open` + `disasm`) before
+   flashing — splicing itself only validates byte encoding, not semantics.
 
-## Warum ein Glue-Stub statt direktem BL in die C-Funktion?
+## Why a glue stub instead of a direct BL into the C function?
 
-Die Vendor-Firmware benutzt an Patch-Stellen oft KEINE AAPCS-Konvention
-(z.B. Rückgabewert nicht in R0 sondern über einen Zeiger in R4, oder ein
-gemeinsamer Funktions-Epilog `pop {r3-r7,pc}` statt `bx lr`). Ein Glue-Stub
-von wenigen Zeilen bildet das sauber ab, während der eigentliche Hook (die
-Logik) ganz normales, vom Compiler geprüftes C bleibt. Das hält den
-handgeschriebenen Assembler-Anteil minimal und lokal auf einen Punkt pro
-Hook beschränkt.
+The vendor firmware's patch sites often do NOT follow plain AAPCS (e.g. the
+return value goes through a pointer in R4 instead of R0, or a shared
+function epilogue uses `pop {r3-r7,pc}` instead of `bx lr`). A short glue
+stub captures that cleanly, while the actual hook logic stays plain,
+compiler-checked C. This keeps the hand-written assembly minimal and
+confined to one spot per hook.

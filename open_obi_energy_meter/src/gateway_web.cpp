@@ -205,6 +205,11 @@ static String statusJson() {
   { float t = gwTempC(); j += ",\"temp_c\":" + (isnan(t) ? String("null") : String(t, 1)); }
   j += ",\"pair_remaining_s\":" + String(gw_pair_remaining_s());
   j += ",\"uptime_s\":" + String(gw_uptime_s());
+  // free_heap = total free (can be fragmented); max_alloc_heap = largest single block actually
+  // allocatable right now. A reader-firmware OTA needs ONE contiguous malloc for the whole image
+  // (see gw_ota_begin) -- max_alloc_heap is what decides whether that succeeds, not free_heap.
+  j += ",\"free_heap\":" + String(ESP.getFreeHeap());
+  j += ",\"max_alloc_heap\":" + String(ESP.getMaxAllocHeap());
   { time_t tnow = time(nullptr); struct tm lt; localtime_r(&tnow, &lt); char tb[24];
     strftime(tb, sizeof tb, "%Y-%m-%d %H:%M:%S", &lt);
     j += ",\"tz\":" + jstr(g_tz) + ",\"ntp\":" + jstr(g_ntp) + ",\"time\":\"" + String(tb) + "\",\"time_valid\":" + String(tnow > 1735689600 ? "true" : "false"); }
@@ -375,7 +380,9 @@ const T={
   none:'Noch keine Reader',waiting:'Warte auf einen Reader — Reader-Taste ~10 s halten (echtes Gateway aus).',
   uuidwait:'UUID noch unbekannt — Reader per Taste neu verbinden',
   irhint:'Noch keine Messwerte — Reader-Taste einmal kurz drücken, um die Infrarot-Lesung zu starten.',
-  uptime:'Laufzeit',mqcfg:'MQTT-Einstellungen',host:'Server',port:'Port',user:'Benutzer',pass:'Passwort',
+  uptime:'Laufzeit',heapfree:'Speicher frei',
+  heapwarn:'⚠ Firmware (%s) ist größer als der aktuell freie zusammenhängende Speicherblock (%s) — der Flash-Vorgang wird vermutlich fehlschlagen.\n\nDeaktiviere kurz MQTT (weiter unten), das gibt genug Speicher frei — danach erneut versuchen.',
+  mqcfg:'MQTT-Einstellungen',host:'Server',port:'Port',user:'Benutzer',pass:'Passwort',
   topic:'Basis-Topic',save:'Speichern',disc:'Discovery senden',discok:'Discovery gesendet ✓',discno:'MQTT nicht verbunden',con:'verbunden',dis:'getrennt',lastpub:'zuletzt gesendet',
   msgs:'Nachr.',never:'noch nichts',disabled:'deaktiviert',ago:'her',
   cmdhint:'Intervall per MQTT setzen (Sekunden als Payload):',
@@ -397,7 +404,9 @@ const T={
   none:'No readers yet',waiting:'Waiting for a reader — hold its button ~10 s (real gateway off).',
   uuidwait:'UUID unknown yet — reconnect the reader with its button',
   irhint:'No readings yet — tap the reader button once to start its infrared readout.',
-  uptime:'uptime',mqcfg:'MQTT settings',host:'Server',port:'Port',user:'User',pass:'Password',
+  uptime:'uptime',heapfree:'free heap',
+  heapwarn:'⚠ Firmware (%s) is larger than the currently free contiguous memory block (%s) — flashing will likely fail.\n\nTemporarily disable MQTT (further down), that frees up enough memory — then try again.',
+  mqcfg:'MQTT settings',host:'Server',port:'Port',user:'User',pass:'Password',
   topic:'Base topic',save:'Save',disc:'Send discovery',discok:'Discovery sent ✓',discno:'MQTT not connected',con:'connected',dis:'disconnected',lastpub:'last publish',
   msgs:'msgs',never:'nothing yet',disabled:'disabled',ago:'ago',
   cmdhint:'Set interval via MQTT (seconds as payload):',
@@ -439,13 +448,16 @@ function val(v,unit){return v===null?`<span class="v na">–</span>`:`<span clas
 function valE(v){return v===null?`<span class="v na">–</span>`:`<span class="v">${(v/1000).toLocaleString(lang=='de'?'de-DE':'en-US',{minimumFractionDigits:3,maximumFractionDigits:3})} <small>kWh</small></span>`}
 function bcol(p){return p>50?'var(--accent)':p>20?'var(--amber)':'var(--red)'}
 function fmt(s){const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return (d?d+'d ':'')+(h?h+'h ':'')+m+'m'}
+function fmtKB(n){return n==null?'?':(n/1024).toFixed(0)+' KB'}
 let cfgLoaded=false;
+let lastStatus=null;   // cached /api/status, so file-picker checks don't need their own fetch
 async function tick(){try{
  const st=await (await fetch('/api/status')).json(), rs=await (await fetch('/api/readers')).json();_rs=rs;
+ lastStatus=st;
  $('#logout_btn').style.display=(st.auth&&st.auth.enabled)?'':'none';   // only show logout when a login is required
  $('#sub').textContent='OBI Gateway '+(st.gw||st.gwid).toUpperCase();
  $('#gw').textContent=st.gwid_ascii+' · '+(st.mac||st.gwid);
- $('#ft').textContent=L.uptime+' '+fmt(st.uptime_s)+(st.fw?' · fw '+st.fw.version+' ('+st.fw.target+')':'');
+ $('#ft').textContent=L.uptime+' '+fmt(st.uptime_s)+' · '+L.heapfree+' '+fmtKB(st.max_alloc_heap)+(st.fw?' · fw '+st.fw.version+' ('+st.fw.target+')':'');
  const q=st.mqtt;
  const mqp=!q.enabled?`<span class="dot idle"></span>${L.disabled}`
   :q.connected?`<span class="dot on"></span>${q.host} · ${q.pub_count} ${L.msgs} · ${q.last_pub_s<0?L.never:L.lastpub+' '+q.last_pub_s+'s '+L.ago}`
@@ -492,7 +504,7 @@ function card(r){
   </div>
   ${r.assigned?`<div class="ctrl"><input type="number" id="iv_${r.id}" placeholder="${L.sec}" min="1" value="${r.interval||''}">
    <button class="g" onclick="setIv('${r.id}')">${L.setiv}</button>
-   <input type="file" id="fw_${r.id}" accept=".bin" style="flex:1 1 200px;min-width:170px;padding:6px 8px;font-size:12px">
+   <input type="file" id="fw_${r.id}" accept=".bin" onchange="fwCheck('${r.id}')" style="flex:1 1 200px;min-width:170px;padding:6px 8px;font-size:12px">
    <button class="g" onclick="doOta('${r.id}',${r.softver||0})">${L.flash}</button>
    <span class="meta" id="op_${r.id}"></span></div>`
   :`<div class="ctrl"><button class="b" onclick="assignRd('${r.id}',1)">${L.addrd}</button>
@@ -514,8 +526,21 @@ async function pairAll(){await fetch('/api/pairall',{method:'POST'});tick();}
 async function delReader(id){if(!confirm(L.delq.replace('%i',id.toUpperCase())))return;
  await fetch('/api/delete?id='+id,{method:'POST'});tick();}
 let uploading=false;
+// the OTA buffer is ONE contiguous malloc() for the whole image (see gw_ota_begin) -- max_alloc_heap
+// (largest allocatable block, not just total free heap) is what decides whether that succeeds. MQTT's
+// TLS session alone can hold enough heap to push a ~45 KB reader image over the edge.
+function heapWarn(size){
+ if(!lastStatus||lastStatus.max_alloc_heap==null)return null;
+ return size>lastStatus.max_alloc_heap?L.heapwarn.replace('%s',fmtKB(size)).replace('%s',fmtKB(lastStatus.max_alloc_heap)):null;
+}
+function fwCheck(id){
+ const f=$('#fw_'+id).files[0], w=$('#op_'+id); if(!w)return;
+ const warn=f?heapWarn(f.size):null;
+ w.textContent=warn||''; w.style.color=warn?'var(--red)':'';
+}
 async function doOta(id,cur){
  const f=$('#fw_'+id).files[0]; if(!f){$('#op_'+id).textContent=L.pick;return;}
+ const hw=heapWarn(f.size); if(hw&&!confirm(hw))return;
  // version comes from the filename (…v55.bin); the reader needs it to decide whether to reflash.
  const vm=f.name.match(/v(\d+)/);
  if(!vm){ alert(L.novers); $('#op_'+id).textContent=L.vmiss; return; }
