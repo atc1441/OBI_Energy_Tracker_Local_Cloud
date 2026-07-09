@@ -18,10 +18,12 @@ on:
     branches: [ main ]
     paths:
       - 'open_obi_energy_meter/**'
+      - 'reader_firmware_mod/**'
       - '.github/workflows/build.yml'
   pull_request:
     paths:
       - 'open_obi_energy_meter/**'
+      - 'reader_firmware_mod/**'
       - '.github/workflows/build.yml'
   release:
     types: [ published ]
@@ -113,9 +115,37 @@ jobs:
           path: open_obi_energy_meter/dist/*.bin
           if-no-files-found: error
 
+  build-reader:
+    name: Build reader firmware mod
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install arm-none-eabi-gcc
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
+
+      - name: Build + splice
+        working-directory: reader_firmware_mod
+        run: |
+          bash build.sh
+          python3 splice.py
+
+      - name: Stage binary
+        working-directory: reader_firmware_mod
+        run: |
+          mkdir -p dist
+          cp reader_modded_v87.bin dist/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reader_firmware_mod
+          path: reader_firmware_mod/dist/*.bin
+          if-no-files-found: error
+
   release:
     name: Publish release
-    needs: [ version, build ]
+    needs: [ version, build, build-reader ]
     # Auto-release on every push to main; also attach to a manually published release.
     # PRs and plain workflow_dispatch runs only produce artifacts (no release).
     if: >-
