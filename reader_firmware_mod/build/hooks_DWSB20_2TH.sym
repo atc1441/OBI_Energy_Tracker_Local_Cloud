@@ -1,0 +1,6 @@
+0000ee08 T entry_int24
+0000ee12 T entry_power_correct
+0000ee20 T entry_power_correct2
+0000ee30 T hook_decode_int24
+0000ee68 T hook_power_correct
+0000ee6a T hook_power_correct2

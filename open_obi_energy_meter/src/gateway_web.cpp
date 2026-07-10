@@ -1820,7 +1820,7 @@ td.mono{font-family:var(--mono)}
 const $=id=>document.getElementById(id);
 const main=$('main'),sel=$('rsel');
 let readers=[],cur=null;
-const C={imp:'#31d07a',exp:'#5aa9ff',day:'#e3b341',pow:'#f0616d'};
+const C={imp:'#31d07a',exp:'#5aa9ff',day:'#e3b341',pow:'#f0616d',calc:'#3ddbd9'};
 let lang=localStorage.getItem('obilang');if(lang!=='en'&&lang!=='de')lang=(navigator.language||'de').slice(0,2)==='de'?'de':'en';
 const T={
  de:{reload:'neu laden',clearT:'Historie dieses Readers löschen',priceT:'Strompreis – gilt global für alle Reader',
@@ -1834,12 +1834,13 @@ const T={
   cDayExp:'Einspeisung pro Tag',capDayExp:'kWh/Tag per Solar ins Netz eingespeist — aus den Änderungen des Export-Zählerstands.',
   cImp:'Zählerstand-Verlauf · Import (Bezug)',capImp:'Kumuliert aus dem Netz bezogener Strom (kWh) — der Hauptwert.',
   cExp:'Zählerstand-Verlauf · Export (Solar-Einspeisung)',capExp:'Kumuliert per Solar ins Netz eingespeister Strom (kWh) — eigene Skala.',
-  cPow:'Leistungsverlauf (W)',capPow:'Momentanleistung über die Zeit — negative Werte bedeuten Einspeisung ins Netz.',
+  cPow:'Leistungsverlauf (W)',capPow:'Momentanleistung über die Zeit — negative Werte bedeuten Einspeisung ins Netz. Die gestrichelte Linie ist die aus den Zählerstand-Änderungen (Import/Export) berechnete Durchschnittsleistung — nützlich wenn der Zähler falsche/unplausible Watt-Werte liefert (z. B. fehlerhafte 24-Bit-Vorzeichenerweiterung bei negativer Leistung).',
+  legPow:'Leistung (Zähler)',legCalc:'Leistung berechnet (Import/Export)',
   cTbl:'Tages-Tabelle',capTbl:'Verbrauch (Import), Kosten und Einspeisung (Export) je Tag.',
   thDay:'Tag',thCons:'Verbrauch kWh',thCost:'Kosten €',thExp:'Export kWh',
   cHour:'Stundenwerte',capHour:'Verbrauch und Einspeisung je Stunde — die kWh-Menge in der jeweiligen Stunde aus den Zählerstand-Änderungen.',thHour:'Stunde',
-  cWatt:'Messwerte (Watt-Tabelle)',capWatt:'Rohwerte je Messpunkt. Die Leistung (W) kommt nicht immer vom Zähler — fehlt sie, steht „—".',
-  thTime:'Zeit',thPow:'Leistung W',thImpK:'Import kWh',thDelta:'Δ Import kWh',thExpK:'Export kWh',thDeltaExp:'Δ Export kWh',
+  cWatt:'Messwerte (Watt-Tabelle)',capWatt:'Rohwerte je Messpunkt. „Leistung W" kommt direkt vom Zähler und fehlt manchmal oder ist bei manchen Zählern im negativen Bereich fehlerhaft; „Ø Leistung W (berechnet)" ist stattdessen aus der Änderung von Import/Export zwischen zwei Messpunkten berechnet und damit zuverlässiger.',
+  thTime:'Zeit',thPow:'Leistung W',thPowCalc:'Ø Leistung W (berechnet)',thImpK:'Import kWh',thDelta:'Δ Import kWh',thExpK:'Export kWh',thDeltaExp:'Δ Export kWh',
   fewPts:'zu wenige Messpunkte für einen Verlauf',noDay:'noch keine Tageswerte — bitte etwas Zeit sammeln',
   clearC:r=>'Gespeicherte Historie für '+r+' löschen?'},
  en:{reload:'reload',clearT:"clear this reader's history",priceT:'Electricity price – global for all readers',
@@ -1853,12 +1854,13 @@ const T={
   cDayExp:'Feed-in per day',capDayExp:'kWh/day fed into the grid (solar) — from the export-counter changes.',
   cImp:'Meter reading history · Import (consumption)',capImp:'Cumulative energy drawn from the grid (kWh) — the main value.',
   cExp:'Meter reading history · Export (solar feed-in)',capExp:'Cumulative solar energy fed into the grid (kWh) — own scale.',
-  cPow:'Power history (W)',capPow:'Instantaneous power over time — negative values mean feeding into the grid.',
+  cPow:'Power history (W)',capPow:'Instantaneous power over time — negative values mean feeding into the grid. The dashed line is the average power calculated from the import/export counter changes — useful when the meter reports wrong/implausible power values (e.g. broken 24-bit sign extension for negative power).',
+  legPow:'Power (meter)',legCalc:'Power calculated (import/export)',
   cTbl:'Daily table',capTbl:'Consumption (import), cost and feed-in (export) per day.',
   thDay:'Day',thCons:'Consumption kWh',thCost:'Cost €',thExp:'Export kWh',
   cHour:'Hourly values',capHour:'Consumption and feed-in per hour — the kWh amount within each hour from the meter-counter changes.',thHour:'Hour',
-  cWatt:'Measurements (Watt table)',capWatt:'Raw values per sample. Power (W) is not always sent by the meter — if missing it shows "—".',
-  thTime:'Time',thPow:'Power W',thImpK:'Import kWh',thDelta:'Δ import kWh',thExpK:'Export kWh',thDeltaExp:'Δ export kWh',
+  cWatt:'Measurements (Watt table)',capWatt:'Raw values per sample. "Power W" comes directly from the meter and is sometimes missing or wrong in the negative range on some meters; "Avg power W (calc)" is instead computed from the import/export change between two samples and is therefore more reliable.',
+  thTime:'Time',thPow:'Power W',thPowCalc:'Avg power W (calc)',thImpK:'Import kWh',thDelta:'Δ import kWh',thExpK:'Export kWh',thDeltaExp:'Δ export kWh',
   fewPts:'too few samples for a trend',noDay:'no daily values yet — please let it collect data',
   clearC:r=>'Delete stored history for '+r+'?'}
 };
@@ -1898,7 +1900,7 @@ function lineChart(series,unit){
   g+=`<text x=${xx.toFixed(1)} y=${H-12} text-anchor=middle fill="#7d8da0" font-size=11>${useDay?dm(xv):hm(xv)}</text>`;}
  series.forEach(s=>{if(!s.pts.length)return;
   const d=s.pts.map(p=>X(p[0]).toFixed(1)+','+Y(p[1]).toFixed(1)).join(' ');
-  g+=`<polyline points="${d}" fill=none stroke="${s.color}" stroke-width=2 stroke-linejoin=round stroke-linecap=round/>`;});
+  g+=`<polyline points="${d}" fill=none stroke="${s.color}" stroke-width=2 stroke-linejoin=round stroke-linecap=round${s.dash?` stroke-dasharray="${s.dash}"`:''}/>`;});
  g+=`<text x=${pl-8} y=11 text-anchor=end fill="#7d8da0" font-size=10>${unit}</text>`;
  return `<svg class=chart viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${g}</svg>`;
 }
@@ -2007,10 +2009,25 @@ async function load(silent){
  // negative on feed-in. lineChart() already lets the y-axis dip below zero (it only clamps to 0 when
  // every value in the series is already >=0), so a feed-in dip just renders correctly with no extra work.
  let powPts=S.filter(s=>s[3]!=null).map(s=>[s[0],s[3]]);
- if(powPts.length>=2){
-  let sPow={name:'Power',color:C.pow,pts:powPts};
-  html+='<div class=card><h2>'+t('cPow')+'</h2><p class=cap>'+t('capPow')+'</p>'+lineChart([sPow],'W')+
-   '<div class=legend><span><i style="background:'+C.pow+'"></i>'+t('kPow')+'</span></div></div>';
+ // calculated power: average W between two consecutive samples, derived purely from the import/export
+ // kWh-counter deltas (Wh*3600/seconds). Some meters (e.g. certain DWSB20-2TH units) don't sign-extend
+ // the 24-bit power field correctly on feed-in, so the meter's own Watt reading can be garbage while the
+ // counters — which just accumulate — stay correct. calcArr[i] is null for i==0 or a non-positive gap.
+ let calcArr=S.map((s,i)=>{
+  if(i===0)return null;
+  let dt=s[0]-S[i-1][0];if(dt<=0)return null;
+  return ((s[1]-S[i-1][1])-(s[2]-S[i-1][2]))*3600/dt;
+ });
+ let calcPts=calcArr.map((v,i)=>v==null?null:[S[i][0],v]).filter(p=>p);
+ if(powPts.length>=2||calcPts.length>=2){
+  let series=[];
+  if(calcPts.length>=2)series.push({name:'CalcPower',color:C.calc,pts:calcPts,dash:'6,4'});
+  if(powPts.length>=2)series.push({name:'Power',color:C.pow,pts:powPts});
+  let legend='<div class=legend>'+
+   (powPts.length>=2?'<span><i style="background:'+C.pow+'"></i>'+t('legPow')+'</span>':'')+
+   (calcPts.length>=2?'<span><i style="background:'+C.calc+'"></i>'+t('legCalc')+'</span>':'')+
+   '</div>';
+  html+='<div class=card><h2>'+t('cPow')+'</h2><p class=cap>'+t('capPow')+'</p>'+lineChart(series,'W')+legend+'</div>';
  }
  // daily table
  if(cons.length){
@@ -2033,10 +2050,11 @@ async function load(silent){
  // watt / raw sample table
  if(S.length){
   const fmtD=d=>d==null?'<span class=na>—</span>':(d>0?'<span class=pos>+'+nf(d,3)+'</span>':(d<0?'<span class=neg>'+nf(d,3)+'</span>':'<span class=na>0</span>'));
-  let rows=S.map((s,i)=>({s,di:i>0?(s[1]-S[i-1][1])/1000:null,de:i>0?(s[2]-S[i-1][2])/1000:null})).slice(-60).reverse().map(o=>{
+  const fmtW=w=>w==null?'<span class=na>—</span>':(w<0?'<span class=neg>'+nf(w,0)+'</span>':nf(w,0));
+  let rows=S.map((s,i)=>({s,di:i>0?(s[1]-S[i-1][1])/1000:null,de:i>0?(s[2]-S[i-1][2])/1000:null,cw:calcArr[i]})).slice(-60).reverse().map(o=>{
    let s=o.s,pw=s[3]==null?'<span class=na>—</span>':nf(s[3],0);
-   return `<tr><td>${dmy(s[0])} ${hm(s[0])}</td><td class="mono">${pw}</td><td class="mono">${nf(s[1]/1000,3)}</td><td class="mono">${fmtD(o.di)}</td><td class="mono">${nf(s[2]/1000,3)}</td><td class="mono">${fmtD(o.de)}</td></tr>`;}).join('');
-  html+='<div class=card><h2>'+t('cWatt')+'</h2><p class=cap>'+t('capWatt')+'</p><div class=twrap><table><thead><tr><th>'+t('thTime')+'</th><th>'+t('thPow')+'</th><th>'+t('thImpK')+'</th><th>'+t('thDelta')+'</th><th>'+t('thExpK')+'</th><th>'+t('thDeltaExp')+'</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+   return `<tr><td>${dmy(s[0])} ${hm(s[0])}</td><td class="mono">${pw}</td><td class="mono">${fmtW(o.cw)}</td><td class="mono">${nf(s[1]/1000,3)}</td><td class="mono">${fmtD(o.di)}</td><td class="mono">${nf(s[2]/1000,3)}</td><td class="mono">${fmtD(o.de)}</td></tr>`;}).join('');
+  html+='<div class=card><h2>'+t('cWatt')+'</h2><p class=cap>'+t('capWatt')+'</p><div class=twrap><table><thead><tr><th>'+t('thTime')+'</th><th>'+t('thPow')+'</th><th>'+t('thPowCalc')+'</th><th>'+t('thImpK')+'</th><th>'+t('thDelta')+'</th><th>'+t('thExpK')+'</th><th>'+t('thDeltaExp')+'</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
  }
  main.innerHTML=html;
 }

@@ -18,10 +18,12 @@
 //
 // Returns 1 (the vendor's "decode succeeded" convention for this switch
 // case) -- entry.S puts this return value straight into R0 for the caller.
+//
 int hook_decode_int24(u8 *p, u8 *out)
 {
     u32 v = ((u32)p[1] << 16) | ((u32)p[2] << 8) | (u32)p[3];
     i32 value = (i32)(v << 8) >> 8;      // sign-extend 24 -> 32
+
     i32 hi    = value >> 31;             // sign-extended hi dword
 
     out[0] = (u8)(value);
@@ -38,3 +40,181 @@ int hook_decode_int24(u8 *p, u8 *out)
     out[9] = q[0x1F];
     return 1;
 }
+
+#ifdef FIX_NEGATIVE_POWER
+// DWSB20.2TH negative-power fix, 3rd design. Earlier versions tried to
+// identify "this is OBIS 16.7.0" from *inside* hook_decode_int24 by
+// inspecting bytes near the raw SML pointer (a fixed -16 offset, then a
+// tighter unit/scaler-adjacent check) -- both were proven correct against
+// one captured frame via a byte-for-byte Python replay, but neither fired
+// reliably live, repeatedly, even after ruling out stale-OTA caching by
+// bumping to a fresh never-used softver each time. Conclusion: whatever
+// exact byte layout precedes the value field is not as constant as that
+// one capture suggested, and guessing more offsets blind isn't converging.
+//
+// This version sidesteps needing that byte-level context entirely: it
+// hooks sub_7434 (reader_meter_v57.bin) at 0x75EE, the `BL sub_4700` call
+// that converts the raw decoded int (in R0) to the final float/int power
+// value -- reached ONLY on the branch that already matched the OBIS
+// string "1-0:16.7.0*255" via sub_C000 a few instructions earlier, so
+// there is zero ambiguity about which field this is; no byte-scanning
+// needed. Correcting the RAW value here (before sub_4700's scaler
+// conversion, before it's stored to the struct) lets the corrected value
+// flow through the SAME normal path every legitimate reading already
+// takes -- unlike an even earlier attempt that patched sub_7434's tail
+// (0x7604, AFTER the struct was already filled and about to return):
+// that write never survived to the transmitted energy payload (confirmed
+// with a temporary gateway-side raw-payload debug field), i.e. something
+// downstream reads the struct fields via the normal flow, not a stale
+// snapshot, so fixing the value while it's still in that flow (here)
+// should reach it -- fixing it after the flow already committed (there)
+// did not.
+//
+// Since only the RAW INT is available at this point (not the original
+// SML bytes), the meter-side bug (top byte 0x00 instead of 0xFF, see
+// README) is instead recognized via the same import/export trend check
+// as the abandoned 0x7604 attempt: cross-telegram delta of the already-
+// decoded import/export counters (reliable, monotonic, unaffected by
+// this bug) tells us whether the current telegram should be net export
+// (negative power), and the correction only applies to values small
+// enough to plausibly be the corrupted case (0..65535 raw units, i.e.
+// up to 655.35 W at this meter's scaler of -2).
+#define OBI_NA    0x7FFFFFFF
+#define NEG_FIX_RAW 65536   // raw SML units (hook_power_correct / sub_7434 path -- currently inert)
+#define NEG_FIX_W   655     // Watts (hook_power_correct2 / sub_9ED8 path -- the active one). 65536 raw
+                            // units * this meter's scaler (10^-2) = 655.36 W, truncated.
+
+// volatile is load-bearing here: without it, a plain (u32*) let the
+// compiler treat the later re-read of *PREV_MAGIC_ADDR as predictable
+// from the earlier write earlier in program order and optimize/reorder
+// around it -- confirmed live: the plain-pointer version never saw its
+// magic word survive to the next call (always "no baseline yet"), and
+// only started working once an extra, seemingly-redundant write+read was
+// added right before the real check (a workaround for the same root
+// cause, not a real fix). volatile makes each access a genuine memory
+// operation the compiler can't reason away.
+#define PREV_MAGIC_ADDR ((volatile u32 *)0x20001000)
+#define PREV_IMP_ADDR   ((volatile u32 *)0x20001004)
+#define PREV_EXP_ADDR   ((volatile u32 *)0x20001008)
+#define PREV_MAGIC_VAL  0xDEC0DEDu
+
+// DIAGNOSTIC CONFIRMED (2026-07-10): an unconditional sentinel here never
+// showed up live -- sub_7434 (and this 0x75EE patch site) is NOT the code
+// path this reader actually uses for live power reporting; the OTHER
+// path (sub_77B4/sub_9ED8, see hook_power_correct2 below) is. Turned into
+// a pure, scratch-free no-op (rather than removing the hook/patch site
+// entirely) so it can't interact with hook_power_correct2's use of the
+// same PREV_* scratch below, while still being cheap insurance in case
+// some telegram variant does reach it after all.
+i32 hook_power_correct(i32 raw)
+{
+    return raw;
+}
+
+// Same trend-correction logic, but reading/tracking the OTHER path's own
+// struct (unk_20000D68: import at +0, export at +4, power at +8 -- see
+// sub_77B4 in IDA). Reuses the SAME scratch addresses as
+// hook_power_correct's PREV_* (0x20000D10/14/18) rather than a separate
+// block at 0x20000D20: that address never held its magic word across
+// calls (every single call reported "no baseline yet", confirmed live),
+// so it isn't safe/free RAM after all -- something else overwrites it
+// between calls. 0x20000D10 IS proven safe (worked reliably for
+// hook_power_correct's own diagnostics earlier), and reusing it here is
+// fine since hook_power_correct's path is confirmed dead code (its own
+// sentinel never fired), so there's no real risk of the two colliding.
+#define PREV2_MAGIC_ADDR PREV_MAGIC_ADDR
+#define PREV2_IMP_ADDR   PREV_IMP_ADDR
+#define PREV2_EXP_ADDR   PREV_EXP_ADDR
+
+// CONFIRMED live 2026-07-10: this is the actually-reached path (an
+// unconditional sentinel here showed up consistently; the sub_7434-based
+// hook_power_correct's own sentinel never did) -- unk_20000D68=import,
+// unk_20000D6C=export, both confirmed matching the gateway's own reported
+// values exactly, and the dImp/dExp trend computation confirmed correct
+// (all three sub-conditions -- baseline present, value in the corrupted
+// bracket, export-dominant delta -- fired together exactly on the
+// telegram where an export tick landed, verified via a flag-bits debug
+// build).
+//
+// Upgraded from a strict "did THIS telegram's delta show export-dominant"
+// check to a STICKY direction latch: the cumulative Wh counters only
+// tick roughly every several seconds to minutes at typical feed-in power,
+// while power itself is reported every ~6s, so requiring an exact same-
+// telegram coincidence between "a counter ticked" and "power is in the
+// corrupted bracket" missed the vast majority of genuinely negative
+// readings (confirmed live: a real -10 W moment still showed +640 W).
+// Instead, remember which counter ticked LAST (import or export) and
+// keep applying the correction based on that remembered direction --
+// but only for a bounded number of quiet telegrams (STICKY_MAX_AGE),
+// not indefinitely: confirmed live that an unbounded latch overcorrects
+// once the true value drifts back toward zero without a fresh tick to
+// confirm a direction change (e.g. showing -655 W when the true reading
+// had settled back near 0). This can't be fully eliminated -- a
+// direction change genuinely isn't visible until the FIRST tick of the
+// new direction arrives, and ticks are the only ground truth available
+// here (confirmed live: ~1 minute of wrong readings during a direction
+// change is the cost of relying on the Wh counters at all) -- but aging
+// the latch out bounds how long a STALE direction keeps getting applied
+// after the counters stop moving altogether.
+#define STATE_DIR_ADDR ((volatile u32 *)0x2000100C)   // 0=unknown, 1=import last ticked, 2=export last ticked
+#define STATE_AGE_ADDR ((volatile u32 *)0x20001010)   // quiet telegrams (no tick either way) since dir was last set
+#define STICKY_MAX_AGE 5
+
+i32 hook_power_correct2(i32 raw)
+{
+    if (raw == OBI_NA) return raw;
+
+    volatile u32 *impP = (volatile u32 *)0x20000D68;
+    volatile u32 *expP = (volatile u32 *)0x20000D6C;
+    u32 imp = *impP;
+    u32 exp = *expP;
+    if (imp == OBI_NA || exp == OBI_NA) return raw;
+
+    u32 prevMagic = *PREV2_MAGIC_ADDR;
+    u32 prevImp = *PREV2_IMP_ADDR;
+    u32 prevExp = *PREV2_EXP_ADDR;
+    u32 dir = *STATE_DIR_ADDR;
+    u32 age = *STATE_AGE_ADDR;
+
+    if (prevMagic == PREV_MAGIC_VAL) {
+        if (exp != prevExp)      { dir = 2; age = 0; }   // export ticked -> latch export, reset age
+        else if (imp != prevImp) { dir = 1; age = 0; }   // import ticked (and export didn't) -> latch import
+        else if (age < STICKY_MAX_AGE) age++;            // neither ticked: age the latch
+        if (age >= STICKY_MAX_AGE) dir = 0;              // aged out -> back to "unknown", no correction
+    }
+
+    *PREV2_IMP_ADDR = imp;
+    *PREV2_EXP_ADDR = exp;
+    *PREV2_MAGIC_ADDR = PREV_MAGIC_VAL;
+    *STATE_DIR_ADDR = dir;
+    *STATE_AGE_ADDR = age;
+
+    // NEG_FIX_RAW (65536) is the offset in RAW SML units (pre-scaling),
+    // correct for hook_power_correct's path (sub_7434, where the value at
+    // this point genuinely is the pre-scaled raw int24). sub_9ED8 (this
+    // path) has no separate scaler-conversion step visible in IDA -- it
+    // returns the ALREADY-SCALED final Watts value directly -- so using
+    // 65536 here subtracted 65536 *Watts*, not 655.36 W, which is exactly
+    // why a real -30 W moment came out as -65000 W instead (confirmed
+    // live 2026-07-10). The correct offset in Watts is 65536 * 10^-2 (this
+    // meter's scaler) = 655.36, i.e. NEG_FIX_W below -- a completely
+    // different unit from NEG_FIX_RAW, not a smaller version of it.
+    //
+    // TRIED AND REVERTED (2026-07-10): an unconditional "magnitude alone
+    // proves it's negative" rule for small values, on the theory that a
+    // genuinely small positive reading would go out via the shorter
+    // Int16 encoding and never reach this decoder at all. Confirmed live
+    // this does NOT hold for sub_9ED8's path specifically: watched a
+    // clearly import-dominant stretch (import ticking, export static)
+    // where hook_power_correct2 still received small values (7-27), and
+    // the unconditional rule flipped those genuinely-positive readings
+    // negative too. So sub_9ED8 apparently receives small POSITIVE
+    // values through this same path as well -- magnitude alone can't
+    // distinguish them here, unlike what holds one level down in the
+    // raw SML bytes. Back to trend-only, which is anchored to the
+    // (reliable, if laggy) counter ticks instead.
+    if (dir == 2 && raw >= 0 && raw < NEG_FIX_W)
+        raw -= NEG_FIX_W;
+    return raw;
+}
+#endif

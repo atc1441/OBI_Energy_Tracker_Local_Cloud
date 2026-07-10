@@ -6,11 +6,11 @@ Discarded input sections
  .comment       0x00000000       0x4a build/hooks.o
  .ARM.attributes
                 0x00000000       0x2c build/hooks.o
- .text          0x00000000        0x0 build/entry.o
- .data          0x00000000        0x0 build/entry.o
- .bss           0x00000000        0x0 build/entry.o
+ .text          0x00000000        0x0 build/hooks-entry.o
+ .data          0x00000000        0x0 build/hooks-entry.o
+ .bss           0x00000000        0x0 build/hooks-entry.o
  .ARM.attributes
-                0x00000000       0x1c build/entry.o
+                0x00000000       0x1c build/hooks-entry.o
 
 Memory Configuration
 
@@ -24,8 +24,10 @@ Linker script and memory map
 .text           0x0000ee08       0x42
  *(.text.entry_int24)
  .text.entry_int24
-                0x0000ee08        0xa build/entry.o
+                0x0000ee08        0xa build/hooks-entry.o
                 0x0000ee08                entry_int24
+ *(.text.entry_power_correct)
+ *(.text.entry_power_correct2)
  *(.text*)
  .text          0x0000ee12       0x38 build/hooks.o
                 0x0000ee12                hook_decode_int24
@@ -44,13 +46,13 @@ Linker script and memory map
  .v4_bx         0x0000ee4c        0x0 linker stubs
 
 .iplt           0x0000ee4c        0x0
- .iplt          0x0000ee4c        0x0 build/entry.o
+ .iplt          0x0000ee4c        0x0 build/hooks-entry.o
 
 .igot.plt       0x0000ee4c        0x0
- .igot.plt      0x0000ee4c        0x0 build/entry.o
+ .igot.plt      0x0000ee4c        0x0 build/hooks-entry.o
 
 .rel.dyn        0x0000ee4c        0x0
- .rel.iplt      0x0000ee4c        0x0 build/entry.o
+ .rel.iplt      0x0000ee4c        0x0 build/hooks-entry.o
 
 /DISCARD/
  *(.ARM.exidx*)
@@ -59,6 +61,6 @@ Linker script and memory map
  *(.note*)
  *(.ARM.attributes*)
 LOAD build/hooks.o
-LOAD build/entry.o
+LOAD build/hooks-entry.o
 OUTPUT(build/hooks.elf elf32-littlearm)
 LOAD linker stubs

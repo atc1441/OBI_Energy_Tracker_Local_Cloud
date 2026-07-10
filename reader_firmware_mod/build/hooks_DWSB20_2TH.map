@@ -1,0 +1,75 @@
+
+Discarded input sections
+
+ .data          0x00000000        0x0 build/hooks_DWSB20_2TH.o
+ .bss           0x00000000        0x0 build/hooks_DWSB20_2TH.o
+ .comment       0x00000000       0x4a build/hooks_DWSB20_2TH.o
+ .ARM.attributes
+                0x00000000       0x2c build/hooks_DWSB20_2TH.o
+ .text          0x00000000        0x0 build/hooks_DWSB20_2TH-entry.o
+ .data          0x00000000        0x0 build/hooks_DWSB20_2TH-entry.o
+ .bss           0x00000000        0x0 build/hooks_DWSB20_2TH-entry.o
+ .ARM.attributes
+                0x00000000       0x1c build/hooks_DWSB20_2TH-entry.o
+
+Memory Configuration
+
+Name             Origin             Length             Attributes
+HOOKS            0x0000ee08         0x00001000         xr
+*default*        0x00000000         0xffffffff
+
+Linker script and memory map
+
+
+.text           0x0000ee08      0x120
+ *(.text.entry_int24)
+ .text.entry_int24
+                0x0000ee08        0xa build/hooks_DWSB20_2TH-entry.o
+                0x0000ee08                entry_int24
+ *(.text.entry_power_correct)
+ .text.entry_power_correct
+                0x0000ee12        0xc build/hooks_DWSB20_2TH-entry.o
+                0x0000ee12                entry_power_correct
+ *(.text.entry_power_correct2)
+ *fill*         0x0000ee1e        0x2 
+ .text.entry_power_correct2
+                0x0000ee20       0x10 build/hooks_DWSB20_2TH-entry.o
+                0x0000ee20                entry_power_correct2
+ *(.text*)
+ .text          0x0000ee30       0xf8 build/hooks_DWSB20_2TH.o
+                0x0000ee30                hook_decode_int24
+                0x0000ee68                hook_power_correct
+                0x0000ee6a                hook_power_correct2
+ *(.rodata*)
+
+.glue_7         0x0000ef28        0x0
+ .glue_7        0x0000ef28        0x0 linker stubs
+
+.glue_7t        0x0000ef28        0x0
+ .glue_7t       0x0000ef28        0x0 linker stubs
+
+.vfp11_veneer   0x0000ef28        0x0
+ .vfp11_veneer  0x0000ef28        0x0 linker stubs
+
+.v4_bx          0x0000ef28        0x0
+ .v4_bx         0x0000ef28        0x0 linker stubs
+
+.iplt           0x0000ef28        0x0
+ .iplt          0x0000ef28        0x0 build/hooks_DWSB20_2TH-entry.o
+
+.igot.plt       0x0000ef28        0x0
+ .igot.plt      0x0000ef28        0x0 build/hooks_DWSB20_2TH-entry.o
+
+.rel.dyn        0x0000ef28        0x0
+ .rel.iplt      0x0000ef28        0x0 build/hooks_DWSB20_2TH-entry.o
+
+/DISCARD/
+ *(.ARM.exidx*)
+ *(.ARM.extab*)
+ *(.comment)
+ *(.note*)
+ *(.ARM.attributes*)
+LOAD build/hooks_DWSB20_2TH.o
+LOAD build/hooks_DWSB20_2TH-entry.o
+OUTPUT(build/hooks_DWSB20_2TH.elf elf32-littlearm)
+LOAD linker stubs

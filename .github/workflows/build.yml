@@ -124,17 +124,24 @@ jobs:
       - name: Install arm-none-eabi-gcc
         run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
 
-      - name: Build + splice
+      - name: Build + splice (plain int24 fix)
         working-directory: reader_firmware_mod
         run: |
           bash build.sh
           python3 splice.py
 
-      - name: Stage binary
+      - name: Build + splice (DWSB20.2TH negative-power fix)
+        working-directory: reader_firmware_mod
+        run: |
+          bash build.sh DWSB20_2TH
+          python3 splice_DWSB20_2TH.py
+
+      - name: Stage binaries
         working-directory: reader_firmware_mod
         run: |
           mkdir -p dist
           cp reader_modded_v87.bin dist/
+          cp reader_modded_v87_DWSB20_2TH.bin dist/
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
