@@ -22,8 +22,18 @@ FPU) und splicen das Ergebnis in die Firmware.
   ankommt. Auf echter Hardware über längere Zeiträume in beide Richtungen
   sowie über echte Import↔Export-Wechsel live verifiziert (siehe
   „Live-Verifikation" unten).
+- `reader_modded_89mock_v90_ISKRA_MT691.bin` — der Fix für „bei ISKRA
+  MT-691 wird gar nichts angezeigt" (siehe „ISKRA-MT-691-Fix" unten),
+  gebaut per `python splice_ISKRA_MT691.py` (nutzt das `hooks.bin` der
+  reinen Variante weiter — kein eigener `build.sh`-Durchlauf nötig).
+  Diese Datei statt der reinen Variante flashen, wenn bei einem ISKRA
+  MT-691 gar keine Werte ankommen. **NICHT live verifiziert** — komplett
+  aus statischer Analyse eines Drittanbieter-SML-Mitschnitts gebaut, es
+  stand keine ISKRA-MT691-Hardware oder ein Sniffer zur Verfügung, um den
+  Fix in der Praxis zu bestätigen (Details und Konfidenzeinschätzung im
+  entsprechenden Abschnitt).
 
-  **Benennung/Versionierung ist Absicht und für beide Release-Dateien
+  **Benennung/Versionierung ist Absicht und für alle drei Release-Dateien
   identisch**: jede Firmware meldet selbst Softver 89, das RELEASE ist
   aber jeweils als „v90" benannt/getaggt — ein dauerhafter
   „Mock-Version"-Unterschied, kein liegengebliebenes Entwicklungsartefakt.
@@ -31,25 +41,31 @@ FPU) und splicen das Ergebnis in die Firmware.
   hochgeladenen Dateinamen (`/v(\d+)/`, erster Treffer — hier „v90"), und
   behandelt eine beworbene Version nur dann als No-Op, wenn sie mit dem
   aktuell vom Reader gemeldeten Softver (oder 0) übereinstimmt. Da 90
-  niemals mit dem von beiden Dateien selbst gemeldeten 89 übereinstimmen
-  kann, lässt sich jede der beiden Release-Dateien beliebig oft erneut
+  niemals mit dem von allen Dateien selbst gemeldeten 89 übereinstimmen
+  kann, lässt sich jede Release-Datei beliebig oft erneut
   hochladen/flashen — z.B. um einen Reader zwangsweise wieder auf einen
-  bekannt guten Stand zu bringen, oder um einen Reader von der einen auf
-  die andere Variante umzustellen — ohne jemals das „schon diese Version,
+  bekannt guten Stand zu bringen, oder um einen Reader von einer auf eine
+  andere Variante umzustellen — ohne jemals das „schon diese Version,
   übersprungen"-OTA-No-Op einer gleichnummerierten Datei zu treffen. Wer
-  mit `splice.py`/`splice_DWSB20_2TH.py` lokal weiter iteriert, sollte
-  beide Nummern zueinander passend halten (siehe Kommentar über dem
-  jeweiligen Softver-Patch in diesen Skripten) — der 89/„v90"-Unterschied
-  gilt nur für die gepinnten Release-Builds.
+  mit `splice.py`/`splice_DWSB20_2TH.py`/`splice_ISKRA_MT691.py` lokal
+  weiter iteriert, sollte beide Nummern zueinander passend halten (siehe
+  Kommentar über dem jeweiligen Softver-Patch in diesen Skripten) — der
+  89/„v90"-Unterschied gilt nur für die gepinnten Release-Builds.
 - `hooks.c`, `entry.S`, `link.ld`, `vendor.h`, `build.sh`, `splice.py`,
-  `splice_DWSB20_2TH.py` — gemeinsamer Quelltext und Build-Skripte. Der
-  DWSB20.2TH-Fix in `hooks.c` steht hinter `#ifdef FIX_NEGATIVE_POWER`,
-  das `./build.sh DWSB20_2TH` setzt; `./build.sh` (ohne Argument) baut die
-  reine int24-Variante. Beide lesen dasselbe `hooks.c`/`entry.S` — eine
-  Änderung am gemeinsamen int24-Decoder muss also nur an einer Stelle
-  gemacht werden. Beide Build+Splice-Paare sind der dauerhafte,
-  wiederholbare Release-Prozess — bei jeder Änderung an
-  `hooks.c`/`entry.S` beide ausführen.
+  `splice_DWSB20_2TH.py`, `splice_ISKRA_MT691.py` — gemeinsamer Quelltext
+  und Build-Skripte. Der DWSB20.2TH-Fix in `hooks.c` steht hinter
+  `#ifdef FIX_NEGATIVE_POWER`, das `./build.sh DWSB20_2TH` setzt;
+  `./build.sh` (ohne Argument) baut die reine int24- +
+  SML-Int16-Vorzeichenfix-Variante, von der auch `splice.py` UND
+  `splice_ISKRA_MT691.py` ausgehen (der ISKRA-Fix ist ein reiner
+  zusätzlicher Byte-Patch, kein eigener C-Hook nötig). Alle Varianten
+  lesen dasselbe `hooks.c`/`entry.S` — eine Änderung an gemeinsamer Logik
+  (int24-Decoder, Int16-Vorzeichenfix) muss also nur an einer Stelle
+  gemacht werden und wirkt sich beim nächsten Build auf alle Varianten
+  aus. Das ist der dauerhafte, wiederholbare Release-Prozess — bei jeder
+  Änderung an `hooks.c`/`entry.S` `./build.sh && python splice.py`,
+  `./build.sh DWSB20_2TH && python splice_DWSB20_2TH.py` UND
+  `python splice_ISKRA_MT691.py` ausführen.
 - `fix_negative_power.py` — eigenständiges Patch-Skript für einen frühen,
   verworfenen Ansatz (SML-Int8/Int16-Dispatch-Table-Umbiegen). Nur noch
   als historische Notiz vorhanden — bestätigt NICHT der Bug, den der
@@ -113,6 +129,70 @@ FPU) und splicen das Ergebnis in die Firmware.
    geflasht wird — das Splicen selbst validiert nur Byte-Encoding, nicht
    Semantik. Direkte Python-Byte-Reads der geflashten `.bin` sind ein
    zuverlässiger Fallback, wenn IDAs Headless-Session mal wieder spinnt.
+
+## SML-Integer16-Vorzeichenfix (`entry_sxth16_fix`)
+
+Gilt **unbedingt für jede Variante** (fest in `hooks.bin` eingebaut, nicht
+hinter `FIX_NEGATIVE_POWER` versteckt) — das ist ein allgemeiner Fehler im
+SML-Wertedecoder des Herstellers selbst, keine Umgehung für die
+Encoding-Eigenheit eines bestimmten Zählers.
+
+`sub_C0A4` (der Low-Level-SML-TL-Byte-Dispatch) hat für Integer16
+(`TL=0x53`) einen Fall, der die zwei Wert-Bytes liest und das Ergebnis als
+`(byte0<<8)+byte1` berechnet — ein reiner **Zero**-Extend ins breitere
+Register der weiteren Pipeline, ohne Vorzeichenerweiterung. Der
+benachbarte, fast identische Fall für `TL=0x63` macht denselben
+Byte-Read, gefolgt von einem `SXTH R0,R0` (Halbwort vorzeichenerweitern),
+bevor das Vorzeichen für das High-Dword berechnet wird — dem
+0x53-Fall fehlt genau diese eine Instruktion. Die gesamte
+Konvertierungskette danach (`sub_9ED8` → `sub_C41C`/`sub_46D4`/
+`sub_4504`/`sub_475C`, Scaler- und Vorzeichen-/Betrags-Behandlung) wurde
+durchverfolgt und bestätigt: nichts später korrigiert das Vorzeichen —
+`sub_46D4` leitet das Vorzeichen ausschließlich aus dem High-Dword ab, das
+`sub_C0A4` übergeben hat, und das ist für diesen Fall immer 0. Ergebnis:
+ein roher Integer16-Wert wie `0xFE5F` (-417 dezimal, auf der Leitung
+selbst völlig korrekt kodiert) wird als **+65119** gemeldet, nicht als
+-417 — der Bit-Musterwert wird als unsigned reinterpretiert, nicht nur
+das Vorzeichen umgedreht.
+
+Das kann JEDES SML-Feld betreffen, das als reines Integer16 einen
+negativen Wert trägt — am relevantesten die Leistung (16.7.0) eines
+Zählers bei Einspeisung, falls dieser Zähler (anders als DWSB20.2TH, das
+ein breiteres 24-Bit-Feld mit eigenem, separatem Encoding-Bug nutzt —
+siehe unten) Leistung korrekt vorzeichenbehaftet als Integer16 kodiert,
+was dieser Reader dann falsch dekodiert. Bestätigt anhand eines echten
+Mitschnitts aus einem Drittanbieter-Bericht (ein ISKRA-MT691-Zähler,
+siehe „ISKRA-MT-691-Fix" unten), bei dem genau das der Fehlermodus für
+eine -417-W-Ablesung war.
+
+**Fix**: `entry_sxth16_fix` (`entry.S`) ersetzt die 4 Bytes
+`asrs r1,r0,#0x1f ; str r1,[r4,#4]` bei `0xC110` (im 0x53-Fall von
+`sub_C0A4`) durch ein `BL` in ein kleines Trampolin, das zuerst das
+fehlende `sxth r0,r0` nachholt, dann die Vorzeichenberechnung und den
+Store der Originalinstruktionen wiederholt, und über `bx lr` zurückkehrt
+(nicht `pop` — das ist kein Ersatz für einen Jump-Table-Slot, sondern ein
+Mid-Function-Patch in einer geraden Code-Sequenz, der direkt danach in
+den unveränderten Code weiterlaufen muss, der den Low-Dword-Store und den
+Sprung in den gemeinsamen Switch-Epilog übernimmt). Kein C-Hook nötig —
+der Fix ist reine ALU-Logik, klein genug für direkten Code in `entry.S`.
+
+**Konfidenz**: hoch für die Decode-Analyse (byte-genauer Vergleich des
+fehlerhaften und des korrekten Nachbar-Falls, per direktem `get_bytes`
+bestätigt, nicht aus dem Gedächtnis zusammengefasst) und für die
+Patch-Stellen-Sicherheit (per `xrefs_to` bestätigt, dass nichts in die
+Mitte der 4 ersetzten Bytes springt; bestätigt, dass R0/R1 nach diesem
+Fall im gemeinsamen Epilog bei `loc_C26C` nicht mehr gelesen werden, also
+frei überschreibbar sind; bestätigt, dass LR mitten in der Funktion als
+reines Scratch behandelt wird, zwischen Eintritt und den echten
+Funktions-Exits nirgends als lebendes Register gelesen wird, also das
+eigene `bl` des Trampolins gefahrlos ist, ganz ohne push/pop). **Live
+verifiziert** auf echter Hardware: einen Build mit diesem Hook auf den
+DWSB20.2TH-Testreader geflasht und bestätigt, dass die normale Dekodierung
+über einen vollständigen Negativ↔Positiv-Wechsel hinweg korrekt weiterlief
+— das testet nicht den SPEZIFISCHEN Integer16-Negativwert-Pfad
+(DWSB20.2TH nutzt für Leistung Integer24, nicht Integer16), bestätigt aber,
+dass der Hook selbst `sub_C0A4` bzw. den umgebenden Dispatch bei einem
+aktiv Telegramme dekodierenden Reader nicht destabilisiert.
 
 ## DWSB20.2TH-Fix für negative Leistung
 
@@ -306,6 +386,99 @@ live genutzten Code-Pfad fixen (per Live-Sentinel bestätigt, nicht nur
 statischer Analyse), mit Referenzsignalen, die selbst vom Bug nicht
 betroffen sind, statt zu versuchen, einen Wert weiter unten in einer
 nicht vollständig kartierten Pipeline abzufangen oder zu überschreiben.
+
+## ISKRA-MT-691-Fix
+
+**⚠️ NICHT live verifiziert.** Komplett aus statischer Analyse (IDA
+Decompile/Disasm) eines echten SML-Mitschnitts gebaut, der von einem
+Nutzer weitergegeben wurde, der wiederum den Bericht einer dritten Person
+weiterreichte — es stand keine ISKRA-MT691-Hardware, kein Meter-Sniffer
+und kein gepaarter Reader zur Verfügung, um den Fix in der Praxis zu
+bestätigen. Als Best-Effort behandeln, bis jemand bestätigt, dass er an
+einem echten MT691 funktioniert (oder eben nicht).
+
+**Der Bug**: bei einem ISKRA-MT691-Zähler wird GAR NICHTS
+dekodiert/angezeigt — kein Vorzeichen-/Größenordnungsproblem wie bei
+DWSB20.2TH, komplette Stille. Der gelieferte Mitschnitt wurde von Hand
+dekodiert und als vollständig standardkonformes SML ohne eigenen Defekt
+in der Zähler-Kodierung bestätigt: ein sauberes `SML_GetList.Res` mit
+Einträgen für einen Hersteller-ID-Octet-String ("ISK"), eine
+Seriennummer, dann OBIS `1-0:1.8.0` (Import, Unsigned32 + Scaler -1),
+`1-0:2.8.0` (Export, gleiches Schema) und `1-0:16.7.0` (Leistung,
+Integer16, korrekt vorzeichenbehaftet kodierter Wert -417). Jeder
+beteiligte Werttyp (Unsigned32/Integer16/OctetString) wird vom
+Stock-SML-Wertetyp-Dispatch bereits unterstützt, und der generische
+OBIS-Matcher (`sub_B0C8`) läuft variable-lange Felder auch bei den
+ungewöhnlichen führenden Hersteller-ID-/Seriennummer-Einträgen dieses
+Zählers korrekt ab — am Telegramm des Zählers liegt es also nicht, anders
+als beim DWSB20.2TH-Fall.
+
+**Root Cause**, vollständig per IDA nachverfolgt (Adressen gegen die
+tatsächliche Binärdatei verifiziert, nicht aus Namen angenommen):
+`sub_9DA0` — der Import-/Export-Multi-Tarif-Cache/Dedup-Helfer
+(OBIS 1.8.0–1.8.4 / 2.8.0–2.8.4), aufgerufen von `sub_77B4` — setzt ein
+1-Byte-„Unterdrücken"-Flag bei `unk_20000D68+0x10` (Import) /
+`+0x11` (Export), wann immer ein im VORHERIGEN Telegramm vorhandenes
+Tarifregister im aktuellen fehlt, innerhalb eines 30-Minuten-Fensters.
+Das ist ein beabsichtigtes „traue einem gerade verschwundenen Register
+nicht"-Dedup-Signal, und `sub_9DA0` setzt es bereits korrekt AUF
+WERT-EBENE um: es zwingt den betroffenen Wert beim Auslösen auf das
+Sentinel `0x7FFFFFFF`, und die nachgelagerte Meldefunktion `sub_9D34`
+macht bei diesem Sentinel bereits sauber nichts. Die Unterdrückung pro
+Feld ist also bereits vollständig und korrekt implementiert.
+
+Der eigentliche Bug liegt eine Ebene höher, im äußeren Dispatcher
+`sub_AA7C` (`0xAAEE`–`0xAAFD`): er liest EBENFALLS dieselben zwei Flags
+und verwirft, wenn EINES gesetzt ist, den KOMPLETTEN dekodierten
+Datensatz durch Nullen des Struktur-Zeigers — inklusive des unabhängig
+von der unbeteiligten Funktion `sub_9ED8` dekodierten Leistungswerts,
+egal welcher von Import/Export NICHT geflaggt ist, und des
+„erfolgreich verarbeitet"-Status-Schreibens. Das ist redundanter
+Overreach auf einer Logik, die eine Ebene tiefer bereits korrekt
+funktionierte, und besonders schädlich für einen Zähler wie den MT691,
+der nur EIN Tarifregister meldet (`1-0:1.8.0`, kein `1.8.1`–`1.8.4`): ein
+einzelner transienter IR-/Parse-Ausfall dieses einen Registers setzt das
+Flag und blendet ALLES aus — Leistung inklusive — für bis zu 30 Minuten,
+obwohl das Leistungsfeld im SELBEN Telegramm einwandfrei dekodierte.
+
+**Fix**: den Verwerfungsblock löschen. Reines Entfernen, keine
+Ersatzlogik nötig, da die Unterdrückung bereits nachgelagert in
+`sub_9D34` korrekt passiert. Per `xrefs_to` bestätigt, dass nichts in die
+Mitte dieses 16-Byte-Blocks springt, also sicher als Einheit entfernbar —
+aber ein **zweiter Verifikationsdurchlauf hat aufgedeckt, dass reine NOPs
+falsch gewesen wären**: `0xAAFE` (direkt nach dem Block) ist keine
+Füllung, sondern der Live-Start eines ANDEREN Switch-Falls (erreicht über
+ein separates `BEQ` weiter oben in der Funktion, das `sub_7434` für einen
+anderen Codepfad aufruft). Bei reinen NOPs wäre man durchgefallen und
+hätte bei JEDEM Telegramm unbeabsichtigt den falschen Fall ausgeführt und
+das Ergebnisregister überschrieben — ein neuer, schlimmerer Bug als der
+zu behebende. Der korrekte (angewendete) Patch ist ein expliziter `B` zum
+echten Merge-Punkt `0xAB14`, gefolgt von NOP-Füllung, wobei dieselben 16
+Bytes (`0xAAEE`–`0xAAFD`) überschrieben werden. `sub_9DA0`/`sub_B348`/
+`sub_C310` bleiben komplett unangetastet, sodass der 30-Minuten-Dedup-/
+Cache-Mechanismus für echte Multi-Tarif-Zähler vollständig erhalten
+bleibt.
+
+Da die Leistungsablesung dieser Variante (`-417 W`, Integer16) auch nach
+diesem Verwerfungs-Fix noch vom separaten Integer16-Vorzeichenfix-Bug
+(siehe oben) betroffen wäre, enthält `splice_ISKRA_MT691.py` BEIDE Fixes
+— `entry_sxth16_fix` und den `sub_AA7C`-Patch — und nutzt das `hooks.bin`
+der reinen Variante weiter (keine `FIX_NEGATIVE_POWER`-gegateten Hooks
+nötig, anders als bei der DWSB20.2TH-Variante).
+
+**Konfidenz**: hoch speziell für die Sprung-Offset-Arithmetik (ein
+unabhängiger zweiter IDA-Durchlauf hat den Reine-NOP-Bug oben aufgedeckt,
+und der finale `B`-Instruktions-Offset wurde unabhängig von Hand
+außerhalb von IDA nachgerechnet und stimmte exakt überein, zusätzlich
+gegen eine bereits vorhandene `B`-Instruktion an anderer Stelle derselben
+Binärdatei gegengeprüft, um die Encoding-Konvention zu bestätigen).
+Mittel-hoch für die Root-Cause-Analyse des Verwerfungs-Flags (bei jedem
+Schritt durch echtes Disassemblieren/Decompilieren nachverfolgt, nicht
+aus Namen abgeleitet) — die verbleibende Unsicherheit ist rein „funktioniert
+das tatsächlich am echten Gerät", was sich per Definition ohne einen
+echten MT691 nicht bestätigen lässt. Wer einen besitzt und diesen Build
+flasht: Rückmeldung (per GitHub-Issue), ob es geholfen hat, wäre
+wirklich wertvoll.
 
 ## Warum ein Glue-Stub statt direktem BL in die C-Funktion?
 

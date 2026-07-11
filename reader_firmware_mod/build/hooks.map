@@ -21,38 +21,42 @@ HOOKS            0x0000ee08         0x00001000         xr
 Linker script and memory map
 
 
-.text           0x0000ee08       0x42
+.text           0x0000ee08       0x4a
  *(.text.entry_int24)
  .text.entry_int24
                 0x0000ee08        0xa build/hooks-entry.o
                 0x0000ee08                entry_int24
+ *(.text.entry_sxth16_fix)
+ .text.entry_sxth16_fix
+                0x0000ee12        0x8 build/hooks-entry.o
+                0x0000ee12                entry_sxth16_fix
  *(.text.entry_power_correct)
  *(.text.entry_power_correct2)
  *(.text*)
- .text          0x0000ee12       0x38 build/hooks.o
-                0x0000ee12                hook_decode_int24
+ .text          0x0000ee1a       0x38 build/hooks.o
+                0x0000ee1a                hook_decode_int24
  *(.rodata*)
 
-.glue_7         0x0000ee4c        0x0
- .glue_7        0x0000ee4c        0x0 linker stubs
+.glue_7         0x0000ee54        0x0
+ .glue_7        0x0000ee54        0x0 linker stubs
 
-.glue_7t        0x0000ee4c        0x0
- .glue_7t       0x0000ee4c        0x0 linker stubs
+.glue_7t        0x0000ee54        0x0
+ .glue_7t       0x0000ee54        0x0 linker stubs
 
-.vfp11_veneer   0x0000ee4c        0x0
- .vfp11_veneer  0x0000ee4c        0x0 linker stubs
+.vfp11_veneer   0x0000ee54        0x0
+ .vfp11_veneer  0x0000ee54        0x0 linker stubs
 
-.v4_bx          0x0000ee4c        0x0
- .v4_bx         0x0000ee4c        0x0 linker stubs
+.v4_bx          0x0000ee54        0x0
+ .v4_bx         0x0000ee54        0x0 linker stubs
 
-.iplt           0x0000ee4c        0x0
- .iplt          0x0000ee4c        0x0 build/hooks-entry.o
+.iplt           0x0000ee54        0x0
+ .iplt          0x0000ee54        0x0 build/hooks-entry.o
 
-.igot.plt       0x0000ee4c        0x0
- .igot.plt      0x0000ee4c        0x0 build/hooks-entry.o
+.igot.plt       0x0000ee54        0x0
+ .igot.plt      0x0000ee54        0x0 build/hooks-entry.o
 
-.rel.dyn        0x0000ee4c        0x0
- .rel.iplt      0x0000ee4c        0x0 build/hooks-entry.o
+.rel.dyn        0x0000ee54        0x0
+ .rel.iplt      0x0000ee54        0x0 build/hooks-entry.o
 
 /DISCARD/
  *(.ARM.exidx*)

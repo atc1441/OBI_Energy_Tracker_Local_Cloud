@@ -47,6 +47,9 @@ BASE = 0x4000
 #      is the difference.)
 HOOKS = [
     (0xC0EA, bytes([0x00, 0x20, 0xF8, 0xBD]), "entry_int24"),
+    # SML TL=0x53 (Integer16) missing sign-extension fix (2026-07-11) -- see entry.S for the full writeup.
+    # A general firmware defect, not specific to any one meter model, so it's in every variant's HOOKS list.
+    (0xC110, bytes([0xC1, 0x17, 0x61, 0x60]), "entry_sxth16_fix"),
     (0x75EE, bytes([0xFD, 0xF7, 0x87, 0xF8]), "entry_power_correct"),
     # sub_77B4/sub_9ED8 -- confirmed live to be the actually-active meter-
     # parser path on this reader (an unconditional sentinel at 0x75EE

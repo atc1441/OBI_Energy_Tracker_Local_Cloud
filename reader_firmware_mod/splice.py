@@ -13,6 +13,10 @@ BASE = 0x4000
 # call sites to patch: (address, expected original 4 bytes, entry symbol name)
 HOOKS = [
     (0xC0EA, bytes([0x00, 0x20, 0xF8, 0xBD]), "entry_int24"),
+    # SML TL=0x53 (Integer16) missing sign-extension fix (2026-07-11) -- see entry.S for the full writeup.
+    # Replaces `asrs r1,r0,#0x1f ; str r1,[r4,#4]` inside sub_C0A4's Int16 case; a general firmware defect,
+    # not specific to any one meter model, so it's in every variant's HOOKS list.
+    (0xC110, bytes([0xC1, 0x17, 0x61, 0x60]), "entry_sxth16_fix"),
 ]
 
 
