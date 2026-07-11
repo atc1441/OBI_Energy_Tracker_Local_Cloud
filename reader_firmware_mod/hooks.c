@@ -84,6 +84,37 @@ int hook_decode_int24(u8 *p, u8 *out)
 #define NEG_FIX_W   655     // Watts (hook_power_correct2 / sub_9ED8 path -- the active one). 65536 raw
                             // units * this meter's scaler (10^-2) = 655.36 W, truncated.
 
+// SECOND bracket (2026-07-11): confirmed live that feed-in beyond roughly
+// 655 W surfaces via a DIFFERENT, much larger wraparound instead of the
+// NEG_FIX_W one above -- e.g. a real ~-720 W moment showed up as
+// +167053..+167098 W (physically impossible for a residential meter).
+// This matches the well-known 3-tier bracket pattern for this exact bug
+// class (2.56 / 655.36 / 167772.16 W -- see README), i.e. 2^24 raw units
+// (this meter's scaler again gives /100 = W): whatever internal width the
+// meter's encoder lands on for a given magnitude, the byte that should
+// carry the negative sign extension for THAT width is wrongly written as
+// 0x00, and the resulting offset is 2^(that width) raw units. Values
+// under ~655 W apparently widen via one extra byte (2^16 offset,
+// NEG_FIX_W); confirmed live that values whose true magnitude needs the
+// full 24-bit range instead land 2^24 raw units off (167772 W once
+// scaled) -- reproduced via the gateway's own history log: the implied
+// true values (offset by exactly -167772) matched the concurrent Wh-tick
+// rate on the export counter almost exactly (e.g. -719 W implied vs.
+// ~720 W average from the tick delta over that sample window).
+//
+// Unlike NEG_FIX_W (which DOES need the dir==2 gate -- confirmed live
+// that small genuinely-positive values reach this same decoder, see
+// below), this second bracket needs no such gate: no real residential
+// reading ever approaches 167772 W (or even a tenth of it) under ANY
+// interpretation, so a decoded value at/above IMPLAUSIBLE_W is
+// unconditionally corrupted, regardless of the sticky latch's current
+// state -- which also sidesteps the latch's inherent lag for this case.
+#define NEG_FIX_W3     167772   // Watts. 2^24 raw units * 10^-2 scaler = 167772.16, truncated.
+#define IMPLAUSIBLE_W  50000    // Watts. Comfortably above any real reading (max plausible residential
+                                 // draw/feed-in is at most a few tens of kW) and comfortably below the
+                                 // lowest value NEG_FIX_W3-bracket corruption can produce (~83886 W, at
+                                 // the Int24 magnitude ceiling) -- see README for the derivation.
+
 // volatile is load-bearing here: without it, a plain (u32*) let the
 // compiler treat the later re-read of *PREV_MAGIC_ADDR as predictable
 // from the earlier write earlier in program order and optimize/reorder
@@ -213,7 +244,9 @@ i32 hook_power_correct2(i32 raw)
     // distinguish them here, unlike what holds one level down in the
     // raw SML bytes. Back to trend-only, which is anchored to the
     // (reliable, if laggy) counter ticks instead.
-    if (dir == 2 && raw >= 0 && raw < NEG_FIX_W)
+    if (raw >= IMPLAUSIBLE_W)
+        raw -= NEG_FIX_W3;
+    else if (dir == 2 && raw >= 0 && raw < NEG_FIX_W)
         raw -= NEG_FIX_W;
     return raw;
 }

@@ -4,7 +4,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SRC = HERE / "reader_stock_v57.bin"
-DST = HERE / "reader_modded_v87_DWSB20_2TH.bin"
+DST = HERE / "reader_modded_89mock_v90_DWSB20_2TH.bin"
 HOOKS_BIN = HERE / "build" / "hooks_DWSB20_2TH.bin"
 HOOKS_SYM = HERE / "build" / "hooks_DWSB20_2TH.sym"
 BASE = 0x4000
@@ -110,18 +110,22 @@ def main():
 
     data += hooks_bin
 
-    # softver 57 -> 87, matching the plain variant's release version number
-    # (the live-verified debugging build during development used 119 --
-    # see git history / README "Live verification" -- but the shipped
-    # release is renumbered to 87 to align with reader_modded_v87.bin).
-    # NOTE for further LOCAL iteration: bump this to a fresh, never-before-
-    # used value while testing -- the OTA path silently skips re-flashing
-    # when the embedded softver matches one already tried, giving false
-    # "doesn't work" readings against stale code. Only pin it back to 87
-    # for the final release build.
+    # softver 57 -> 89 -- deliberately does NOT match the "v90" release
+    # name below. This is a "mock version" trick for the SHIPPED release
+    # (not a temporary testing value, unlike earlier iterations of this
+    # comment): the gateway's web UI parses the OTA target version from
+    # the uploaded filename via /v(\d+)/ (see gateway_web.cpp, ~line 545)
+    # and advertises THAT number to the reader; the reader only treats an
+    # advertised version as "no update" if it equals 0 or its OWN
+    # currently-reported softver. Since this file always reports 89
+    # internally while its filename always advertises v90, those two
+    # numbers can never coincide -- so this exact release file can be
+    # re-uploaded/reflashed any number of times (e.g. to force a reader
+    # back onto a known-good build) without ever hitting the "already
+    # this version, skipping" OTA no-op that a same-numbered file would.
     for off in (0x8b36, 0x8b80):
         assert data[off] == 0x39 and data[off + 1] == 0x20, f"unexpected bytes at {hex(off)}: {data[off:off+2].hex()}"
-        data[off] = 0x57  # 0x57 = 87 decimal
+        data[off] = 0x59  # 0x59 = 89 decimal (see comment above -- intentionally != the v90 in DST's filename)
 
     with open(DST, "wb") as f:
         f.write(data)

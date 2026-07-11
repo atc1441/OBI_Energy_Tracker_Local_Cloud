@@ -140,8 +140,8 @@ jobs:
         working-directory: reader_firmware_mod
         run: |
           mkdir -p dist
-          cp reader_modded_v87.bin dist/
-          cp reader_modded_v87_DWSB20_2TH.bin dist/
+          cp reader_modded_89mock_v90.bin dist/
+          cp reader_modded_89mock_v90_DWSB20_2TH.bin dist/
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

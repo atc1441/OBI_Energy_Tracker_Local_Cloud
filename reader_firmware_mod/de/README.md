@@ -11,25 +11,36 @@ FPU) und splicen das Ergebnis in die Firmware.
 
 - `reader_stock_v57.bin` — unveränderte Original-Firmware (Quelle für
   `splice.py`/`splice_DWSB20_2TH.py`).
-- `reader_modded_v87.bin` — fertiges Ergebnis: nur der int24-Fix
-  (SML TL=0x54), Softver auf 87 gesetzt, IDA-verifiziert. Diese Datei
-  flashen, wenn beim Zähler nur der int24-Fix nötig war (Leistung zeigte
-  „n/a").
-- `reader_modded_v87_DWSB20_2TH.bin` — der DWSB20.2TH-Fix für negative
-  Leistung (siehe unten), Softver EBENFALLS auf 87 gesetzt (passend zur
-  Release-Version von `reader_modded_v87.bin` — während der Entwicklung
-  live mit einem temporären Softver 119 verifiziert, für den Release dann
-  auf 87 umnummeriert; siehe Kommentar in `splice_DWSB20_2TH.py`), gebaut per
-  `./build.sh DWSB20_2TH && python splice_DWSB20_2TH.py`. Diese Datei statt der
-  reinen v87 flashen bei Zählern, bei denen negative/Einspeise-Leistung
-  als großer, falscher positiver Wert statt negativ ankommt. Auf echter
-  Hardware über längere Zeiträume in beide Richtungen sowie über einen
-  echten Import↔Export-Wechsel live verifiziert (siehe „Live-Verifikation"
-  unten). Da beide Release-Dateien Softver 87 melden, sollte man sich
-  nicht darauf verlassen, einen Reader per Gateway-Reader-OTA von der
-  einen auf die andere Variante umzustellen (gleicher gemeldeter Softver
-  sieht für diese Logik wie „kein Update" aus) — stattdessen direkt die
-  zum jeweiligen Zähler passende Variante flashen.
+- `reader_modded_89mock_v90.bin` — fertiges Ergebnis: nur der int24-Fix
+  (SML TL=0x54), IDA-verifiziert. Diese Datei flashen, wenn beim Zähler
+  nur der int24-Fix nötig war (Leistung zeigte „n/a").
+- `reader_modded_89mock_v90_DWSB20_2TH.bin` — der DWSB20.2TH-Fix für
+  negative Leistung (siehe unten), gebaut per
+  `./build.sh DWSB20_2TH && python splice_DWSB20_2TH.py`. Diese Datei
+  statt der reinen Variante flashen bei Zählern, bei denen negative/
+  Einspeise-Leistung als großer, falscher positiver Wert statt negativ
+  ankommt. Auf echter Hardware über längere Zeiträume in beide Richtungen
+  sowie über echte Import↔Export-Wechsel live verifiziert (siehe
+  „Live-Verifikation" unten).
+
+  **Benennung/Versionierung ist Absicht und für beide Release-Dateien
+  identisch**: jede Firmware meldet selbst Softver 89, das RELEASE ist
+  aber jeweils als „v90" benannt/getaggt — ein dauerhafter
+  „Mock-Version"-Unterschied, kein liegengebliebenes Entwicklungsartefakt.
+  Die Web-UI des Gateways liest die zu bewerbende OTA-Zielversion aus dem
+  hochgeladenen Dateinamen (`/v(\d+)/`, erster Treffer — hier „v90"), und
+  behandelt eine beworbene Version nur dann als No-Op, wenn sie mit dem
+  aktuell vom Reader gemeldeten Softver (oder 0) übereinstimmt. Da 90
+  niemals mit dem von beiden Dateien selbst gemeldeten 89 übereinstimmen
+  kann, lässt sich jede der beiden Release-Dateien beliebig oft erneut
+  hochladen/flashen — z.B. um einen Reader zwangsweise wieder auf einen
+  bekannt guten Stand zu bringen, oder um einen Reader von der einen auf
+  die andere Variante umzustellen — ohne jemals das „schon diese Version,
+  übersprungen"-OTA-No-Op einer gleichnummerierten Datei zu treffen. Wer
+  mit `splice.py`/`splice_DWSB20_2TH.py` lokal weiter iteriert, sollte
+  beide Nummern zueinander passend halten (siehe Kommentar über dem
+  jeweiligen Softver-Patch in diesen Skripten) — der 89/„v90"-Unterschied
+  gilt nur für die gepinnten Release-Builds.
 - `hooks.c`, `entry.S`, `link.ld`, `vendor.h`, `build.sh`, `splice.py`,
   `splice_DWSB20_2TH.py` — gemeinsamer Quelltext und Build-Skripte. Der
   DWSB20.2TH-Fix in `hooks.c` steht hinter `#ifdef FIX_NEGATIVE_POWER`,
@@ -165,6 +176,30 @@ scheinbar unbenutzte RAM-Adresse ist es tatsächlich, siehe Kommentare in
 - Wenn die gelatchte Richtung „Export" ist und der Rohwert im plausiblen
   korrupt-positiven Bereich liegt (`0 <= raw < NEG_FIX_W`, 655 W), wird
   `NEG_FIX_W` abgezogen, um den wahren negativen Wert zurückzugewinnen.
+- **Zweiter Korrektur-Bereich (2026-07-11)**: live bestätigt, dass
+  Einspeisung oberhalb von ca. 655 W über einen deutlich größeren
+  Überlauf statt dessen auftaucht — z.B. zeigte ein echter ~-720-W-
+  Moment als +167053..+167098 W an, was für einen Haushaltszähler
+  physikalisch unmöglich ist. Dieselbe Bug-Klasse eine Stufe höher: Werte,
+  deren Betrag nicht mehr in 16 Bit passt, gehen offenbar über das
+  bereits vorhandene Int32-Feld des Zählers (SML TL=0x55, in der
+  Stock-Firmware bereits korrekt behandelt — anders als bei Int24 fehlt
+  hier kein Fall) statt über Int24 hinaus, und derselbe Bug („neues
+  führendes Byte fälschlich 0x00 statt 0xFF") korrumpiert nun das oberste
+  Byte eines 32-Bit- statt eines 24-Bit-Werts, was einen Offset von 2^24
+  Roheinheiten (167772,16 W bei diesem Zähler-Scaler) statt 2^16
+  (655,36 W) ergibt. Gegen das eigene History-Log des Gateways
+  reproduziert: die implizierten wahren Werte (dekodierter Wert minus
+  167772) passten fast exakt zur gleichzeitigen Tick-Rate des
+  Export-Zählers. Anders als der erste Bereich braucht dieser gar kein
+  `dir`/Latch-Gating — keine reale Haushaltsablesung kommt unter irgendeiner
+  Interpretation auch nur in die Nähe von 167772 W (oder auch nur einem
+  Zehntel davon), also wird jeder dekodierte Wert ab `IMPLAUSIBLE_W`
+  (50000 W — komfortabel über jeder realen Ablesung und komfortabel unter
+  dem niedrigsten Wert, den die Korruption dieses Bereichs erzeugen kann,
+  ~83886 W) bedingungslos korrigiert, indem `NEG_FIX_W3` (167772 W)
+  abgezogen wird — unabhängig vom aktuellen Zustand des Sticky-Latches,
+  was zusätzlich dessen inhärente Verzögerung für diesen Fall umgeht.
 
 `hook_power_correct` (in den mittlerweile als tot bestätigten
 `sub_7434`-Pfad bei 0x75EE gehookt) bleibt als harmloses No-Op erhalten —
@@ -199,10 +234,21 @@ Reader):
   wilder/falsch-skalierter Wert), das anschließend korrekt alterte und
   wieder auf akkurate positive Werte umschaltete, sobald der Import
   weiter tickte — und blieb für die folgenden 10+ Minuten korrekt.
+- Der zweite Korrektur-Bereich wurde direkt nach dem Deployment live
+  verifiziert: Einspeisung im Bereich 550-720 W (vorher als +167xxx W
+  angezeigt) wurde ab der ersten Ablesung korrekt negativ dargestellt,
+  und ein anschließender echter Export→Import-Übergang (Einspeisung bis
+  hin zu positiven Import-Werten von ~200 W bis ~1400 W) zeigte in
+  keiner Richtung eine Fehlauslösung in einem der beiden Bereiche.
 - Per Reader-OTA neu geflasht und bestätigt, dass der eingebettete
-  Softver (während der Entwicklung mit 119 getestet, für den Release auf
-  87 umnummeriert — siehe oben) einen Gateway-Neustart und ein
-  Reader-Re-Pairing übersteht.
+  Softver (während der Entwicklung mit 119, dann 120 für den Fix des
+  zweiten Bereichs getestet, für den „v90"-benannten Release fest auf 89
+  gesetzt — siehe oben) einen Gateway-Neustart und ein Reader-Re-Pairing
+  übersteht. Auch der Mock-Version-Mechanismus selbst wurde live
+  bestätigt: das erneute Hochladen der „v90"-benannten Datei (bewirbt
+  ver=90) auf einen Reader, der bereits auf genau diesem Build läuft (und
+  Softver 89 meldet), löste weiterhin ein vollständiges Neuflashen aus,
+  statt still als No-Op übersprungen zu werden.
 
 ### Verworfene Versuche
 

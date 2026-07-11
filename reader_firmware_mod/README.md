@@ -11,23 +11,34 @@ result into the firmware.
 
 - `reader_stock_v57.bin` — unmodified original firmware (the source
   `splice.py`/`splice_DWSB20_2TH.py` patch).
-- `reader_modded_v87.bin` — finished result: just the int24 fix (SML
-  TL=0x54), softver set to 87, IDA-verified. This is the file to flash for
-  meters that only needed the int24 fix (power showing "n/a").
-- `reader_modded_v87_DWSB20_2TH.bin` — the DWSB20.2TH negative-power fix (see
-  below), softver ALSO set to 87 (matching `reader_modded_v87.bin`'s
-  release version — the build was live-verified under a temporary softver
-  of 119 during development, then renumbered to 87 for release; see the
-  comment in `splice_DWSB20_2TH.py`), built by
-  `./build.sh DWSB20_2TH && python splice_DWSB20_2TH.py`. Flash this instead of
-  plain v87 for meters whose negative/feed-in power reads as a large bogus
-  positive number instead of negative. Live-verified on real hardware
-  across sustained periods in both directions and across a real
-  import↔export transition (see "Live verification" below). Since both
-  release files report softver 87, don't rely on the gateway's reader-OTA
-  path to switch a reader from one variant to the other (same reported
-  version looks like "no update" to that logic) — flash the variant your
-  meter needs directly.
+- `reader_modded_89mock_v90.bin` — finished result: just the int24 fix
+  (SML TL=0x54), IDA-verified. This is the file to flash for meters that
+  only needed the int24 fix (power showing "n/a").
+- `reader_modded_89mock_v90_DWSB20_2TH.bin` — the DWSB20.2TH negative-power
+  fix (see below), built by
+  `./build.sh DWSB20_2TH && python splice_DWSB20_2TH.py`. Flash this
+  instead of the plain variant for meters whose negative/feed-in power
+  reads as a large bogus positive number instead of negative.
+  Live-verified on real hardware across sustained periods in both
+  directions and across real import↔export transitions (see "Live
+  verification" below).
+
+  **Naming/versioning is deliberate, and identical for both release
+  files**: each firmware's OWN reported softver is 89, but the RELEASE is
+  named/tagged "v90" — a permanent "mock version" mismatch, not a
+  leftover dev artifact. The gateway's web UI parses the OTA target
+  version to advertise from the uploaded filename (`/v(\d+)/`, first
+  match — here "v90"), and only treats an advertised version as a no-op
+  if it equals the reader's own currently-reported softver (or 0). Since
+  90 can never equal either file's own reported 89, either release file
+  can be re-uploaded/reflashed any number of times — e.g. to force a
+  reader back onto a known-good build, or to switch a reader from one
+  variant to the other — without ever hitting the "already this version,
+  skipping" OTA no-op a same-numbered file would. If you build a further
+  local iteration of either variant with `splice.py`/`splice_DWSB20_2TH.py`,
+  keep both numbers matched to what's actually being tested (see the
+  comment above each script's softver patch) — the 89/"v90" mismatch is
+  only for the pinned release builds.
 - `hooks.c`, `entry.S`, `link.ld`, `vendor.h`, `build.sh`, `splice.py`,
   `splice_DWSB20_2TH.py` — shared source and build scripts. `hooks.c` has
   the DWSB20.2TH fix guarded behind `#ifdef FIX_NEGATIVE_POWER`, which
@@ -151,6 +162,28 @@ apparently-unused RAM addresses actually are, see comments in `hooks.c`):
 - When the latched direction is "export" and the raw value is in the
   plausible corrupted-positive bracket (`0 <= raw < NEG_FIX_W`, 655 W),
   subtract `NEG_FIX_W` to recover the true negative value.
+- **Second bracket (2026-07-11)**: confirmed live that feed-in beyond
+  roughly 655 W surfaces via a much larger wraparound instead — e.g. a
+  real ~-720 W moment showed up as +167053..+167098 W, which is
+  physically impossible for a residential meter. This is the same bug
+  class one level up: values whose magnitude no longer fits in 16 bits
+  apparently go out via the meter's existing Int32 field (SML TL=0x55,
+  already correctly handled by the stock firmware — no missing case here,
+  unlike Int24) instead of Int24, and the same "new leading byte wrongly
+  written as 0x00 instead of 0xFF" bug now corrupts the top byte of a
+  32-bit rather than a 24-bit value, giving a 2^24 raw-unit offset
+  (167772.16 W at this meter's scaler) instead of 2^16 (655.36 W).
+  Reproduced against the gateway's own history log: the implied true
+  values (decoded value minus 167772) matched the concurrent Wh-tick rate
+  on the export counter almost exactly. Unlike the first bracket, this
+  one needs no `dir`/latch gate at all — no real residential reading ever
+  approaches 167772 W (or even a tenth of it) under any interpretation,
+  so any decoded value at or above `IMPLAUSIBLE_W` (50000 W — comfortably
+  above any real reading and comfortably below the lowest value this
+  bracket's corruption can produce, ~83886 W) is unconditionally
+  corrected by subtracting `NEG_FIX_W3` (167772 W), regardless of the
+  sticky latch's current state — which also sidesteps that latch's
+  inherent lag for this case.
 
 `hook_power_correct` (hooked into the now-confirmed-dead `sub_7434` path
 at 0x75EE) is kept as a harmless no-op — cheap insurance in case some
@@ -183,9 +216,20 @@ Verified on real hardware (OBI C3 gateway + a paired DWSB20.2TH reader):
   wrong-unit value), which then correctly aged out and reverted to
   accurate positive readings once import resumed ticking and stayed
   correct for the following 10+ minutes.
+- The second bracket fix verified live immediately after deployment:
+  feed-in in the 550-720 W range (previously showing as +167xxx W)
+  displayed correctly as negative from the first reading, and a
+  subsequent real export→import transition (feed-in down to positive
+  import readings climbing from ~200 W to ~1400 W) showed no false
+  triggers on either bracket in either direction.
 - Reflashed via reader-OTA and confirmed the embedded softver (tested as
-  119 during development, since renumbered to 87 for release — see above)
-  persists across a gateway reboot and reader re-pair.
+  119, then 120 for the second-bracket fix during development, since
+  fixed at 89 for the "v90"-named release — see above) persists across a
+  gateway reboot and reader re-pair. Also confirmed the mock-version
+  mismatch itself works as designed: uploading the "v90"-named file
+  (advertising ver=90) to a reader already on this exact build (which
+  reports softver 89) still triggered a full reflash rather than being
+  silently skipped as a no-op.
 
 ### Things that were tried and abandoned
 

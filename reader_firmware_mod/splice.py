@@ -5,7 +5,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SRC = HERE / "reader_stock_v57.bin"
-DST = HERE / "reader_modded_v87.bin"
+DST = HERE / "reader_modded_89mock_v90.bin"
 HOOKS_BIN = HERE / "build" / "hooks.bin"
 HOOKS_SYM = HERE / "build" / "hooks.sym"
 BASE = 0x4000
@@ -74,12 +74,27 @@ def main():
 
     data += hooks_bin
 
-    # softver 57 -> 87 (matches reader_meter_v87_clean.bin -- this build is
-    # meant to be a byte-for-byte-equivalent, C-pipeline-produced stand-in
-    # for it: same int24 fix, same version number, no other hooks)
+    # softver 57 -> 89 -- deliberately does NOT match the "v90" release
+    # name below (breaks byte-for-byte equivalence with the older,
+    # hand-assembled reader_meter_v87_clean.bin reference build, in favor
+    # of matching splice_DWSB20_2TH.py's mock-version numbers exactly, so
+    # both release variants use the identical 89/"v90" pair).
+    #
+    # "89mock_v90" naming (2026-07-11, matching splice_DWSB20_2TH.py): the
+    # firmware's OWN reported softver is 89, but the RELEASE is
+    # named/tagged "v90" -- a permanent "mock version" mismatch, not a
+    # leftover dev value. The gateway's web UI parses the OTA target
+    # version to advertise from the uploaded filename via /v(\d+)/ (see
+    # gateway_web.cpp, ~line 545) and only treats an advertised version as
+    # a no-op if it equals 0 or the reader's own currently-reported
+    # softver. Since 90 can never equal this file's own reported 89, this
+    # exact release file can be re-uploaded/reflashed any number of times
+    # (e.g. to force a reader back onto a known-good build) without ever
+    # hitting the "already this version, skipping" OTA no-op a
+    # same-numbered file would.
     for off in (0x8b36, 0x8b80):
         assert data[off] == 0x39 and data[off + 1] == 0x20, f"unexpected bytes at {hex(off)}: {data[off:off+2].hex()}"
-        data[off] = 0x57
+        data[off] = 0x59  # 0x59 = 89 decimal (intentionally != the v90 in DST's filename)
 
     with open(DST, "wb") as f:
         f.write(data)
