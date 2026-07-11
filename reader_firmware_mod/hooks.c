@@ -38,6 +38,14 @@ int hook_decode_int24(u8 *p, u8 *out)
     u8 *q = p - 0x20;
     out[8] = q[0x1D];
     out[9] = q[0x1F];
+
+#ifdef FIX_NEGATIVE_POWER
+    // Mark "a 24-bit (TL=0x54) value was just decoded" so hook_power_correct2
+    // (fired moments later, downstream in the same telegram) can tell WHICH
+    // width the meter actually used for the value it's about to correct --
+    // see the WAS_INT24_ADDR block there for why this matters.
+    *((volatile u32 *)0x20001014) = 1;
+#endif
     return 1;
 }
 
@@ -191,9 +199,35 @@ i32 hook_power_correct(i32 raw)
 #define STATE_AGE_ADDR ((volatile u32 *)0x20001010)   // quiet telegrams (no tick either way) since dir was last set
 #define STICKY_MAX_AGE 5
 
+// Width-aware small-magnitude rule (2026-07-11), replacing the earlier abandoned attempt: this meter's own
+// encoder never sends a genuine positive reading via the 24-bit field (TL=0x54) at all, up to at least the
+// full small-bracket ceiling (NEG_FIX_W, 655 W) -- positive values in that whole range go out via some
+// 16-bit-family encoding (Uint16, TL=0x63) that hook_decode_int24 never sees. So if a value reaching this
+// hook (a) was actually decoded via the 24-bit path (hook_decode_int24, tracked via WAS_INT24_ADDR below --
+// set there, consumed here) AND (b) is still under NEG_FIX_W, the ONLY way that combination happens is the
+// corrupted-negative case (top byte wrongly 0x00 instead of 0xFF) -- a genuine positive reading that small
+// would never have used the 24-bit field in the first place. No dir/latch gating needed for this bracket at
+// all -- unlike the tick-based fallback below, this doesn't need to wait for a Wh counter tick, which
+// matters a lot at low power: a genuine -30 W export takes over 2 hours to tick even 1 Wh, so the tick-based
+// approach alone could never catch it in practice. Live-verified 2026-07-11: confirmed both that small
+// negative readings (e.g. -30 W, previously showing as +630 W with the tick-only approach) are now
+// corrected immediately, AND that genuine positive readings across the full 0-655 W range (including the
+// 330-655 W band this specific household regularly sees) are NOT misfired negative.
+//
+// This is deliberately NOT the same as the earlier "TRIED AND REVERTED" rule below (which checked raw
+// magnitude alone, with no way to know which width had actually been used, and wrongly flipped genuine
+// small positive readings that happened to reach this same post-decode hook via the 16-bit path). Gating
+// on WAS_INT24_ADDR removes that ambiguity -- it only fires for values this reader ITSELF confirmed came
+// through the 24-bit decoder, not merely "a small value showed up here".
+#define WAS_INT24_ADDR ((volatile u32 *)0x20001014)   // set by hook_decode_int24, consumed (read+cleared) here
+#define WIDTH_GATE_W    NEG_FIX_W   // this meter never sends genuine positive via 24-bit below this ceiling (confirmed live)
+
 i32 hook_power_correct2(i32 raw)
 {
     if (raw == OBI_NA) return raw;
+
+    u32 was24 = *WAS_INT24_ADDR;
+    *WAS_INT24_ADDR = 0;   // consume: only reflects a 24-bit decode since the LAST correction check
 
     volatile u32 *impP = (volatile u32 *)0x20000D68;
     volatile u32 *expP = (volatile u32 *)0x20000D6C;
@@ -244,7 +278,17 @@ i32 hook_power_correct2(i32 raw)
     // distinguish them here, unlike what holds one level down in the
     // raw SML bytes. Back to trend-only, which is anchored to the
     // (reliable, if laggy) counter ticks instead.
-    if (raw >= IMPLAUSIBLE_W)
+    //
+    // NEW (2026-07-11): the width-gated rule above (was24 && raw <
+    // WIDTH_GATE_W) doesn't have that ambiguity -- it's checked FIRST,
+    // ahead of the tick-based trend logic, since it doesn't need to wait
+    // for a Wh counter tick at all (removing the "~1 minute of wrong
+    // readings during a direction change" lag for this specific,
+    // provably-corrupted case). The tick-based dir==2 check remains as a
+    // fallback for whatever this width check doesn't catch.
+    if (was24 && raw >= 0 && raw < WIDTH_GATE_W)
+        raw -= NEG_FIX_W;
+    else if (raw >= IMPLAUSIBLE_W)
         raw -= NEG_FIX_W3;
     else if (dir == 2 && raw >= 0 && raw < NEG_FIX_W)
         raw -= NEG_FIX_W;

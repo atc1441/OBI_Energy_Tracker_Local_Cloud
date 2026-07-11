@@ -3,5 +3,5 @@
 0000ee28 T entry_power_correct2
 0000ee12 T entry_sxth16_fix
 0000ee38 T hook_decode_int24
-0000ee70 T hook_power_correct
-0000ee72 T hook_power_correct2
+0000ee78 T hook_power_correct
+0000ee7a T hook_power_correct2
