@@ -2174,6 +2174,7 @@ static void startServices() {
   mqtt.setCallback(mqttCallback);          // <base>/<id>/set_interval command topic
   bool sta = WiFi.status() == WL_CONNECTED;
   g_serverUp = true; g_wifiOk = sta;
+  if (sta) syncNtp();
   Serial.printf("[web] dashboard up: http://%s/  (%s)\n",
                 (sta ? WiFi.localIP() : WiFi.softAPIP()).toString().c_str(),
                 sta ? "connected" : "setup AP — use the WiFi button to configure");
