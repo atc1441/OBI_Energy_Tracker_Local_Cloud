@@ -1766,6 +1766,14 @@ static void streamRows(const String &csv) {
     int nl = csv.indexOf('\n', i); if (nl < 0) nl = n;
     String line = csv.substring(i, nl); line.trim(); i = nl + 1;
     if (!line.length()) continue;
+    // Sanity-bound the epoch (always the first column, for both samples and daily rows) — same range as
+    // timeValid(). Drops rows written while the system clock was corrupted (e.g. a failed mktime() call
+    // returning -1, which cast to uint32_t reads back as 4294967295 = 2106-02-07) so a single old poisoned
+    // row already on flash can't wreck a chart's x-axis scale forever — new writes are already gated by
+    // timeValid() in historyService(), this just also protects reads of whatever was written before that.
+    { int fc = line.indexOf(',');
+      unsigned long ep = strtoul((fc < 0 ? line : line.substring(0, fc)).c_str(), nullptr, 10);
+      if (ep <= 1735689600UL || ep >= 4102444800UL) continue; }
     String row = firstRow ? "[" : ",["; firstRow = false;
     int fs = 0, col = 0;
     for (int k = 0; k <= (int)line.length(); k++) {
@@ -1982,11 +1990,17 @@ function lineChart(series,unit,zeroLine){
   g+=`<text x=${xx.toFixed(1)} y=${H-12} text-anchor=middle fill="#7d8da0" font-size=11>${useDay?dm(xv):hm(xv)}</text>`;}
  // explicit zero line — separate from the regular grid (which rarely lands exactly on 0) so the
  // import/export crossover is instantly visible on charts that legitimately go negative (power).
+ // NOTE: self-closing tags below always keep a literal space before "/>". Without it, an HTML5 parser
+ // (unlike a strict XML/SVG parser) reads an unquoted final attribute value as CONTINUING through the "/"
+ // (e.g. stroke-width=1.5/> tokenizes as value "1.5/", not value "1.5" + self-close) -- the tag then never
+ // actually self-closes, and every following sibling (both polylines, the unit label) gets parsed as a
+ // child of it instead, which shape elements like <line>/<polyline> don't render. Cost a debugging session
+ // to track down: everything downstream of the zero-line silently vanished with no console error anywhere.
  if(zeroLine&&y0<0&&y1>0){const yz=Y(0);
-  g+=`<line x1=${pl} y1=${yz.toFixed(1)} x2=${W-pr} y2=${yz.toFixed(1)} stroke="#7d8da0" stroke-width=1.5/>`;}
+  g+=`<line x1=${pl} y1=${yz.toFixed(1)} x2=${W-pr} y2=${yz.toFixed(1)} stroke="#7d8da0" stroke-width=1.5 />`;}
  series.forEach(s=>{if(!s.pts.length)return;
   const d=s.pts.map(p=>X(p[0]).toFixed(1)+','+Y(p[1]).toFixed(1)).join(' ');
-  g+=`<polyline points="${d}" fill=none stroke="${s.color}" stroke-width=2 stroke-linejoin=round stroke-linecap=round${s.dash?` stroke-dasharray="${s.dash}"`:''}/>`;});
+  g+=`<polyline points="${d}" fill=none stroke="${s.color}" stroke-width=2 stroke-linejoin=round stroke-linecap=round${s.dash?` stroke-dasharray="${s.dash}"`:''} />`;});
  g+=`<text x=${pl-8} y=11 text-anchor=end fill="#7d8da0" font-size=10>${unit}</text>`;
  return `<svg class=chart viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${g}</svg>`;
 }
