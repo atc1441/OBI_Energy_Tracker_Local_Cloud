@@ -17,11 +17,21 @@ der UART0 verbinden (115200 8N1). Ein‑Klick‑Reads für cmd 49 (TEA‑Key + I
 Antworten (inkl. der aus dem gemischten Log‑Stream reassemblierten `C5 5C`‑Frames). Protokoll:
 [03-uart-config.md](03-uart-config.md).
 
+> ⚠️ Die SSID-/Passwort‑Felder von cmd 58 erlauben auf dem Draht bis zu 255 Byte je Feld, aber die
+> **Stock‑Gateway‑Firmware 1.0.1 verarbeitet WLAN‑Passwörter nur bis 32 Byte** korrekt — ein längeres wird
+> stillschweigend abgeschnitten bzw. abgelehnt, und das Gerät verbindet sich nicht. Bei einer
+> Stock‑(Nicht‑Custom‑)Firmware das Passwort auf ≤32 Zeichen halten.
+
 ## obi_gateway_ble.html
 In Chrome/Edge öffnen (Web Bluetooth). Scannt `OBI-XXXXXX`, verbindet Service `ABF0`, sendet
 TEA‑verschlüsseltes JSON an `ABF2` (Status / WifiSet / SetTMPCertificate / Unbind). **Du musst den TEA‑Key
 des Geräts eintragen** — das Feld enthält einen Platzhalter (`0011…EEFF`), keinen echten Key. Browser‑
 Alternative zu `ble_provision.py`.
+
+> ⚠️ Dasselbe **32‑Byte‑WLAN‑Passwort‑Limit** wie oben gilt auf Stock‑Firmware 1.0.1 auch für die
+> WifiSet‑Felder hier. **Unter Linux** steckt Web Bluetooth in Chrome/Chromium hinter einem Flag — vorher
+> `chrome://flags/#enable-experimental-web-platform-features` aktivieren und den Browser neu starten, sonst
+> findet die Seite das Gerät nicht.
 
 ## obi_ble_codec.py
 Reiner Stdlib‑Referenz‑Codec (dokumentiert in [03-ble-protokoll.md](03-ble-protokoll.md)):

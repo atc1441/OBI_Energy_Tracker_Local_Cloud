@@ -38,6 +38,9 @@ flowchart LR
 4. Start `mqtts_server.py` on that host.
 
 ### Gotchas
+- **Stock firmware 1.0.1 WiFi password limit.** The device only handles passwords up to **32 bytes** —
+  a longer one is silently truncated/rejected and the bridge fails to join. Keep it ≤32 characters (or use
+  a temporary shorter password for provisioning) on a stock, non-custom gateway.
 - **Re-push after regenerating PKI.** `gen_certs.py` makes a *new CA* each run; the device still trusts
   the *old* `caPem` and will reject the new server cert with mbedTLS `-0x2700` /
   `SSLV3_ALERT_BAD_CERTIFICATE`. After any regen, re-run `ble_provision.py` so the device gets the new

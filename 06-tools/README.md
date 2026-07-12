@@ -16,11 +16,20 @@ creds); builders for cmd 48/52/58. It computes the CRC-16/MODBUS, shows the fram
 auto-decodes responses (incl. the reassembled `C5 5C` frames out of the mixed log stream). Protocol:
 [../03-reverse-engineering/uart-config-protocol.md](../03-reverse-engineering/uart-config-protocol.md).
 
+> ⚠️ The cmd 58 SSID/password fields accept up to 255 bytes each on the wire, but **stock gateway firmware
+> 1.0.1 only handles WiFi passwords up to 32 bytes** — a longer one is silently truncated/rejected and the
+> device fails to join. Keep it ≤32 characters on a stock (non-custom) gateway.
+
 ## obi_gateway_ble.html
 Open in Chrome/Edge (Web Bluetooth). Scans for `OBI-XXXXXX`, connects to service `ABF0`, and sends
 TEA-encrypted JSON to `ABF2` (Status / WifiSet / SetTMPCertificate / Unbind). **You must fill in the
 device's TEA key** — the field ships with a placeholder (`0011…EEFF`), not a real key. Use it as a
 browser alternative to `ble_provision.py`.
+
+> ⚠️ Same **32-byte WiFi password limit** as above applies to the WifiSet fields on stock firmware 1.0.1.
+> **On Linux**, Web Bluetooth is behind a flag in Chrome/Chromium — enable
+> `chrome://flags/#enable-experimental-web-platform-features` and relaunch the browser before this page can
+> find the device.
 
 ## obi_ble_codec.py
 Pure-stdlib reference codec (documented in

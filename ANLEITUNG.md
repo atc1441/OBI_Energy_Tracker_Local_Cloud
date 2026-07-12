@@ -67,6 +67,11 @@ und einen **Reader koppeln**:
 python ble_provision.py --config pki/ble_config.json --key <DEIN-TEA-KEY> --unbind \
     --ssid <dein-wlan> --password <dein-wlan-passwort>
 ```
+> ⚠️ **Stock‑Firmware 1.0.1:** Das WLAN‑Passwort wird geräteseitig nur bis **32 Byte** korrekt verarbeitet —
+> ein längeres wird stillschweigend abgeschnitten bzw. abgelehnt, und die Bridge verbindet sich nicht. Auf
+> einer Stock‑(Nicht‑Custom‑)Firmware das Passwort auf ≤32 Zeichen halten (notfalls temporär ein kürzeres
+> zum Provisionieren verwenden).
+
 Der Reader muss eingeschaltet und in der Nähe der Bridge sein; das Reader‑Koppeln läuft **standardmäßig mit** (es muss — BLE geht aus, sobald das Gerät in Betrieb ist,
 und es gibt **keinen MQTT‑Weg, einen Reader hinzuzufügen**, [07](de/07-reader-koppeln.md)). Das Tool scannt
 und zeigt dann eine **Auswahl der gefundenen Reader**, aus der du den richtigen wählst:
@@ -81,6 +86,9 @@ und zeigt dann eine **Auswahl der gefundenen Reader**, aus der du den richtigen 
 
 **Alternativ im Browser:** [`06-tools/obi_gateway_ble.html`](06-tools/obi_gateway_ble.html) öffnen, TEA‑Key
 eintragen, und die `SetTMPCertificate`‑Felder aus `pki/ble_config.json` einfügen.
+> **Linux:** Web Bluetooth steckt dort in Chrome/Chromium hinter einem Flag — vorher
+> `chrome://flags/#enable-experimental-web-platform-features` aktivieren (Browser neu starten), sonst
+> findet die Seite das Gerät nicht.
 
 ---
 

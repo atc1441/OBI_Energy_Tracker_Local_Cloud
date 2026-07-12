@@ -50,6 +50,9 @@
   <button id="btnDisconnect" disabled>Disconnect</button>
   <span id="status" class="status off">disconnected</span>
 </header>
+<p><small>⚠️ Needs Web Bluetooth (Chrome/Edge). <b>On Linux</b> it's behind a flag — enable
+<code>chrome://flags/#enable-experimental-web-platform-features</code> and relaunch the browser first, or
+Connect won't find the device.</small></p>
 <main>
   <div class="side">
     <h2>Crypto</h2>
@@ -78,6 +81,8 @@
       <label>SSID</label><input id="wifiSsid" placeholder="MyWLAN">
       <label>Password</label><input id="wifiPass" placeholder="secret">
       <button class="primary" id="btnWifiSet">Send WifiSet</button>
+      <small>⚠️ Stock gateway firmware 1.0.1 only handles WiFi passwords up to 32 bytes correctly — a
+      longer one is silently truncated/rejected and the device fails to join.</small>
     </div>
 
     <div class="card">

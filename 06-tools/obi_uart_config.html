@@ -295,9 +295,10 @@ function renderFields(){
     f.innerHTML=`
       <div class="row"><span class="lab">SSID <span class="hint">text · ≤255 bytes</span></span>
         <input id="w_ssid" spellcheck="false" placeholder="MyNetwork"></div>
-      <div class="row"><span class="lab">Password <span class="hint">text · ≤255 bytes</span></span>
+      <div class="row"><span class="lab">Password <span class="hint">text · ≤255 bytes on the wire</span></span>
         <input id="w_pwd" spellcheck="false" placeholder="wifi-password"></div>
-      <div class="field-note">payload = [ssid_len][pwd_len][ssid][password]</div>`;
+      <div class="field-note">payload = [ssid_len][pwd_len][ssid][password]</div>
+      <div class="field-note">⚠️ stock gateway firmware 1.0.1 only handles WiFi passwords up to 32 bytes correctly — a longer one is silently truncated/rejected and the device fails to join</div>`;
   } else if(preset==="52"){
     f.innerHTML=`<div class="row"><span class="lab">LoRa payload <span class="hint">raw hex · first byte = length</span></span>
         <textarea id="f_raw" spellcheck="false" placeholder="03 AA BB CC"></textarea></div>`;

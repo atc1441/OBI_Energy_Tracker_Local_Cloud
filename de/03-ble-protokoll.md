@@ -25,6 +25,11 @@ DevicesUnbind=11, DevicesRequest=12, FactoryReset=13, BluetoothDisable=14 (die `
 generische Multi‑Device-/Smart‑Outlet‑Variante von `Sensor*`). Fehlercodes WifiSet: `0=OK`, `1=SSID Not
 Exist`, `2=Connect Failed`; SetTMPCertificate: `0=OK`, `1=Failed to retrieve persistent certificate`.
 
+> ⚠️ **Stolperstein Stock‑Firmware 1.0.1:** Die Stock‑Gateway‑Firmware verarbeitet WLAN‑Passwörter in
+> `WifiSetRequest` nur bis **32 Byte** korrekt — ein längeres wird stillschweigend abgeschnitten bzw.
+> abgelehnt, und das Gerät verbindet sich nicht. Bei einer Stock‑(Nicht‑Custom‑)Firmware das WLAN‑Passwort
+> auf ≤32 Zeichen halten.
+
 **Status‑Response (1.2.x, `ble_cmd_status`):**
 ```json
 { "type": "Status", "data": { "uuid": "<bridge>", "firmware_version": "1.2.1", "hardware_version": "6.0.0",

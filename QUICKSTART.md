@@ -35,6 +35,10 @@ python mqtts_server.py --host 0.0.0.0 --port 8883
 python ble_provision.py --config pki/ble_config.json --key <YOUR-TEA-KEY> --unbind \
     --ssid <your-wifi> --password <your-wifi-pw>
 ```
+> ⚠️ **Stock firmware 1.0.1:** the WiFi password is only handled correctly up to **32 bytes** on the
+> device side — a longer one is silently truncated/rejected and the bridge fails to join. Keep it ≤32
+> characters on a stock (non-custom) gateway (or use a temporary shorter one for provisioning).
+
 Reader pairing runs **by default** (it must — BLE turns off once the device is operational, and there is
 **no MQTT way to add a reader**). The tool scans, then shows a **menu of the readers it found** so you pick
 which one to bind:
@@ -47,6 +51,9 @@ which one to bind:
 Non-interactive instead: `--sensor-uuid <uuid>` (a specific one) or `--first` (first seen); `--no-pair-sensor`
 to skip. A freshly bound reader takes a few minutes to report. Browser alternative:
 [`06-tools/obi_gateway_ble.html`](06-tools/obi_gateway_ble.html).
+> **Linux:** Web Bluetooth sits behind a flag in Chrome/Chromium there — enable
+> `chrome://flags/#enable-experimental-web-platform-features` (relaunch the browser) first, or the page
+> won't find the device.
 
 ## Step 5 — done ✅ — watch the meter data arrive
 The bridge joins your WiFi → `mqtts://<your-ip>:8883` → provisions → reconnects with your permanent cert →

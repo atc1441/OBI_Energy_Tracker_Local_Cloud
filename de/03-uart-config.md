@@ -24,6 +24,11 @@ C5 5C | LEN(2, big-endian) | CRC(2) | FE | CMD | PAYLOAD…
 | **58** `0x3A` | schreiben | `[ssid_len][pwd_len][ssid][passwort]` | Ack |
 | **59** `0x3B` | lesen | — | `[status][ssid_len][pwd_len][SSID][PASSWORT]` |
 
+> ⚠️ **Stolperstein Stock‑Firmware 1.0.1:** `pwd_len` ist ein einzelnes Byte (Wire‑Kapazität bis 255), aber
+> die Stock‑Gateway‑Firmware selbst verarbeitet WLAN‑Passwörter nur bis **32 Byte** korrekt — ein längeres
+> Passwort wird stillschweigend abgeschnitten bzw. abgelehnt, und das Gerät verbindet sich nicht. Bei einer
+> Stock‑(Nicht‑Custom‑)Firmware das WLAN‑Passwort über cmd 58 auf ≤32 Zeichen halten.
+
 ## Fertige Frames
 ```
 TEA-Key + IDs lesen (cmd 49):    C5 5C 00 08 00 00 FE 31         # CRC 0000 = skip

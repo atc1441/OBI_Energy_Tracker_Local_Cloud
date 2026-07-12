@@ -417,7 +417,10 @@ def main():
     ap.add_argument("--config", help="pki/ble_config.json from gen_certs.py (omit for pair/status only)")
     ap.add_argument("--key", required=True, help="device TEA key (32 hex) -- see fetch_tea_key.py or UART cmd 49")
     ap.add_argument("--ssid", help="Wi-Fi SSID to set (so it reaches the server)")
-    ap.add_argument("--password", default="", help="Wi-Fi password")
+    ap.add_argument("--password", default="",
+                     help="Wi-Fi password -- stock gateway firmware 1.0.1 only handles up to 32 bytes "
+                          "correctly; a longer one is silently truncated/rejected and the device fails "
+                          "to join")
     ap.add_argument("--unbind", action="store_true", help="send UnbindRequest first (clear existing cert)")
     ap.add_argument("--pair-sensor", dest="pair_sensor", action="store_true", default=True,
                     help="scan for readers and bind one -- ON by default (BLE-only!)")

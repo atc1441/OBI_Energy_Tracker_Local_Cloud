@@ -24,6 +24,11 @@ C5 5C | LEN(2, big-endian) | CRC(2) | FE | CMD | PAYLOAD…
 | **58** `0x3A` | write | `[ssid_len][pwd_len][ssid][password]` | ack |
 | **59** `0x3B` | read | — | `[status][ssid_len][pwd_len][SSID][PASSWORD]` |
 
+> ⚠️ **Stock firmware 1.0.1 caveat:** `pwd_len` is a single byte (wire capacity up to 255), but the stock
+> gateway firmware itself only handles WiFi passwords up to **32 bytes** — a longer password is silently
+> truncated/rejected and the device fails to join. Keep the WiFi password ≤32 characters when provisioning
+> a stock (non-custom) gateway over cmd 58.
+
 ## Ready-made frames
 ```
 Read TEA key + IDs (cmd 49):   C5 5C 00 08 00 00 FE 31         # CRC 0000 = skip

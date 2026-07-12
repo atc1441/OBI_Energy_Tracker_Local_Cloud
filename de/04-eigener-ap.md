@@ -36,6 +36,10 @@ flowchart LR
 4. `mqtts_server.py` auf diesem Host starten.
 
 ### Stolpersteine
+- **WLAN‑Passwort‑Limit der Stock‑Firmware 1.0.1.** Das Gerät verarbeitet Passwörter nur bis **32 Byte**
+  korrekt — ein längeres wird stillschweigend abgeschnitten bzw. abgelehnt, und das Gateway verbindet sich
+  nicht. Bei einer Stock‑(Nicht‑Custom‑)Firmware das Passwort auf ≤32 Zeichen halten (notfalls temporär ein
+  kürzeres zum Provisionieren verwenden).
 - **Nach PKI‑Regenerieren neu pushen.** `gen_certs.py` macht je Lauf eine *neue CA*; das Gerät vertraut noch
   der *alten* `caPem` und lehnt das neue Server‑Cert ab (mbedTLS `-0x2700` / `BAD_CERTIFICATE`). Nach jedem
   Regen also `ble_provision.py` erneut, **dann** den Server neu starten.

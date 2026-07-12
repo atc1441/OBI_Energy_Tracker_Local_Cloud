@@ -25,6 +25,10 @@ DevicesBind=10, DevicesUnbind=11, DevicesRequest=12, FactoryReset=13, BluetoothD
 family is the generic multi-device / smart-outlet variant of `Sensor*`). Error codes for WifiSet: `0=OK`,
 `1=SSID Not Exist`, `2=Connect Failed`; SetTMPCertificate: `0=OK`, `1=Failed to retrieve persistent certificate`.
 
+> ⚠️ **Stock firmware 1.0.1 caveat:** the stock gateway firmware only handles WiFi passwords up to **32
+> bytes** in `WifiSetRequest` — a longer one is silently truncated/rejected and the device fails to join.
+> Keep the WiFi password ≤32 characters when provisioning a stock (non-custom) gateway.
+
 **Status response (1.2.x, `ble_cmd_status`):**
 ```json
 { "type": "Status", "data": { "uuid": "<bridge>", "firmware_version": "1.2.1", "hardware_version": "6.0.0",
