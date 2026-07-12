@@ -178,6 +178,7 @@ static String readersJson() {
     j += ",\"snr\":" + String(r.lastSnr, 1);
     j += ",\"infrared\":" + String((r.flags & 1) ? "true" : "false");
     j += ",\"import\":" + jnum(r.import_) + ",\"export\":" + jnum(r.export_) + ",\"power\":" + jnumS(r.power);
+    j += ",\"power_calc\":" + jnumS(r.calcPower);
     j += ",\"has_data\":" + String(r.haveData ? "true" : "false");
     j += ",\"bootloader\":" + String(r.inBootloader ? "true" : "false");
     j += ",\"age_s\":" + String(age);
@@ -1890,7 +1891,7 @@ function applyLang(){document.documentElement.lang=lang;
 document.querySelectorAll('.langtog button').forEach(b=>b.onclick=()=>{lang=b.dataset.l;localStorage.setItem('obilang',lang);applyLang();if(cur)load();});
 
 // ---- inline SVG line chart: series=[{name,color,pts:[[xEpoch,y]...]}] ----
-function lineChart(series,unit){
+function lineChart(series,unit,zeroLine){
  const W=760,H=300,pl=76,pr=16,pt=16,pb=34;   // wider left margin: labels can be e.g. "83,077.992"
  let xs=[],ys=[];series.forEach(s=>s.pts.forEach(p=>{xs.push(p[0]);ys.push(p[1]);}));
  if(xs.length<2)return '<div class=empty>'+t('fewPts')+'</div>';
@@ -1909,6 +1910,10 @@ function lineChart(series,unit){
  const span=x1-x0,useDay=span>2*86400,nx=4;
  for(let i=0;i<=nx;i++){const xv=x0+span*i/nx,xx=X(xv);
   g+=`<text x=${xx.toFixed(1)} y=${H-12} text-anchor=middle fill="#7d8da0" font-size=11>${useDay?dm(xv):hm(xv)}</text>`;}
+ // explicit zero line — separate from the regular grid (which rarely lands exactly on 0) so the
+ // import/export crossover is instantly visible on charts that legitimately go negative (power).
+ if(zeroLine&&y0<0&&y1>0){const yz=Y(0);
+  g+=`<line x1=${pl} y1=${yz.toFixed(1)} x2=${W-pr} y2=${yz.toFixed(1)} stroke="#7d8da0" stroke-width=1.5/>`;}
  series.forEach(s=>{if(!s.pts.length)return;
   const d=s.pts.map(p=>X(p[0]).toFixed(1)+','+Y(p[1]).toFixed(1)).join(' ');
   g+=`<polyline points="${d}" fill=none stroke="${s.color}" stroke-width=2 stroke-linejoin=round stroke-linecap=round${s.dash?` stroke-dasharray="${s.dash}"`:''}/>`;});
@@ -2038,7 +2043,7 @@ async function load(silent){
    (powPts.length>=2?'<span><i style="background:'+C.pow+'"></i>'+t('legPow')+'</span>':'')+
    (calcPts.length>=2?'<span><i style="background:'+C.calc+'"></i>'+t('legCalc')+'</span>':'')+
    '</div>';
-  html+='<div class=card><h2>'+t('cPow')+'</h2><p class=cap>'+t('capPow')+'</p>'+lineChart(series,'W')+legend+'</div>';
+  html+='<div class=card><h2>'+t('cPow')+'</h2><p class=cap>'+t('capPow')+'</p>'+lineChart(series,'W',true)+legend+'</div>';
  }
  // daily table
  if(cons.length){
@@ -2283,6 +2288,8 @@ static void publishDiscovery(const Reader &r) {
        "{% if value_json['export'] is not none %}{{ value_json['export'] }}{% endif %}", false},
     {"power",    "Power",     "power",           "W",   "measurement",
        "{% if value_json['power'] is not none %}{{ value_json['power'] }}{% endif %}", false},
+    {"power_calc", "Power (calculated)", "power", "W",  "measurement",
+       "{% if value_json['power_calc'] is not none %}{{ value_json['power_calc'] }}{% endif %}", false},
     {"battery",  "Battery",   "voltage",         "V",   "measurement",
        "{{ (value_json['battery_mV']|float(0))/1000 }}", true},
     {"rssi",     "RSSI",      "signal_strength", "dBm", "measurement",
@@ -2412,7 +2419,7 @@ static void publishGatewayDiscovery() {
 // Remove a reader's discovery entities from HA by publishing empty retained configs.
 // Mirrors the topics created by publishDiscovery() — keep the two lists in sync.
 static void clearDiscovery(const String &uid) {
-  static const char *sensors[]  = {"import","export","power","battery","rssi","snr","lastseen","id","uuid","type","firmware","hardware"};
+  static const char *sensors[]  = {"import","export","power","power_calc","battery","rssi","snr","lastseen","id","uuid","type","firmware","hardware"};
   static const char *binaries[] = {"infrared","paired","legacy","bootloader"};
   for (const char *k : sensors)  { String t = "homeassistant/sensor/"        + uid + "/" + k + "/config"; mqtt.publish(t.c_str(), "", true); }
   for (const char *k : binaries) { String t = "homeassistant/binary_sensor/" + uid + "/" + k + "/config"; mqtt.publish(t.c_str(), "", true); }
@@ -2498,6 +2505,7 @@ static void mqttService() {
                    ",\"rssi\":" + (int)r.lastRssi + ",\"snr\":" + String(r.lastSnr, 1) + ",\"infrared\":" + ((r.flags & 1) ? "true" : "false") +
                    ",\"import\":" + jnum(r.import_) + ",\"export\":" + jnum(r.export_) +
                    ",\"power\":" + jnumS(r.power) +
+                   ",\"power_calc\":" + jnumS(r.calcPower) +
                    ",\"softver\":" + String(r.softver) + ",\"hardver\":" + String(r.hardver) +
                    ",\"paired\":" + (r.haveKey ? "true" : "false") +
                    ",\"legacy\":" + (r.legacy ? "true" : "false") +

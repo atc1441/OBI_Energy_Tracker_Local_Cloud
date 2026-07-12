@@ -26,9 +26,14 @@ struct Reader {
   uint16_t battery_mV = 0;
   uint8_t  flags = 0;            // b0 infrared, b1 lowpower, b2 timesync
   uint32_t import_ = 0, export_ = 0, power = 0;   // 0x7FFFFFFF = n/a
+  uint32_t calcPower = 0x7FFFFFFF;   // avg W between this and the previous frame, from the Wh-counter
+                                      // deltas alone (signed, like `power`); 0x7FFFFFFF = n/a
   bool     legacy  = false;      // legacy (3x.x) layout
   bool     inBootloader = false;  // reader reset into its OTA bootloader (sends cmd 20/21/33, no energy)
-  uint32_t lastSeenMs = 0;
+  uint32_t lastSeenMs = 0;       // last ANY frame (announce/bootloader/energy/...) — used for "age"/staleness
+  uint32_t lastEnergyMs = 0;     // last successfully decoded ENERGY frame specifically — calcPower's dt base;
+                                  // must NOT reuse lastSeenMs, which other frame types also bump and would
+                                  // otherwise make the delta window collapse to a few ms, not the real report interval
   // config
   uint16_t setInterval = 0;      // last upload-interval requested (shown in UI)
   uint8_t  intervalTx  = 0;      // remaining cmd-14 retransmits to send
