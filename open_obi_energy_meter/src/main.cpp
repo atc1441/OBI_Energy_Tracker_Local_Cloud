@@ -717,7 +717,7 @@ static void handleRx() {
   radio.startReceive();
   if (st != RADIOLIB_ERR_NONE || len < 4) return;
 
-  led_blip();                        // brief LED flash on any received LoRa frame (activity indicator)
+  if (!web_night_mode()) led_blip(); // brief LED flash on any received LoRa frame (activity indicator)
   float rssi = radio.getRSSI();
   float snr  = radio.getSNR();       // SX1262 packet SNR (dB) — link margin, more telling than RSSI near the limit
   uint8_t handle[3] = { buf[0], buf[1], buf[2] };
@@ -1042,7 +1042,7 @@ void loop() {
 #endif
     if      (arming)                led_set(LED_RESET_ARMED);
     else if (gw_ota_active())       led_set(LED_OTA);
-    else if (web_wifi_connected())  led_set(LED_WIFI);
+    else if (web_wifi_connected())  led_set(web_night_mode() ? LED_OFF : LED_WIFI);
     else                            led_set(LED_PORTAL);
   }
   led_loop();

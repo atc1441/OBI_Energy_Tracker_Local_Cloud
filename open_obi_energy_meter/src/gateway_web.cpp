@@ -95,6 +95,7 @@ static bool     g_mqttTls = false;   // MQTTS: wrap the MQTT socket in TLS (WiFi
 static String   g_mqttCa;            // optional PEM CA cert to verify the broker; empty = encrypt-only (setInsecure)
 static char     g_tz[48] = "CET-1CEST,M3.5.0,M10.5.0/3";   // POSIX TZ for the history day-buckets (user-settable)
 static char     g_ntp[64] = "pool.ntp.org";                // NTP server for the wall clock (user-settable)
+static volatile bool g_nightMode = false;                    // disable normal-operation LED activity
 static uint16_t g_pubEvery = 15;
 
 // HTTP Basic Auth for the whole web dashboard/API. Blank username = auth disabled (open, backward compatible).
@@ -213,6 +214,7 @@ static String statusJson() {
   { time_t tnow = time(nullptr); struct tm lt; localtime_r(&tnow, &lt); char tb[24];
     strftime(tb, sizeof tb, "%Y-%m-%d %H:%M:%S", &lt);
     j += ",\"tz\":" + jstr(g_tz) + ",\"ntp\":" + jstr(g_ntp) + ",\"time\":\"" + String(tb) + "\",\"time_valid\":" + String(tnow > 1735689600 ? "true" : "false"); }
+  j += ",\"night_mode\":" + String(g_nightMode ? "true" : "false");
   j += ",\"wifi\":" + String(g_wifiOk ? "true" : "false");
   j += ",\"ip\":\"" + (g_wifiOk ? WiFi.localIP().toString() : String("-")) + "\"";
   j += ",\"wifi_rssi\":" + String(g_wifiOk ? WiFi.RSSI() : 0);
@@ -793,6 +795,15 @@ static void handleTz() {
   server.send(200, "application/json", String("{\"ok\":true,\"tz\":") + jstr(g_tz) + ",\"ntp\":" + jstr(g_ntp) + "}");
 }
 
+static void handleNightMode() {
+  if (server.hasArg("enabled")) {
+    g_nightMode = server.arg("enabled") == "1" || server.arg("enabled") == "true";
+    prefs.begin("obigw", false); prefs.putBool("nightmode", g_nightMode); prefs.end();
+    Serial.printf("[settings] night mode %s\n", g_nightMode ? "on" : "off");
+  }
+  server.send(200, "application/json", String("{\"ok\":true,\"enabled\":") + (g_nightMode ? "true" : "false") + "}");
+}
+
 // ---- reader firmware OTA upload (multipart, .bin) --------------------------
 static bool s_otaOk = false;
 static void handleOtaUpload() {
@@ -1147,6 +1158,13 @@ button:disabled{opacity:.5;cursor:default}
  </div>
 
  <div class=card>
+  <h3>⚙ <span id=hmisc>Sonstiges</span></h3>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
+   <input type=checkbox id=night style="width:auto;margin:0"><span id=lnight>Nachtmodus: normale LED-Aktivität aus</span></label>
+  <div class=row><button type=button onclick=saveNightMode()><span id=bnsave>Speichern</span></button><span class=msg id=nmsg></span></div>
+ </div>
+
+ <div class=card>
   <h3>⬆ Firmware</h3>
   <div class=stat id=fwcur>…</div>
   <div class=row style="margin-top:2px"><button class=g id=ghbtn onclick=ghCheck()>Auf Updates prüfen</button><button class=g id=ghdl onclick=ghUpdate()>Neueste neu laden</button></div>
@@ -1184,6 +1202,8 @@ $('lfr').textContent=t('Werkseinstellungen','Factory reset');$('bfr').textConten
 $('frnote').textContent=t('Löscht WLAN, MQTT, Login, gebundene Reader und den Verlauf — dann Neustart ins Setup-Portal.','Erases WiFi, MQTT, login, bound readers and history — then reboots into the setup portal.');
 $('ghbtn').textContent=t('Auf Updates prüfen','Check for updates');$('ghdl').textContent=t('Neueste neu laden','Redownload latest');
 $('htime').textContent=t('Zeit','Time');$('ltz').textContent=t('Zeitzone','Timezone');$('lntp').textContent=t('NTP-Server','NTP server');$('btz').textContent=t('Speichern','Save');
+$('hmisc').textContent=t('Sonstiges','Misc');$('lnight').textContent=t('Nachtmodus (normale LED-Aktivität aus)','Night mode (mute normal LED activity)');
+$('bnsave').textContent=t('Speichern','Save');
 let cfg=false,tzc=false;
 async function load(){try{
   const s=await(await fetch('/api/status')).json();
@@ -1193,13 +1213,14 @@ async function load(){try{
   $('mqstat').innerHTML=!q.enabled?`<span class="dot idle"></span>${t('deaktiviert','disabled')}`:q.connected?`<span class="dot on"></span>${t('verbunden','connected')} · ${q.host}${tls}`:`<span class="dot off"></span>${t('getrennt','disconnected')} — ${q.state}${tls}`;
   if(!cfg){cfg=true;$('mh').value=q.host||'';$('mp').value=q.port||1883;$('mu').value=q.user||'';$('mt').value=q.topic||'';
    $('mtls').checked=!!q.tls;if(q.ca_set)$('mca').placeholder=t('Zertifikat gespeichert — leer lassen zum Beibehalten','certificate saved — leave blank to keep');
-   $('au').value=(s.auth&&s.auth.user)||'';}
+   $('au').value=(s.auth&&s.auth.user)||'';$('night').checked=!!s.night_mode;}
   $('austat').innerHTML=(s.auth&&s.auth.enabled)?`<span class="dot on"></span>${t('geschützt als','protected as')} <code>${s.auth.user}</code>`:`<span class="dot idle"></span>${t('offen — kein Passwort','open — no password')}`;
   $('fwcur').innerHTML=`${t('Aktuell','Current')}: <code>${s.fw?s.fw.version:'?'}</code> (${s.fw?s.fw.target:''})`;
   $('tzstat').innerHTML=(s.time_valid?'<span class="dot on"></span>':'<span class="dot idle"></span>')+`${t('Gerätezeit','Device time')}: <code>${s.time||'?'}</code>`+(s.time_valid?'':` · ${t('noch nicht per NTP synchronisiert','not NTP-synced yet')}`);
   if(!tzc){tzc=true;$('tztext').value=s.tz||'';$('ntptext').value=s.ntp||'';$('tzsel').value=s.tz||'';if($('tzsel').value!==(s.tz||''))$('tzsel').value='';}
 }catch(e){}}
 function tzPick(){const v=$('tzsel').value;if(v)$('tztext').value=v;}
+async function saveNightMode(){const m=$('nmsg');m.textContent='…';try{const r=await(await fetch('/api/night_mode',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'enabled='+($('night').checked?'1':'0')})).json();if(!r.ok)throw Error();m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);}catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
 async function saveTz(){const z=$('tztext').value.trim();if(!z){$('tzmsg').textContent=t('TZ eingeben','enter a TZ');return;}
  const n=$('ntptext').value.trim();if(!n){$('tzmsg').textContent=t('NTP-Server eingeben','enter an NTP server');return;}
  $('tzmsg').textContent='…';try{await fetch('/api/tz',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'tz='+encodeURIComponent(z)+'&ntp='+encodeURIComponent(n)});}catch(e){}
@@ -2107,6 +2128,7 @@ static void startServices() {
   server.on("/api/mqtt", HTTP_POST, guard(handleMqttCfg));
   server.on("/api/auth", HTTP_POST, guard(handleAuthCfg));   // set web Basic Auth user/pass
   server.on("/api/tz",   HTTP_POST, guard(handleTz));       // set the timezone (history day-buckets)
+  server.on("/api/night_mode", HTTP_POST, guard(handleNightMode)); // disable normal-operation LED activity
   server.on("/api/wifi", HTTP_POST, guard(handleWifiPortal));        // open the on-demand WiFiManager portal (AP)
   server.on("/api/wifi/scan", HTTP_GET, guard(handleWifiScan));      // list nearby networks (dashboard panel)
   server.on("/api/wifi/connect", HTTP_POST, guard(handleWifiConnect)); // connect to a chosen network in-place
@@ -2626,6 +2648,7 @@ static void webTask(void *) {
   prefs.getString("ap", "").toCharArray(g_authPass, sizeof g_authPass);
   { String z = prefs.getString("tz", "CET-1CEST,M3.5.0,M10.5.0/3"); z.toCharArray(g_tz, sizeof g_tz); }
   { String n = prefs.getString("ntp", "pool.ntp.org"); n.toCharArray(g_ntp, sizeof g_ntp); }
+  g_nightMode = prefs.getBool("nightmode", false);
   g_priceCent = prefs.getFloat("pkwh", 31.0f);   // electricity price (€ ct/kWh) for the history cost columns
   prefs.end();
   setenv("TZ", g_tz, 1); tzset();                // apply the saved zone up-front (localtime works before NTP too)
@@ -2689,6 +2712,7 @@ static void webTask(void *) {
 void web_setup() { xTaskCreatePinnedToCore(webTask, "web", 12288, nullptr, 1, nullptr, 0); }
 void web_loop() {}
 bool web_wifi_connected() { return WiFi.status() == WL_CONNECTED; }
+bool web_night_mode() { return g_nightMode; }
 
 // Wipe the network config so the device comes back up in the setup captive portal. Used by the
 // case-button factory reset (main.cpp) — the only user input available on a closed, non-reflashable

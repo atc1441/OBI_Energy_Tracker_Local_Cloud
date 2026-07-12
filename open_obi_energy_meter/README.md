@@ -184,6 +184,7 @@ running firmware kept (brick-safe dual-OTA). The build → flash → verify loop
 - **MQTT panel** (⚙): configure host/port/user/pass/base-topic and see live status (connected, last
   publish, message count); a **Send discovery** button re-publishes all Home Assistant discovery configs.
 - **DE/EN toggle**, remembered in the browser.
+- **Night mode** in Settings disables the WiFi heartbeat and LoRa receive flashes of the status LED; setup, OTA and error indications remain active.
 - The web/MQTT stack runs on **core 0** while LoRa runs on **core 1**, so HTTP traffic never stutters the
   radio timing.
 
@@ -505,6 +506,7 @@ Build-→-Flash-→-Verify-Ablauf und die Endpoint-Details stehen in [`PROJECT_N
   (verbunden, zuletzt gesendet, Anzahl); ein **Discovery senden**-Button publiziert alle
   Home-Assistant-Discovery-Configs neu.
 - **DE/EN-Umschalter**, im Browser gemerkt.
+- **Nachtmodus** in den Einstellungen schaltet WLAN-Heartbeat und LoRa-Empfangsblitze der Status-LED ab; Setup-, OTA- und Fehleranzeigen bleiben aktiv.
 - Der Web-/MQTT-Stack läuft auf **Core 0**, LoRa auf **Core 1**, damit HTTP-Verkehr das Funk-Timing nie stört.
 
 ### On-Board-E-Ink-Display (Heltec Vision Master E290)
