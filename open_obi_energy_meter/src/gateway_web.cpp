@@ -1637,6 +1637,8 @@ static void handleDebugPage() { server.send_P(200, "text/html", DEBUG_HTML); }
 static bool     g_fsOk = false;
 static float    g_priceCent = 31.0f;    // GLOBAL electricity price in € cent per kWh (one device-wide setting,
                                         // not per reader; user-set, persisted to NVS namespace "obigw" key "pkwh")
+static float    g_exportCent = 0.0f;    // GLOBAL feed-in tariff in € cent per kWh for exported energy; default 0
+                                        // (most users get nothing for feed-in). Persisted to NVS key "ekwh".
 static uint32_t hImp[HIST_SLOTS];       // last-logged import per reader slot
 static uint32_t hLastMs[HIST_SLOTS];    // millis() of last sample append (0 = nothing logged yet)
 static uint32_t hDayFlush[HIST_SLOTS];  // millis() of last daily-file write
@@ -1808,7 +1810,8 @@ static void handleHistoryApi() {
   server.sendContent(String("{\"id\":\"") + id + "\",\"now\":" + String(tv ? (uint32_t)time(nullptr) : 0) +
                      ",\"tvalid\":" + (tv ? "true" : "false") +
                      ",\"fs\":" + (g_fsOk ? "true" : "false") +
-                     ",\"price\":" + String(g_priceCent, 2) + ",\"samples\":[");
+                     ",\"price\":" + String(g_priceCent, 2) +
+                     ",\"eprice\":" + String(g_exportCent, 2) + ",\"samples\":[");
   { String s = g_fsOk ? fsRead(fpS(id)) : String(); streamRows(s); }
   server.sendContent("],\"daily\":[");
   { String d = g_fsOk ? fsRead(fpD(id)) : String(); streamRows(d); }
@@ -1828,7 +1831,8 @@ static void handleHistoryClear() {
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
-// GET/POST the electricity price (€ cent per kWh). POST ?cent=<n> persists it to NVS.
+// GET/POST the electricity price (€ cent per kWh). POST ?cent=<n> sets the import price, ?ecent=<n> the
+// export feed-in tariff; either or both may be given. Both persist to NVS.
 static void handlePrice() {
   if (server.hasArg("cent")) {
     float c = server.arg("cent").toFloat();
@@ -1836,7 +1840,14 @@ static void handlePrice() {
     g_priceCent = c;
     prefs.begin("obigw", false); prefs.putFloat("pkwh", c); prefs.end();
   }
-  server.send(200, "application/json", String("{\"cent\":") + String(g_priceCent, 2) + "}");
+  if (server.hasArg("ecent")) {
+    float c = server.arg("ecent").toFloat();
+    if (c < 0) c = 0; else if (c > 1000) c = 1000;
+    g_exportCent = c;
+    prefs.begin("obigw", false); prefs.putFloat("ekwh", c); prefs.end();
+  }
+  server.send(200, "application/json", String("{\"cent\":") + String(g_priceCent, 2) +
+              ",\"ecent\":" + String(g_exportCent, 2) + "}");
 }
 
 // served via send_P() straight from flash — server.send(code, type, const char*) copies the WHOLE literal
@@ -1863,8 +1874,8 @@ header a{color:var(--accent);text-decoration:none;font-size:13px;white-space:now
 .cap{color:var(--dim);font-size:12px;margin:0 0 12px}
 .pricebox{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--dim);white-space:nowrap}
 .pricebox small{color:var(--dim)}
-#price{width:76px;font-size:16px;text-align:right}
-#psaved{color:var(--accent);font-size:12px}
+#price,#eprice{width:76px;font-size:16px;text-align:right}
+#psaved,#esaved{color:var(--accent);font-size:12px}
 .langtog{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
 .langtog button{border:0;border-radius:0;padding:8px 10px;font-size:12px;font-weight:600;background:var(--panel2);color:var(--dim)}
 .langtog button.on{background:var(--accent2);color:#fff}
@@ -1903,6 +1914,7 @@ td.mono{font-family:var(--mono)}
 <span class=langtog><button data-l=de>DE</button><button data-l=en>EN</button></span>
 <span class=sp></span>
 <span id=pbox class=pricebox>💶<input id=price type=number step=0.01 min=0><small>ct/kWh</small><span id=psaved></span></span>
+<span id=ebox class=pricebox>☀️<input id=eprice type=number step=0.01 min=0><small>ct/kWh</small><span id=esaved></span></span>
 <a href="/">← dashboard</a>
 </header>
 <div class=wrap id=main><div class=empty>lädt…</div></div>
@@ -1913,41 +1925,43 @@ let readers=[],cur=null;
 const C={imp:'#31d07a',exp:'#5aa9ff',day:'#e3b341',pow:'#f0616d',calc:'#3ddbd9'};
 let lang=localStorage.getItem('obilang');if(lang!=='en'&&lang!=='de')lang=(navigator.language||'de').slice(0,2)==='de'?'de':'en';
 const T={
- de:{reload:'neu laden',clearT:'Historie dieses Readers löschen',priceT:'Strompreis – gilt global für alle Reader',
+ de:{reload:'neu laden',clearT:'Historie dieses Readers löschen',priceT:'Strompreis – gilt global für alle Reader',priceTexp:'Einspeisevergütung – gilt global für alle Reader',
   loading:'lädt…',loadErr:'Fehler beim Laden.',
   noReaders:'Noch keine Reader bekannt.<br>Sobald ein Zähler empfangen wird, erscheint hier seine Historie.',
   noHist:r=>'Für <b>'+r+'</b> wurde noch keine Historie aufgezeichnet.<br>Die Werte werden fortlaufend gespeichert — schau in ein paar Minuten wieder vorbei.',
   ntp:'⏱ Uhrzeit noch nicht per NTP synchronisiert — Tagesverbrauch wird erst nach dem Zeitabgleich korrekt zugeordnet.',
   kImp:'Import · Bezug gesamt (kWh)',kExp:'Export · Einspeisung gesamt (kWh)',kToday:'Verbrauch heute – bisher (kWh)',
   kCost:p=>'Kosten heute ('+p+' ct/kWh)',kTodayExp:'Einspeisung heute – bisher (kWh)',kPow:'Leistung aktuell (W)',
+  kEarn:p=>'Erlös heute ('+p+' ct/kWh)',
   cDay:'Verbrauch pro Tag',capDay:'kWh/Tag aus den Änderungen des Zählerstands (zuverlässig, unabhängig vom Watt-Wert).',
   cDayExp:'Einspeisung pro Tag',capDayExp:'kWh/Tag per Solar ins Netz eingespeist — aus den Änderungen des Export-Zählerstands.',
   cImp:'Zählerstand-Verlauf · Import (Bezug)',capImp:'Kumuliert aus dem Netz bezogener Strom (kWh) — der Hauptwert.',
   cExp:'Zählerstand-Verlauf · Export (Solar-Einspeisung)',capExp:'Kumuliert per Solar ins Netz eingespeister Strom (kWh) — eigene Skala.',
   cPow:'Leistungsverlauf (W)',capPow:'Momentanleistung über die Zeit — negative Werte bedeuten Einspeisung ins Netz. Die gestrichelte Linie ist die aus den Zählerstand-Änderungen (Import/Export) berechnete Durchschnittsleistung — nützlich wenn der Zähler falsche/unplausible Watt-Werte liefert (z. B. fehlerhafte 24-Bit-Vorzeichenerweiterung bei negativer Leistung).',
   legPow:'Leistung (Zähler)',legCalc:'Leistung berechnet (Import/Export)',
-  cTbl:'Tages-Tabelle',capTbl:'Verbrauch (Import), Kosten und Einspeisung (Export) je Tag.',
-  thDay:'Tag',thCons:'Verbrauch kWh',thCost:'Kosten €',thExp:'Export kWh',
+  cTbl:'Tages-Tabelle',capTbl:'Verbrauch (Import), Kosten, Einspeisung (Export) und Erlös je Tag.',
+  thDay:'Tag',thCons:'Verbrauch kWh',thCost:'Kosten €',thExp:'Export kWh',thEarn:'Erlös €',
   cHour:'Stundenwerte',capHour:'Verbrauch und Einspeisung je Stunde — die kWh-Menge in der jeweiligen Stunde aus den Zählerstand-Änderungen.',thHour:'Stunde',
   cWatt:'Messwerte (Watt-Tabelle)',capWatt:'Rohwerte je Messpunkt. „Leistung W" kommt direkt vom Zähler und fehlt manchmal oder ist bei manchen Zählern im negativen Bereich fehlerhaft; „Ø Leistung W (berechnet)" ist stattdessen aus der Änderung von Import/Export zwischen zwei Messpunkten berechnet und damit zuverlässiger.',
   thTime:'Zeit',thPow:'Leistung W',thPowCalc:'Ø Leistung W (berechnet)',thImpK:'Import kWh',thDelta:'Δ Import kWh',thExpK:'Export kWh',thDeltaExp:'Δ Export kWh',
   fewPts:'zu wenige Messpunkte für einen Verlauf',noDay:'noch keine Tageswerte — bitte etwas Zeit sammeln',
   clearC:r=>'Gespeicherte Historie für '+r+' löschen?'},
- en:{reload:'reload',clearT:"clear this reader's history",priceT:'Electricity price – global for all readers',
+ en:{reload:'reload',clearT:"clear this reader's history",priceT:'Electricity price – global for all readers',priceTexp:'Feed-in tariff – global for all readers',
   loading:'loading…',loadErr:'Failed to load.',
   noReaders:'No readers known yet.<br>As soon as a meter is received, its history appears here.',
   noHist:r=>'No history recorded for <b>'+r+'</b> yet.<br>Values are stored continuously — check back in a few minutes.',
   ntp:'⏱ Clock not yet synced via NTP — daily consumption is only attributed correctly after the time sync.',
   kImp:'Import · consumed total (kWh)',kExp:'Export · fed-in total (kWh)',kToday:'Consumption today – so far (kWh)',
   kCost:p=>'Cost today ('+p+' ct/kWh)',kTodayExp:'Feed-in today – so far (kWh)',kPow:'Power now (W)',
+  kEarn:p=>'Earnings today ('+p+' ct/kWh)',
   cDay:'Consumption per day',capDay:'kWh/day from the meter-counter changes (reliable, independent of the Watt value).',
   cDayExp:'Feed-in per day',capDayExp:'kWh/day fed into the grid (solar) — from the export-counter changes.',
   cImp:'Meter reading history · Import (consumption)',capImp:'Cumulative energy drawn from the grid (kWh) — the main value.',
   cExp:'Meter reading history · Export (solar feed-in)',capExp:'Cumulative solar energy fed into the grid (kWh) — own scale.',
   cPow:'Power history (W)',capPow:'Instantaneous power over time — negative values mean feeding into the grid. The dashed line is the average power calculated from the import/export counter changes — useful when the meter reports wrong/implausible power values (e.g. broken 24-bit sign extension for negative power).',
   legPow:'Power (meter)',legCalc:'Power calculated (import/export)',
-  cTbl:'Daily table',capTbl:'Consumption (import), cost and feed-in (export) per day.',
-  thDay:'Day',thCons:'Consumption kWh',thCost:'Cost €',thExp:'Export kWh',
+  cTbl:'Daily table',capTbl:'Consumption (import), cost, feed-in (export) and earnings per day.',
+  thDay:'Day',thCons:'Consumption kWh',thCost:'Cost €',thExp:'Export kWh',thEarn:'Earnings €',
   cHour:'Hourly values',capHour:'Consumption and feed-in per hour — the kWh amount within each hour from the meter-counter changes.',thHour:'Hour',
   cWatt:'Measurements (Watt table)',capWatt:'Raw values per sample. "Power W" comes directly from the meter and is sometimes missing or wrong in the negative range on some meters; "Avg power W (calc)" is instead computed from the import/export change between two samples and is therefore more reliable.',
   thTime:'Time',thPow:'Power W',thPowCalc:'Avg power W (calc)',thImpK:'Import kWh',thDelta:'Δ import kWh',thExpK:'Export kWh',thDeltaExp:'Δ export kWh',
@@ -1964,7 +1978,7 @@ const dm=ep=>{const d=D(ep);return lang==='de'?p2(d.getDate())+'.'+p2(d.getMonth
 const dmy=ep=>{const d=D(ep);return lang==='de'?p2(d.getDate())+'.'+p2(d.getMonth()+1)+'.'+d.getFullYear():p2(d.getDate())+'/'+p2(d.getMonth()+1)+'/'+d.getFullYear();};
 const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 function applyLang(){document.documentElement.lang=lang;
- $('rf').title=t('reload');$('clr').title=t('clearT');$('pbox').title=t('priceT');
+ $('rf').title=t('reload');$('clr').title=t('clearT');$('pbox').title=t('priceT');$('ebox').title=t('priceTexp');
  document.querySelectorAll('.langtog button').forEach(b=>b.classList.toggle('on',b.dataset.l===lang));}
 document.querySelectorAll('.langtog button').forEach(b=>b.onclick=()=>{lang=b.dataset.l;localStorage.setItem('obilang',lang);applyLang();if(cur)load();});
 
@@ -2025,8 +2039,8 @@ function barChart(bars,unit,color){
 
 async function boot(){
  applyLang();main.innerHTML='<div class=empty>'+t('loading')+'</div>';
- try{let p=await (await fetch('/api/price')).json();$('price').value=p.cent;}catch(e){}   // global price into the header
- $('price').onchange=savePrice;
+ try{let p=await (await fetch('/api/price')).json();$('price').value=p.cent;$('eprice').value=p.ecent;}catch(e){}   // global prices into the header
+ $('price').onchange=savePrice;$('eprice').onchange=saveEprice;
  try{let d=await (await fetch('/api/readers')).json();readers=Array.isArray(d)?d:(d.readers||[]);}catch(e){readers=[];}
  readers=readers.filter(r=>r.id);
  if(!readers.length){main.innerHTML='<div class=card><div class=empty>'+t('noReaders')+'</div></div>';sel.innerHTML='<option>—</option>';return;}
@@ -2041,12 +2055,17 @@ async function savePrice(){let v=parseFloat($('price').value);if(isNaN(v)||v<0)r
  try{await fetch('/api/price?cent='+v,{method:'POST'});}catch(e){}
  $('psaved').textContent='✓';setTimeout(()=>{$('psaved').textContent='';},1500);
  if(cur)load();}                                    // refresh the cost columns for the current reader
+async function saveEprice(){let v=parseFloat($('eprice').value);if(isNaN(v)||v<0)return;
+ $('esaved').textContent='…';
+ try{await fetch('/api/price?ecent='+v,{method:'POST'});}catch(e){}
+ $('esaved').textContent='✓';setTimeout(()=>{$('esaved').textContent='';},1500);
+ if(cur)load();}                                    // refresh the earnings columns for the current reader
 sel.onchange=()=>{cur=sel.value;localStorage.setItem('obihist',cur);load();};
 $('rf').onclick=()=>load();
 $('clr').onclick=async()=>{if(!cur||!confirm(t('clearC')(cur)))return;
  await fetch('/api/history/clear?id='+cur,{method:'POST'});load();};
 // silent auto-refresh every 60 s so the history stays current — no flicker, skipped while hidden or editing the price
-setInterval(()=>{if(cur&&!document.hidden&&document.activeElement!==$('price'))load(true);},60000);
+setInterval(()=>{if(cur&&!document.hidden&&document.activeElement!==$('price')&&document.activeElement!==$('eprice'))load(true);},60000);
 
 async function load(silent){
  if(!cur)return;
@@ -2054,6 +2073,7 @@ async function load(silent){
  let h;try{h=await (await fetch('/api/history?id='+cur)).json();}catch(e){if(!silent)main.innerHTML='<div class=card><div class=empty>'+t('loadErr')+'</div></div>';return;}
  const S=h.samples||[],days=(h.daily||[]).map(d=>({ep:d[0],imp:d[1],exp:d[2]}));
  const price=(h.price!=null?h.price:31),eur=price/100;      // ct/kWh and €/kWh (global, shown in the header)
+ const eprice=(h.eprice!=null?h.eprice:0),eeur=eprice/100;  // feed-in tariff ct/kWh and €/kWh (export earnings)
  // per-day consumption from the kWh-counter deltas (import can only rise)
  let cons=[];
  for(let i=1;i<days.length;i++){let di=(days[i].imp-days[i-1].imp)/1000,de=(days[i].exp-days[i-1].exp)/1000;
@@ -2087,6 +2107,7 @@ async function load(silent){
   `<div class=kpi><div class=v>${today==null?'—':nf(today,2)}</div><div class=l>${t('kToday')}</div></div>`+
   `<div class=kpi><div class="v euro">${today==null?'—':nf(today*eur,2)+' €'}</div><div class=l>${t('kCost')(nf(price,2))}</div></div>`+
   (anyExp?`<div class=kpi><div class="v neg">${todayExp==null?'—':nf(todayExp,2)}</div><div class=l>${t('kTodayExp')}</div></div>`:'')+
+  (anyExp?`<div class=kpi><div class="v euro">${todayExp==null?'—':nf(todayExp*eeur,2)+' €'}</div><div class=l>${t('kEarn')(nf(eprice,2))}</div></div>`:'')+
   `<div class=kpi><div class=v>${lastPow==null?'—':nf(lastPow,0)}</div><div class=l>${t('kPow')}</div></div>`+
  '</div>';
  // daily consumption bar chart
@@ -2131,8 +2152,8 @@ async function load(silent){
  }
  // daily table
  if(cons.length){
-  let rows=cons.slice(-31).reverse().map(c=>`<tr><td>${dmy(c.ep)}</td><td class="mono pos">${nf(c.imp,3)}</td><td class="mono euro">${nf(c.imp*eur,2)} €</td><td class="mono neg">${anyExp?nf(c.exp,3):'—'}</td></tr>`).join('');
-  html+='<div class=card><h2>'+t('cTbl')+'</h2><p class=cap>'+t('capTbl')+'</p><div class=twrap><table><thead><tr><th>'+t('thDay')+'</th><th>'+t('thCons')+'</th><th>'+t('thCost')+'</th><th>'+t('thExp')+'</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+  let rows=cons.slice(-31).reverse().map(c=>`<tr><td>${dmy(c.ep)}</td><td class="mono pos">${nf(c.imp,3)}</td><td class="mono euro">${nf(c.imp*eur,2)} €</td><td class="mono neg">${anyExp?nf(c.exp,3):'—'}</td><td class="mono euro">${anyExp?nf(c.exp*eeur,2)+' €':'—'}</td></tr>`).join('');
+  html+='<div class=card><h2>'+t('cTbl')+'</h2><p class=cap>'+t('capTbl')+'</p><div class=twrap><table><thead><tr><th>'+t('thDay')+'</th><th>'+t('thCons')+'</th><th>'+t('thCost')+'</th><th>'+t('thExp')+'</th><th>'+t('thEarn')+'</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
  }
  // hourly values: kWh consumed / fed-in within each local clock hour (from the counter deltas)
  if(S.length>1){
@@ -2728,6 +2749,7 @@ static void webTask(void *) {
   { String n = prefs.getString("ntp", "pool.ntp.org"); n.toCharArray(g_ntp, sizeof g_ntp); }
   g_nightMode = prefs.getBool("nightmode", false);
   g_priceCent = prefs.getFloat("pkwh", 31.0f);   // electricity price (€ ct/kWh) for the history cost columns
+  g_exportCent = prefs.getFloat("ekwh", 0.0f);   // feed-in tariff (€ ct/kWh); default 0 = no pay for export
   prefs.end();
   setenv("TZ", g_tz, 1); tzset();                // apply the saved zone up-front (localtime works before NTP too)
   clampTimeSanity();   // esp_restart() (self-OTA) carries the RTC clock across reboots -- clear it up-front
