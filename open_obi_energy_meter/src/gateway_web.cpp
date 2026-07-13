@@ -1641,8 +1641,8 @@ static float    g_exportCent = 0.0f;    // GLOBAL feed-in tariff in € cent per
                                         // (most users get nothing for feed-in). Persisted to NVS key "ekwh".
 static uint32_t hImp[HIST_SLOTS];       // last-logged import per reader slot
 static uint32_t hLastMs[HIST_SLOTS];    // millis() of last sample append (0 = nothing logged yet)
-static uint32_t hDayFlush[HIST_SLOTS];  // millis() of last daily-file write
-static uint32_t hDay[HIST_SLOTS];       // local day-start of the last daily row written
+struct DailyState { uint32_t day = 0, imp = 0, exp = 0; };
+static DailyState hDaily[HIST_SLOTS];   // current day and its latest observed counters
 
 // Mount LittleFS on whatever spare data partition this device actually has. The partition table is fixed
 // at the original serial flash and is NOT changed by OTA, so we can't rely on a "spiffs" label — this
@@ -1700,10 +1700,9 @@ static void appendSample(const String &id, uint32_t ep, uint32_t imp, uint32_t e
   }
 }
 
-// Upsert the current local day's counter reading; days are monotonic so "today" is always the last row.
-static void upsertDaily(const String &id, uint32_t dayStart, uint32_t imp, uint32_t exp) {
-  String path = fpD(id);
-  String all  = fsRead(path);
+// Return daily CSV with one row upserted. The same helper persists completed days and adds today's
+// RAM-only row to API responses.
+static String withDailyRow(String all, uint32_t dayStart, uint32_t imp, uint32_t exp) {
   char row[56];
   snprintf(row, sizeof row, "%lu,%lu,%lu", (unsigned long)dayStart, (unsigned long)imp, (unsigned long)exp);
   String content;
@@ -1728,34 +1727,78 @@ static void upsertDaily(const String &id, uint32_t dayStart, uint32_t imp, uint3
     for (int d = 0; d < drop; d++) idx = content.indexOf('\n', idx) + 1;
     content = content.substring(idx);
   }
-  fsWrite(path, content);
+  return content;
+}
+
+static void persistDaily(const String &id, uint32_t dayStart, uint32_t imp, uint32_t exp) {
+  String path = fpD(id);
+  fsWrite(path, withDailyRow(fsRead(path), dayStart, imp, exp));
+}
+
+static uint32_t localDayStart(time_t ep) {
+  struct tm lt;
+  localtime_r(&ep, &lt);
+  lt.tm_hour = 0; lt.tm_min = 0; lt.tm_sec = 0;
+  return (uint32_t)mktime(&lt);
+}
+
+// Recover the newest flash-backed sample after a reboot. If the gateway was down across midnight this
+// is the best durable closing value for the previous day; during normal operation the RAM cache is newer.
+static bool lastSample(const String &id, uint32_t &ep, uint32_t &imp, uint32_t &exp) {
+  String all = fsRead(fpS(id));
+  int end = (int)all.length();
+  while (end > 0 && (all[end - 1] == '\n' || all[end - 1] == '\r')) end--;
+  if (end == 0) return false;
+  int start = all.lastIndexOf('\n', end - 1) + 1;
+  unsigned long e, i, x;
+  if (sscanf(all.substring(start, end).c_str(), "%lu,%lu,%lu", &e, &i, &x) != 3) return false;
+  ep = (uint32_t)e; imp = (uint32_t)i; exp = (uint32_t)x;
+  return true;
+}
+
+// Finalize the previous day. After a reboot, recover the best durable closing value from the sample log
+// if it belongs to an unfinished previous day. Today's row remains in RAM until its day is complete.
+static void beginDay(int slot, const String &id, uint32_t dayStart) {
+  DailyState &d = hDaily[slot];
+  if (d.day == 0) {
+    uint32_t oldEp, oldImp, oldExp;
+    if (lastSample(id, oldEp, oldImp, oldExp)) {
+      uint32_t oldDay = localDayStart((time_t)oldEp);
+      if (oldDay != dayStart) persistDaily(id, oldDay, oldImp, oldExp);
+    }
+  } else {
+    persistDaily(id, d.day, d.imp, d.exp);
+  }
+  d.day = dayStart;
 }
 
 // Poll readers and log a sample when the counter moves or every 5 min (heartbeat). Throttled internally.
 static void historyService() {
   if (!g_fsOk || !timeValid()) return;
-  static uint32_t lastScan = 0;
+  static uint32_t lastPoll = 0;
   uint32_t now = millis();
-  if (now - lastScan < 15000) return;                    // scan at most every 15 s
-  lastScan = now;
+  if (now - lastPoll < 1000) return;
+  lastPoll = now;
   time_t tnow = time(nullptr);
-  struct tm lt; localtime_r(&tnow, &lt);
-  lt.tm_hour = 0; lt.tm_min = 0; lt.tm_sec = 0;
-  uint32_t dayStart = (uint32_t)mktime(&lt);              // local midnight (Europe/Berlin) as epoch
+  uint32_t dayStart = localDayStart(tnow);
   for (int i = 0; i < MAX_READERS; i++) {
     Reader &r = readers[i];
     if (!r.used || !r.haveData || obi_na(r.import_)) continue;
+    String id;
+    uint32_t exp = obi_na(r.export_) ? 0 : r.export_;
+    if (hDaily[i].day != dayStart) {
+      id = hex(r.handle, 3);
+      beginDay(i, id, dayStart);
+    }
+    hDaily[i].imp = r.import_;
+    hDaily[i].exp = exp;
     bool firstLog  = (hLastMs[i] == 0);
     bool changed   = (r.import_ != hImp[i]);
     bool heartbeat = (now - hLastMs[i] >= 5UL * 60 * 1000);
     if (!(firstLog || changed || heartbeat)) continue;
     if (!firstLog && (now - hLastMs[i] < 30000)) continue;   // min 30 s spacing between samples
-    String id = hex(r.handle, 3);
+    if (!id.length()) id = hex(r.handle, 3);
     appendSample(id, (uint32_t)tnow, r.import_, r.export_, r.power);
-    if (firstLog || changed || dayStart != hDay[i] || now - hDayFlush[i] >= 10UL * 60 * 1000) {
-      upsertDaily(id, dayStart, r.import_, obi_na(r.export_) ? 0 : r.export_);
-      hDayFlush[i] = now; hDay[i] = dayStart;
-    }
     hImp[i] = r.import_; hLastMs[i] = now;
   }
 }
@@ -1814,7 +1857,15 @@ static void handleHistoryApi() {
                      ",\"eprice\":" + String(g_exportCent, 2) + ",\"samples\":[");
   { String s = g_fsOk ? fsRead(fpS(id)) : String(); streamRows(s); }
   server.sendContent("],\"daily\":[");
-  { String d = g_fsOk ? fsRead(fpD(id)) : String(); streamRows(d); }
+  {
+    String d = g_fsOk ? fsRead(fpD(id)) : String();
+    for (int i = 0; i < MAX_READERS; i++)
+      if (hDaily[i].day && readers[i].used && hex(readers[i].handle, 3) == id) {
+        d = withDailyRow(d, hDaily[i].day, hDaily[i].imp, hDaily[i].exp);
+        break;
+      }
+    streamRows(d);
+  }
   server.sendContent("]}");
   server.sendContent("");                                // terminate the chunked response
 }
@@ -1826,7 +1877,10 @@ static void handleHistoryClear() {
     LittleFS.remove(fpS(id));
     LittleFS.remove(fpD(id));
     for (int i = 0; i < MAX_READERS; i++)
-      if (readers[i].used && hex(readers[i].handle, 3) == id) { hLastMs[i] = 0; hImp[i] = 0; hDay[i] = 0; }
+      if (readers[i].used && hex(readers[i].handle, 3) == id) {
+        hLastMs[i] = 0; hImp[i] = 0;
+        hDaily[i] = {};
+      }
   }
   server.send(200, "application/json", "{\"ok\":true}");
 }
