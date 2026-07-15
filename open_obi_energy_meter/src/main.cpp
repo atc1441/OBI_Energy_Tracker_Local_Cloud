@@ -874,30 +874,47 @@ static void handleRx() {
             gw_ota_cancel();
           }
           // store telemetry for the dashboard / MQTT
-          bool hadPrev = r->haveData;      // was there an earlier ENERGY frame to diff against?
-          uint32_t prevImport = r->import_, prevExport = r->export_, prevMs = r->lastEnergyMs;
           uint32_t nowMs = millis();
           r->haveData = true; r->legacy = legacy; r->lastSeenMs = nowMs; r->lastEnergyMs = nowMs; r->lastRssi = rssi; r->lastSnr = snr;
           if (legacy) { r->softver = p[0]; r->hardver = p[1]; r->battery_mV = 20 * p[2]; r->flags = p[3];
                         r->import_ = rd_be32(p + 4); r->export_ = rd_be32(p + 8); r->power = rd_be32(p + 12); }
           else        { r->softver = p[2]; r->hardver = p[3]; r->battery_mV = 20 * p[4]; r->flags = p[5];
                         r->import_ = rd_be32(p + 6); r->export_ = rd_be32(p + 10); r->power = rd_be32(p + 14); }
-          // calculated power: average W between this and the previous frame, from the Wh-counter deltas
-          // alone — stays correct even when the meter's own power reading is garbage (e.g. the broken
-          // 24-bit sign extension on feed-in some DWSB20-2TH units hit, see reader_firmware_mod/README.md).
-          // Same formula the history page's client-side dashed "calculated" series already used; now
-          // also computed here so it can go out over MQTT/HA on every publish, not just the history page.
-          r->calcPower = 0x7FFFFFFF;
-          if (hadPrev && !obi_na(prevImport) && !obi_na(prevExport) && !obi_na(r->import_) && !obi_na(r->export_)) {
-            uint32_t dtMs = nowMs - prevMs;
-            int64_t dImp = (int64_t)r->import_ - (int64_t)prevImport;
-            int64_t dExp = (int64_t)r->export_ - (int64_t)prevExport;
-            // counters only ever increase; a negative delta means a reset/rollover -> skip.
-            // also skip absurd gaps (reboot, long silence) rather than average over them.
-            if (dtMs > 0 && dtMs < 3600000UL && dImp >= 0 && dExp >= 0) {
+          // calculated power: average W from the Wh-counter deltas alone — stays correct even when the
+          // meter's own power reading is garbage (e.g. the broken 24-bit sign extension on feed-in some
+          // DWSB20-2TH units hit, see reader_firmware_mod/README.md). Same idea the history page's
+          // client-side dashed "calculated" series already used; now also computed here so it can go out
+          // over MQTT/HA on every publish, not just the history page.
+          //
+          // Averaged over a rolling >= CALC_POWER_WINDOW_MS window, not just frame-to-frame: the Wh
+          // counters only tick in whole Wh, so at short report intervals a lone +/-1 Wh tick swings the
+          // frame-to-frame result by hundreds of W (see Unbenannt.png). Anchoring the window to a sample
+          // that's actually old enough shrinks that quantization error relative to the real delta while
+          // still reporting a true average over real counter movement, not a lagging/blended estimate.
+          static const uint32_t CALC_POWER_WINDOW_MS = 60000UL;
+          if (!r->haveCalcAnchor || obi_na(r->import_) || obi_na(r->export_)) {
+            if (!obi_na(r->import_) && !obi_na(r->export_)) {
+              r->calcAnchorImport = r->import_; r->calcAnchorExport = r->export_;
+              r->calcAnchorMs = nowMs; r->haveCalcAnchor = true;
+            }
+            r->calcPower = 0x7FFFFFFF;
+          } else {
+            uint32_t dtMs = nowMs - r->calcAnchorMs;
+            int64_t dImp = (int64_t)r->import_ - (int64_t)r->calcAnchorImport;
+            int64_t dExp = (int64_t)r->export_ - (int64_t)r->calcAnchorExport;
+            // counters only ever increase; a negative delta means a reset/rollover -> restart the window
+            // here. also restart (rather than average over) absurd gaps -- reboot, long silence.
+            if (dImp < 0 || dExp < 0 || dtMs >= 3600000UL) {
+              r->calcAnchorImport = r->import_; r->calcAnchorExport = r->export_;
+              r->calcAnchorMs = nowMs;
+              r->calcPower = 0x7FFFFFFF;
+            } else if (dtMs >= CALC_POWER_WINDOW_MS) {
               double w = (double)(dImp - dExp) * 3600000.0 / (double)dtMs;
               r->calcPower = (uint32_t)(int32_t)lround(w);
+              r->calcAnchorImport = r->import_; r->calcAnchorExport = r->export_;
+              r->calcAnchorMs = nowMs;
             }
+            // else: window not full yet -- keep the previous calcPower, don't slide the anchor
           }
         } else {
           Serial.print("  energy undecoded. raw: "); hexdump(d + 4, plen); Serial.println();

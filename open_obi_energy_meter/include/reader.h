@@ -26,8 +26,11 @@ struct Reader {
   uint16_t battery_mV = 0;
   uint8_t  flags = 0;            // b0 infrared, b1 lowpower, b2 timesync
   uint32_t import_ = 0, export_ = 0, power = 0;   // 0x7FFFFFFF = n/a
-  uint32_t calcPower = 0x7FFFFFFF;   // avg W between this and the previous frame, from the Wh-counter
-                                      // deltas alone (signed, like `power`); 0x7FFFFFFF = n/a
+  uint32_t calcPower = 0x7FFFFFFF;   // avg W from the Wh-counter deltas alone (signed, like `power`),
+                                      // over a rolling window (see calcAnchor* below); 0x7FFFFFFF = n/a
+  bool     haveCalcAnchor = false;   // calcAnchor* below holds a valid window start
+  uint32_t calcAnchorImport = 0, calcAnchorExport = 0;  // import_/export_ at the window start
+  uint32_t calcAnchorMs = 0;         // millis() at the window start
   bool     legacy  = false;      // legacy (3x.x) layout
   bool     inBootloader = false;  // reader reset into its OTA bootloader (sends cmd 20/21/33, no energy)
   uint32_t lastSeenMs = 0;       // last ANY frame (announce/bootloader/energy/...) — used for "age"/staleness
