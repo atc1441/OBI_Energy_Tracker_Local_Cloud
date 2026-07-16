@@ -338,7 +338,7 @@ input{background:var(--panel2);border:1px solid var(--line);color:var(--txt);bor
 button.b{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#04140a;border:0;border-radius:8px;padding:8px 14px;font-weight:700;cursor:pointer}
 button.g{background:transparent;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:8px 13px;cursor:pointer;font-size:13px}
 /* interval quick-select: one connected pill (Live | chips | custom input | set), mirrors the .seg look */
-.ivseg{display:flex;align-items:stretch;flex:0 0 auto;background:var(--panel2);border:1px solid var(--line);border-radius:9px;overflow-x:auto;max-width:100%}
+.ivseg{display:flex;flex:0 0 auto;background:var(--panel2);border:1px solid var(--line);border-radius:9px;overflow-x:auto;max-width:100%}
 .ivseg button,.ivseg input{background:transparent;border:0;border-right:1px solid var(--line);border-radius:0;color:var(--dim);padding:8px 11px;font-family:var(--mono)}
 .ivseg button{font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
 .ivseg button:hover{color:var(--txt)}
@@ -560,9 +560,9 @@ function nmCancel(){renId=null;redraw();}
 async function nmSave(id){const v=$('#nm_'+id).value.trim().slice(0,24);renId=null;
  await fetch('/api/name?id='+id+'&name='+encodeURIComponent(v),{method:'POST'});tick();}
 function nmKey(e,id){if(e.key==='Enter')nmSave(id);else if(e.key==='Escape')nmCancel();}
-async function setIv(id){const v=$('#iv_'+id).value;if(!v)return;await fetch('/api/interval?id='+id+'&seconds='+v,{method:'POST'});tick();}
 async function setIvQ(id,secs){await fetch('/api/interval?id='+id+'&seconds='+secs,{method:'POST'});tick();}   // one-tap preset (Live/10/30/60/120/300)
-function ivChg(id){const b=$('#setb_'+id);if(b)b.style.display='';}   // reveal the green "set" button once a custom value is typed
+function setIv(id){const v=$('#iv_'+id).value;if(v)setIvQ(id,v);}     // custom value from the input field
+function ivChg(id){$('#setb_'+id).style.display='';}                 // reveal the green "set" button once a custom value is typed
 async function assignRd(id,on){await fetch('/api/assign?id='+id+'&on='+on,{method:'POST'});tick();}
 async function pairAll(){await fetch('/api/pairall',{method:'POST'});tick();}
 async function delReader(id){if(!confirm(L.delq.replace('%i',id.toUpperCase())))return;
