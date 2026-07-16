@@ -332,10 +332,19 @@ h1{font-size:16px;margin:0;font-weight:650}.sub{color:var(--dim);font-size:12px}
 .batt{height:5px;background:#0a0e14;border-radius:3px;overflow:hidden;margin-top:6px}
 .batt>i{display:block;height:100%;border-radius:3px;transition:.3s}
 .ctrl{display:flex;gap:8px;margin-top:12px;align-items:center;flex-wrap:wrap}
+.ivrow button.g{white-space:nowrap}                   /* interval pill + file + flash share one row; flash label never wraps */
 input{background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:8px 10px;font-family:var(--mono);font-size:13px}
 .ctrl input{width:92px}
 button.b{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#04140a;border:0;border-radius:8px;padding:8px 14px;font-weight:700;cursor:pointer}
 button.g{background:transparent;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:8px 13px;cursor:pointer;font-size:13px}
+/* interval quick-select: one connected pill (Live | chips | custom input | set), mirrors the .seg look */
+.ivseg{display:flex;align-items:stretch;flex:0 0 auto;background:var(--panel2);border:1px solid var(--line);border-radius:9px;overflow-x:auto;max-width:100%}
+.ivseg button,.ivseg input{background:transparent;border:0;border-right:1px solid var(--line);border-radius:0;color:var(--dim);padding:8px 11px;font-family:var(--mono)}
+.ivseg button{font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
+.ivseg button:hover{color:var(--txt)}
+.ivseg button.act{background:var(--accent);color:#04140a}
+.ivseg input{width:62px;text-align:center;color:var(--txt);padding:8px 6px;border-right:0}
+.ivseg .set{border-right:0;border-left:1px solid var(--line);background:var(--accent);color:#04140a;font-weight:700}
 .hint{color:var(--amber);font-size:12px;margin-top:9px;display:flex;gap:6px;align-items:center}
 .boot{background:linear-gradient(90deg,#3a2a05,#2a1f08);border:1px solid #7a5a12;color:#f5c451;
  font-size:12px;font-weight:600;padding:7px 11px;border-radius:9px;margin:0 0 12px}
@@ -369,7 +378,7 @@ footer b{font-family:var(--mono);color:var(--txt)}
  input{font-size:16px}                               /* >=16px stops iOS focus-zoom */
  .ctrl{gap:8px}
  .ctrl input{width:auto}
- .ctrl input[type=number]{flex:1 1 auto;min-width:96px}
+ .ivrow .ivseg{flex:1 1 100%;min-width:0}            /* mobile: interval pill takes its own row */
  .ctrl input[type=file]{flex:1 1 100%;min-width:0}   /* file picker gets its own row */
  .ctrl button.g{flex:1 1 auto;min-width:104px}
  button.b,button.g{padding:11px 15px}
@@ -534,8 +543,7 @@ function card(r){
    <div class="mc"><div class="l">${L.opt}</div><span class="v" style="font-size:13px">${sens}</span></div>
    <div class="mc"><div class="l">${L.seen}</div><span class="v">${L.before} ${r.age_s}s</span></div>
   </div>
-  ${r.assigned?`<div class="ctrl"><input type="number" id="iv_${r.id}" placeholder="${L.sec}" min="1" value="${r.interval||''}">
-   <button class="g" onclick="setIv('${r.id}')">${L.setiv}</button>
+  ${r.assigned?`<div class="ctrl ivrow"><div class="ivseg">${[['Live',1],['10s',10],['30s',30],['60s',60],['120s',120],['300s',300]].map(q=>`<button class="${r.interval==q[1]?'act':''}" onclick="setIvQ('${r.id}',${q[1]})">${q[0]}</button>`).join('')}<input type="number" id="iv_${r.id}" placeholder="${L.sec}" min="1" max="9999" value="${r.interval||''}" oninput="ivChg('${r.id}')" onkeydown="if(event.key==='Enter')setIv('${r.id}')"><button class="set" id="setb_${r.id}" style="display:none" onclick="setIv('${r.id}')">${L.setiv}</button></div>
    <input type="file" id="fw_${r.id}" accept=".bin" onchange="fwCheck('${r.id}')" style="flex:1 1 200px;min-width:170px;padding:6px 8px;font-size:12px">
    <button class="g" onclick="doOta('${r.id}',${r.softver||0})">${L.flash}</button>
    <span class="meta" id="op_${r.id}"></span></div>`
@@ -553,6 +561,8 @@ async function nmSave(id){const v=$('#nm_'+id).value.trim().slice(0,24);renId=nu
  await fetch('/api/name?id='+id+'&name='+encodeURIComponent(v),{method:'POST'});tick();}
 function nmKey(e,id){if(e.key==='Enter')nmSave(id);else if(e.key==='Escape')nmCancel();}
 async function setIv(id){const v=$('#iv_'+id).value;if(!v)return;await fetch('/api/interval?id='+id+'&seconds='+v,{method:'POST'});tick();}
+async function setIvQ(id,secs){await fetch('/api/interval?id='+id+'&seconds='+secs,{method:'POST'});tick();}   // one-tap preset (Live/10/30/60/120/300)
+function ivChg(id){const b=$('#setb_'+id);if(b)b.style.display='';}   // reveal the green "set" button once a custom value is typed
 async function assignRd(id,on){await fetch('/api/assign?id='+id+'&on='+on,{method:'POST'});tick();}
 async function pairAll(){await fetch('/api/pairall',{method:'POST'});tick();}
 async function delReader(id){if(!confirm(L.delq.replace('%i',id.toUpperCase())))return;
@@ -2678,6 +2688,19 @@ static void publishDiscovery(const Reader &r) {
               ",\"min\":1,\"max\":65535,\"step\":1,\"mode\":\"box\",\"unit_of_meas\":\"s\""
               ",\"avty_t\":\"" + avt + "\",\"ent_cat\":\"config\"," + dev + "}";
   mqtt.publish(ntopic.c_str(), np.c_str(), true);
+
+  // --- select: interval presets (mirrors the web quick-select). Reuses the set_interval command topic:
+  // cmd_tpl maps the chosen label -> seconds ("60s"->60, "Live"->1), so no extra firmware RX parsing.
+  // val_tpl maps the current interval back to a label; an off-list custom value leaves the select blank
+  // (the number entity above covers those, exactly like the web card's custom input field).
+  String stopic = "homeassistant/select/" + uid + "/interval_preset/config";
+  String sp = "{\"name\":\"Interval preset\",\"uniq_id\":\"" + uid + "_ivpreset\""
+              ",\"stat_t\":\"" + stt + "\",\"cmd_t\":\"" + cmd + "\""
+              ",\"options\":[\"Live\",\"10s\",\"30s\",\"60s\",\"120s\",\"300s\"]"
+              ",\"cmd_tpl\":\"{% if value == 'Live' %}1{% else %}{{ value[:-1] }}{% endif %}\""
+              ",\"val_tpl\":\"{% set i = value_json['interval'] %}{% if i == 1 %}Live{% elif i in [10,30,60,120,300] %}{{ i }}s{% endif %}\""
+              ",\"avty_t\":\"" + avt + "\",\"ent_cat\":\"config\",\"icon\":\"mdi:timer-outline\"," + dev + "}";
+  mqtt.publish(stopic.c_str(), sp.c_str(), true);
 }
 
 // HA discovery for the GATEWAY itself (temperature sensor + a restart button), keyed by MAC/gwid so
@@ -2757,6 +2780,7 @@ static void clearDiscovery(const String &uid) {
   for (const char *k : sensors)  { String t = "homeassistant/sensor/"        + uid + "/" + k + "/config"; mqtt.publish(t.c_str(), "", true); }
   for (const char *k : binaries) { String t = "homeassistant/binary_sensor/" + uid + "/" + k + "/config"; mqtt.publish(t.c_str(), "", true); }
   String t = "homeassistant/number/" + uid + "/interval/config"; mqtt.publish(t.c_str(), "", true);
+  String ts = "homeassistant/select/" + uid + "/interval_preset/config"; mqtt.publish(ts.c_str(), "", true);
 }
 
 // Web button: drop a (phantom) reader from the list. Not a permanent block — the next valid
