@@ -1834,7 +1834,8 @@ static void historyService() {
     if (!(firstLog || changed || heartbeat)) continue;
     if (!firstLog && (now - hLastMs[i] < 30000)) continue;   // min 30 s spacing between samples
     if (!id.length()) id = hex(r.handle, 3);
-    appendSample(id, (uint32_t)tnow, r.import_, r.export_, r.power);
+    appendSample(id, (uint32_t)tnow, r.import_, exp, r.power);   // exp, not r.export_ -- a void export must
+                                                                  // never leak its raw sentinel into the log
     hImp[i] = r.import_; hLastMs[i] = now;
   }
 }
@@ -1870,6 +1871,49 @@ static void streamRows(const String &csv) {
     if (chunk.length() > 1400) { server.sendContent(chunk); chunk = ""; }
   }
   if (chunk.length()) server.sendContent(chunk);
+}
+
+// /api/history/readers — every 6-hex reader id that has a /s<id> or /d<id> log on flash, live or not.
+// The dashboard's live reader list (/api/readers) only knows readers that have announced themselves since
+// boot -- one that's out of range (or permanently removed) never gets a RAM slot back, so without this a
+// reader with months of stored history becomes both unviewable and undeletable the moment it goes quiet.
+// The /history page merges this into its selector so "gone" readers stay reachable for exactly that: look
+// at their last data, or clear their old files.
+static void handleHistoryReaders() {
+  String j = "[";
+  bool first = true;
+  if (g_fsOk) {
+    String seen[HIST_SLOTS]; int nSeen = 0;
+    File root = LittleFS.open("/");
+    File f = root.openNextFile();
+    while (f) {
+      String name = f.name();
+      bool isDir = f.isDirectory();
+      f.close();
+      if (!isDir && name.length()) {
+        int slash = name.lastIndexOf('/');
+        String base = slash >= 0 ? name.substring(slash + 1) : name;   // tolerate a leading '/' or not
+        if (base.length() == 7 && (base[0] == 's' || base[0] == 'd')) {
+          String id = base.substring(1);
+          bool okid = true;
+          for (size_t k = 0; k < 6; k++) {
+            char c = id[k];
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) { okid = false; break; }
+          }
+          bool dup = false;
+          for (int k = 0; k < nSeen; k++) if (seen[k] == id) { dup = true; break; }
+          if (okid && !dup) {
+            if (nSeen < HIST_SLOTS) seen[nSeen++] = id;
+            j += (first ? "" : ",") + jstr(id.c_str());
+            first = false;
+          }
+        }
+      }
+      f = root.openNextFile();
+    }
+  }
+  j += "]";
+  server.send(200, "application/json", j);
 }
 
 static void handleHistoryApi() {
@@ -2081,6 +2125,7 @@ const T={
  de:{reload:'neu laden',dlLabel:'Export:',dlRawT:'Rohdaten (Messpunkte) als CSV herunterladen',dlDailyT:'Tageswerte als CSV herunterladen',clearT:'Historie dieses Readers löschen',priceT:'Strompreis – gilt global für alle Reader',priceTexp:'Einspeisevergütung – gilt global für alle Reader',
   loading:'lädt…',loadErr:'Fehler beim Laden.',
   noReaders:'Noch keine Reader bekannt.<br>Sobald ein Zähler empfangen wird, erscheint hier seine Historie.',
+  offlineTag:'nicht in Reichweite',
   noHist:r=>'Für <b>'+r+'</b> wurde noch keine Historie aufgezeichnet.<br>Die Werte werden fortlaufend gespeichert — schau in ein paar Minuten wieder vorbei.',
   ntp:'⏱ Uhrzeit noch nicht per NTP synchronisiert — Tagesverbrauch wird erst nach dem Zeitabgleich korrekt zugeordnet.',
   kImp:'Import · Bezug gesamt (kWh)',kExp:'Export · Einspeisung gesamt (kWh)',kToday:'Verbrauch heute – bisher (kWh)',
@@ -2102,6 +2147,7 @@ const T={
  en:{reload:'reload',dlLabel:'Export:',dlRawT:'Download raw samples as CSV',dlDailyT:'Download daily values as CSV',clearT:"clear this reader's history",priceT:'Electricity price – global for all readers',priceTexp:'Feed-in tariff – global for all readers',
   loading:'loading…',loadErr:'Failed to load.',
   noReaders:'No readers known yet.<br>As soon as a meter is received, its history appears here.',
+  offlineTag:'out of range',
   noHist:r=>'No history recorded for <b>'+r+'</b> yet.<br>Values are stored continuously — check back in a few minutes.',
   ntp:'⏱ Clock not yet synced via NTP — daily consumption is only attributed correctly after the time sync.',
   kImp:'Import · consumed total (kWh)',kExp:'Export · fed-in total (kWh)',kToday:'Consumption today – so far (kWh)',
@@ -2203,8 +2249,14 @@ async function boot(){
  $('price').onchange=savePrice;$('eprice').onchange=saveEprice;
  try{let d=await (await fetch('/api/readers')).json();readers=Array.isArray(d)?d:(d.readers||[]);}catch(e){readers=[];}
  readers=readers.filter(r=>r.id);
+ // readers with stored history but no live RAM slot (out of range since boot, or removed) -- still need to
+ // be selectable, or their old data can never be viewed or cleared once they've gone quiet.
+ try{let known={};readers.forEach(r=>known[r.id]=1);
+  let arc=await (await fetch('/api/history/readers')).json();
+  (arc||[]).forEach(id=>{if(!known[id])readers.push({id,name:'',archived:true});});
+ }catch(e){}
  if(!readers.length){main.innerHTML='<div class=card><div class=empty>'+t('noReaders')+'</div></div>';sel.innerHTML='<option>—</option>';return;}
- sel.innerHTML=readers.map(r=>`<option value="${r.id}">${esc(r.name||r.type||'reader')} · ${r.id}</option>`).join('');
+ sel.innerHTML=readers.map(r=>`<option value="${r.id}">${esc(r.name||r.type||'reader')} · ${r.id}${r.archived?' ('+t('offlineTag')+')':''}</option>`).join('');
  let saved=localStorage.getItem('obihist');
  cur=readers.some(r=>r.id===saved)?saved:readers[0].id;
  sel.value=cur;
@@ -2413,6 +2465,7 @@ static void startServices() {
   server.on("/history",         HTTP_GET,  guard(handleHistoryPage)); // per-reader energy history + charts
   server.on("/api/history",     HTTP_GET,  guard(handleHistoryApi));
   server.on("/api/history/csv", HTTP_GET,  guard(handleHistoryCsv));
+  server.on("/api/history/readers", HTTP_GET, guard(handleHistoryReaders));
   server.on("/api/history/clear", HTTP_POST, guard(handleHistoryClear));
   server.on("/api/price",       HTTP_GET,  guard(handlePrice));        // read the € ct/kWh price
   server.on("/api/price",       HTTP_POST, guard(handlePrice));        // set + persist it
