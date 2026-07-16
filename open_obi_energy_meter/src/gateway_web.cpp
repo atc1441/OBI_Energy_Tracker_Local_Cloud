@@ -104,6 +104,11 @@ static uint16_t g_pubEvery = 15;
 static char     g_authUser[32] = "";
 static char     g_authPass[64] = "";
 
+// Password for the setup/config-portal AP itself ("OpenOBI-XXXXXX"), NOT the web dashboard login above.
+// Default blank = open hotspot (unchanged behavior). WiFiManager requires 8-63 chars if set (WPA2 minimum);
+// validated in handleApPassword() before it's ever handed to softAP()/WiFiManager.
+static char     g_apPass[64] = "";
+
 // Point PubSubClient at the plain or TLS socket per g_mqttTls, then (re)set the broker address.
 // With a CA cert we verify the broker; without one we only encrypt (setInsecure) — fine for a self-signed
 // broker on the LAN (e.g. the project's own mqtts_server.py). Call after any host/port/TLS change.
@@ -242,6 +247,7 @@ static String statusJson() {
   j += ",\"wifi\":" + String(g_wifiOk ? "true" : "false");
   j += ",\"ip\":\"" + (g_wifiOk ? WiFi.localIP().toString() : String("-")) + "\"";
   j += ",\"wifi_rssi\":" + String(g_wifiOk ? WiFi.RSSI() : 0);
+  j += ",\"ap\":{\"ssid\":" + jstr(apSsid()) + ",\"pass_set\":" + String(g_apPass[0] ? "true" : "false") + "}";
   j += ",\"freq_mhz\":869.5,\"bw_khz\":500,\"sf\":7";
   j += ",\"mqtt\":{\"host\":" + jstr(g_mqttHost) + ",\"port\":" + String(g_mqttPort);
   j += ",\"user\":" + jstr(g_mqttUser) + ",\"topic\":" + jstr(g_mqttTopic);
@@ -796,6 +802,25 @@ static void handleAuthCfg() {
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
+// ---- /api/appass — set the setup-hotspot ("OpenOBI-XXXXXX") password -----------------------------------
+// Blank clears it back to an open AP. WiFiManager itself requires 8-63 chars for a non-blank AP password
+// (WPA2 minimum) and silently falls back to open otherwise (see validApPassword() in the library) -- reject
+// short-but-nonempty passwords here instead, so the UI gets an error rather than a password that's quietly
+// ignored. Applies immediately if our setup AP is currently up; otherwise takes effect next time it's raised.
+static void handleApPassword() {
+  String p = server.hasArg("pass") ? server.arg("pass") : String();
+  if (p.length() && p.length() < 8) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"short\"}");
+    return;
+  }
+  strlcpy(g_apPass, p.c_str(), sizeof g_apPass);
+  prefs.begin("obigw", false);
+  prefs.putString("appw", g_apPass);
+  prefs.end();
+  if (g_apActive) WiFi.softAP(apSsid(), g_apPass[0] ? g_apPass : nullptr);   // re-raise with the new password now
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
 // (Re)start the SNTP client with the user-set NTP server (custom first, public pools as fallback) and zone.
 static void syncNtp() {
   configTzTime(g_tz, g_ntp, "pool.ntp.org", "time.nist.gov");
@@ -1148,6 +1173,10 @@ button:disabled{opacity:.5;cursor:default}
   <div class=row><button onclick=connect()><span id=bconn>Verbinden &amp; speichern</span></button>
    <button class=g onclick=portal()><span id=bportal>Setup-Portal (AP)</span></button>
    <span class=msg id=wfmsg></span></div>
+  <hr>
+  <div class=stat id=apstat>…</div>
+  <label id=lappass>Hotspot-Passwort (leer = offen)</label><input id=appass type=password autocomplete=new-password placeholder=•••••••• minlength=8>
+  <div class=row><button onclick=saveApPass()><span id=bapsave>Speichern</span></button><span class=msg id=apmsg></span></div>
  </div>
 
  <div class=card>
@@ -1238,6 +1267,7 @@ $('l'+(de?'de':'en')).className='act';                                // mark th
 $('lnet').textContent=t('Netzwerk (Scan)','Network (scan)');$('bscan').textContent=t('Scan','Scan');
 $('lman').textContent=t('…oder SSID eingeben','…or type SSID');$('lwpass').textContent=t('Passwort','Password');
 $('bconn').textContent=t('Verbinden & speichern','Connect & save');$('bportal').textContent=t('Setup-Portal (AP)','Setup portal (AP)');
+$('lappass').textContent=t('Hotspot-Passwort (leer = offen)','Hotspot password (blank = open)');$('bapsave').textContent=t('Speichern','Save');
 $('lhost').textContent=t('Server','Server');$('luser').textContent=t('Benutzer','User');$('lpass').textContent=t('Passwort','Password');
 $('ltopic').textContent=t('Basis-Topic','Base topic');$('bmsave').textContent=t('Speichern','Save');$('bdisc').textContent=t('Discovery senden','Send discovery');
 $('ltls').textContent=t('MQTTS (TLS-Verschlüsselung)','MQTTS (TLS encryption)');$('lca').textContent=t('CA-Zertifikat (PEM, optional)','CA certificate (PEM, optional)');
@@ -1253,6 +1283,7 @@ let cfg=false,tzc=false;
 async function load(){try{
   const s=await(await fetch('/api/status')).json();
   $('wfstat').innerHTML=s.wifi?`<span class="dot on"></span>${t('Verbunden','Connected')} · ${s.ip} · ${s.wifi_rssi} dBm`:`<span class="dot off"></span>${t('nicht verbunden','offline')}`;
+  if(s.ap)$('apstat').innerHTML=`<code>${s.ap.ssid}</code> — `+(s.ap.pass_set?`<span class="dot on"></span>${t('passwortgeschützt','password-protected')}`:`<span class="dot idle"></span>${t('offen — kein Passwort','open — no password')}`);
   const q=s.mqtt;
   const tls=q.tls?' · 🔒TLS':'';
   $('mqstat').innerHTML=!q.enabled?`<span class="dot idle"></span>${t('deaktiviert','disabled')}`:q.connected?`<span class="dot on"></span>${t('verbunden','connected')} · ${q.host}${tls}`:`<span class="dot off"></span>${t('getrennt','disconnected')} — ${q.state}${tls}`;
@@ -1283,6 +1314,11 @@ async function connect(){let s=$('man').value.trim()||$('ssid').value.replace(/ 
  try{await fetch('/api/wifi/connect',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'ssid='+encodeURIComponent(s)+'&pass='+encodeURIComponent($('wpass').value)});}catch(e){}
  $('wfmsg').textContent=t('verbinde… ändert sich die IP, öffne das Dashboard unter der neuen IP.','connecting… if the IP changes, reopen at the new IP.');}
 function portal(){fetch('/api/wifi',{method:'POST'}).then(r=>r.json()).then(d=>{alert((de?'Portal gestartet auf WLAN: ':'Portal on WiFi: ')+d.ssid+'\nhttp://192.168.4.1/');}).catch(()=>{});}
+async function saveApPass(){const p=$('appass').value;
+ if(p&&p.length<8){$('apmsg').textContent=t('mind. 8 Zeichen (oder leer lassen)','8+ chars (or leave blank)');return;}
+ $('apmsg').textContent='…';const r=await(await fetch('/api/appass',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'pass='+encodeURIComponent(p)})).json();
+ if(!r.ok){$('apmsg').textContent=t('mind. 8 Zeichen (oder leer lassen)','8+ chars (or leave blank)');return;}
+ $('appass').value='';$('apmsg').textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>$('apmsg').textContent='',3000);load();}
 async function saveMqtt(){const b=new URLSearchParams();b.set('host',$('mh').value);b.set('port',$('mp').value||1883);b.set('user',$('mu').value);b.set('topic',$('mt').value);if($('mpw').value)b.set('pass',$('mpw').value);
  b.set('tls',$('mtls').checked?'1':'0');if($('mca').value.trim())b.set('ca',$('mca').value.trim());  // blank CA = keep existing / encrypt-only
  $('mqmsg').textContent='…';await fetch('/api/mqtt',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b});$('mpw').value='';$('mqmsg').textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>$('mqmsg').textContent='',3000);load();}
@@ -2345,6 +2381,7 @@ static void startServices() {
   server.on("/api/interval", HTTP_POST, guard(handleInterval));
   server.on("/api/mqtt", HTTP_POST, guard(handleMqttCfg));
   server.on("/api/auth", HTTP_POST, guard(handleAuthCfg));   // set web Basic Auth user/pass
+  server.on("/api/appass", HTTP_POST, guard(handleApPassword));  // set the setup-hotspot AP password
   server.on("/api/tz",   HTTP_POST, guard(handleTz));       // set the timezone (history day-buckets)
   server.on("/api/night_mode", HTTP_POST, guard(handleNightMode)); // disable normal-operation LED activity
   server.on("/api/wifi", HTTP_POST, guard(handleWifiPortal));        // open the on-demand WiFiManager portal (AP)
@@ -2448,10 +2485,10 @@ static void runPortal() {
   wm.setEnableConfigPortal(true);
   wm.setConfigPortalBlocking(true);
   wm.setConfigPortalTimeout(180);
-  wm.startConfigPortal(apSsid());          // serves the WiFiManager UI until saved or 3-min timeout
+  wm.startConfigPortal(apSsid(), g_apPass[0] ? g_apPass : nullptr);   // serves the WiFiManager UI until saved or 3-min timeout
   wm.setConfigPortalBlocking(false);
   wm.setConfigPortalTimeout(0);
-  if (WiFi.status() != WL_CONNECTED) { WiFi.mode(WIFI_AP_STA); WiFi.softAP(apSsid()); g_apActive = true; }
+  if (WiFi.status() != WL_CONNECTED) { WiFi.mode(WIFI_AP_STA); WiFi.softAP(apSsid(), g_apPass[0] ? g_apPass : nullptr); g_apActive = true; }
   else g_apActive = false;                 // connected -> no setup AP needed
   startServices();                         // dashboard back up (STA IP or 192.168.4.1)
   Serial.println("[web] WiFi portal closed — dashboard restored");
@@ -2875,6 +2912,7 @@ static void webTask(void *) {
   g_mqttCa  = prefs.getString("ca", "");         // optional broker CA cert (PEM)
   prefs.getString("au", "").toCharArray(g_authUser, sizeof g_authUser);   // web Basic Auth user (blank = open)
   prefs.getString("ap", "").toCharArray(g_authPass, sizeof g_authPass);
+  prefs.getString("appw", "").toCharArray(g_apPass, sizeof g_apPass);     // setup-hotspot AP password (blank = open)
   { String z = prefs.getString("tz", "CET-1CEST,M3.5.0,M10.5.0/3"); z.toCharArray(g_tz, sizeof g_tz); }
   { String n = prefs.getString("ntp", "pool.ntp.org"); n.toCharArray(g_ntp, sizeof g_ntp); }
   g_nightMode = prefs.getBool("nightmode", false);
@@ -2899,9 +2937,9 @@ static void webTask(void *) {
   wm.setCaptivePortalEnable(false);  // no DNS-hijack redirect -> the OS won't auto-pop a captive window
   wm.setBreakAfterConfig(true);
   Serial.printf("[web] WiFi: trying saved network (dashboard stays reachable either way, AP '%s')\n", apSsid());
-  if (!wm.autoConnect(apSsid())) {   // try saved creds only; on failure bring up our own AP for the dashboard
+  if (!wm.autoConnect(apSsid(), g_apPass[0] ? g_apPass : nullptr)) {   // try saved creds only; on failure bring up our own AP for the dashboard
     WiFi.mode(WIFI_AP_STA);
-    WiFi.softAP(apSsid());
+    WiFi.softAP(apSsid(), g_apPass[0] ? g_apPass : nullptr);
     g_apActive = true;
     Serial.printf("[web] no WiFi yet — dashboard on setup AP '%s' at http://192.168.4.1/\n", apSsid());
   }
@@ -2925,7 +2963,7 @@ static void webTask(void *) {
         syncNtp();  // wall clock for history day-buckets (user-set zone + NTP server)
         Serial.printf("[web] connected: http://%s/\n", WiFi.localIP().toString().c_str());
       } else if (!g_apActive) {
-        WiFi.mode(WIFI_AP_STA); WiFi.softAP(apSsid()); g_apActive = true;
+        WiFi.mode(WIFI_AP_STA); WiFi.softAP(apSsid(), g_apPass[0] ? g_apPass : nullptr); g_apActive = true;
         Serial.printf("[web] WiFi lost — setup AP '%s' back up at 192.168.4.1\n", apSsid());
       }
     }
