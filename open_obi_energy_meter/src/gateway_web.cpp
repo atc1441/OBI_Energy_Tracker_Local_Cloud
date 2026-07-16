@@ -97,7 +97,7 @@ static String   g_mqttCa;            // optional PEM CA cert to verify the broke
 static char     g_tz[48] = "CET-1CEST,M3.5.0,M10.5.0/3";   // POSIX TZ for the history day-buckets (user-settable)
 static char     g_ntp[64] = "pool.ntp.org";                // NTP server for the wall clock (user-settable)
 static volatile bool g_nightMode = false;                    // disable normal-operation LED activity
-static uint16_t g_pubEvery = 15;
+static uint16_t g_pubEvery = 15;   // gateway-state publish cadence (s); reader telemetry is event-driven, not throttled by this
 
 // HTTP Basic Auth for the whole web dashboard/API. Blank username = auth disabled (open, backward compatible).
 // The ESP32 does NOT serve HTTPS — auth guards access on a plain-HTTP LAN; use MQTTS for the broker link.
@@ -2808,11 +2808,12 @@ static void mqttService() {
   }
   if (mqtt.connected()) {
     mqtt.loop();
+    // Gateway state (retained) — temp, uptime, heap, wifi rssi, reader counts; keyed by MAC via the topic.
+    // Slow-moving, so it stays on the fixed g_pubEvery cadence and does NOT need to track the reader rate.
+    // Two reader counts: readers_all = every reader we've heard (bound or greyed), readers_bound = only the
+    // ones actually assigned/bound to THIS gateway. `readers` is kept = readers_all for backward compat.
     if (now - lastPub > (uint32_t)g_pubEvery * 1000) {
       lastPub = now;
-      // gateway state (retained) — temp, uptime, heap, wifi rssi, reader counts; keyed by MAC via the topic.
-      // Two reader counts: readers_all = every reader we've heard (bound or greyed), readers_bound = only the
-      // ones actually assigned/bound to THIS gateway. `readers` is kept = readers_all for backward compat.
       { int rcAll = 0, rcBound = 0;
         for (int i = 0; i < MAX_READERS; i++) if (readers[i].used) { rcAll++; if (readers[i].assigned) rcBound++; }
         float t = gwTempC();
@@ -2826,28 +2827,34 @@ static void mqttService() {
                     ",\"readers_all\":" + String(rcAll) +
                     ",\"readers_bound\":" + String(rcBound) +
                     ",\"auth_fail_count\":" + String(g_authFailCount) + "," + fwJson() + "}";
-        if (mqtt.publish(gwStateTopic().c_str(), gp.c_str(), true)) g_mqttPubCount++; }
-      for (int i = 0; i < MAX_READERS; i++) {
-        Reader &r = readers[i];
-        if (!r.used || !r.haveData) continue;
-        if (!r.mqttDiscovered) { publishDiscovery(r); r.mqttDiscovered = true; }
-        String topic = String(g_mqttTopic) + "/" + hex(r.handle, 3);
-        String p = "{\"id\":\"" + hex(r.handle, 3) + "\",\"uuid\":" +
-                   (r.haveUuid ? "\"" + uuidStr(r.uuid) + "\"" : "null") +
-                   ",\"type\":\"" + typeName(r.devType) + "\",\"battery_mV\":" + r.battery_mV +
-                   ",\"rssi\":" + (int)r.lastRssi + ",\"snr\":" + String(r.lastSnr, 1) + ",\"infrared\":" + ((r.flags & 1) ? "true" : "false") +
-                   ",\"import\":" + jnum(r.import_) + ",\"export\":" + jnum(r.export_) +
-                   ",\"power\":" + jnumS(r.power) +
-                   ",\"power_calc\":" + jnumS(r.calcPower) +
-                   ",\"softver\":" + String(r.softver) + ",\"hardver\":" + String(r.hardver) +
-                   ",\"paired\":" + (r.haveKey ? "true" : "false") +
-                   ",\"legacy\":" + (r.legacy ? "true" : "false") +
-                   ",\"bootloader\":" + (r.inBootloader ? "true" : "false") +
-                   ",\"interval\":" + String(r.setInterval) +
-                   ",\"age_s\":" + String((millis() - r.lastSeenMs) / 1000) + "}";
-        if (mqtt.publish(topic.c_str(), p.c_str())) g_mqttPubCount++;
-      }
-      g_mqttLastPubMs = now;
+        if (mqtt.publish(gwStateTopic().c_str(), gp.c_str(), true)) { g_mqttPubCount++; g_mqttLastPubMs = now; } }
+    }
+    // Per-reader telemetry is EVENT-DRIVEN: publish the instant a fresh energy frame has been decoded
+    // (lastEnergyMs is bumped by the LoRa task on every energy frame) instead of on the g_pubEvery timer,
+    // so MQTT tracks the reader's own report interval and values reach the broker as soon as they arrive.
+    // The reader's report interval is the natural rate limit, so no extra throttle is needed here.
+    for (int i = 0; i < MAX_READERS; i++) {
+      Reader &r = readers[i];
+      if (!r.used || !r.haveData) continue;
+      if (r.lastEnergyMs == r.mqttPubEnergyMs) continue;   // nothing new since the last publish
+      r.mqttPubEnergyMs = r.lastEnergyMs;
+      if (!r.mqttDiscovered) { publishDiscovery(r); r.mqttDiscovered = true; }
+      String id = hex(r.handle, 3);
+      String topic = String(g_mqttTopic) + "/" + id;
+      String p = "{\"id\":\"" + id + "\",\"uuid\":" +
+                 (r.haveUuid ? "\"" + uuidStr(r.uuid) + "\"" : "null") +
+                 ",\"type\":\"" + typeName(r.devType) + "\",\"battery_mV\":" + r.battery_mV +
+                 ",\"rssi\":" + (int)r.lastRssi + ",\"snr\":" + String(r.lastSnr, 1) + ",\"infrared\":" + ((r.flags & 1) ? "true" : "false") +
+                 ",\"import\":" + jnum(r.import_) + ",\"export\":" + jnum(r.export_) +
+                 ",\"power\":" + jnumS(r.power) +
+                 ",\"power_calc\":" + jnumS(r.calcPower) +
+                 ",\"softver\":" + String(r.softver) + ",\"hardver\":" + String(r.hardver) +
+                 ",\"paired\":" + (r.haveKey ? "true" : "false") +
+                 ",\"legacy\":" + (r.legacy ? "true" : "false") +
+                 ",\"bootloader\":" + (r.inBootloader ? "true" : "false") +
+                 ",\"interval\":" + String(r.setInterval) +
+                 ",\"age_s\":" + String((millis() - r.lastSeenMs) / 1000) + "}";
+      if (mqtt.publish(topic.c_str(), p.c_str())) { g_mqttPubCount++; g_mqttLastPubMs = now; }
     }
   }
 }

@@ -42,6 +42,9 @@ struct Reader {
   uint8_t  intervalTx  = 0;      // remaining cmd-14 retransmits to send
   char     name[25] = {0};       // user-set friendly name ("" = unset); persisted in NVS ns "obiname"
   bool     mqttDiscovered = false;  // HA discovery config already published (reset on each MQTT connect)
+  uint32_t mqttPubEnergyMs = 0;     // lastEnergyMs value at the last MQTT publish — drives event-driven publishing
+                                    // (publish the moment a fresh energy frame differs from this). Owned by the
+                                    // web/MQTT task only; lastEnergyMs is written by the LoRa task (atomic uint32).
 };
 
 // defined in main.cpp
