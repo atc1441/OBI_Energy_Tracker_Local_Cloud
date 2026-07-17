@@ -6,6 +6,8 @@ upload.log
 # generated per-build by version.py (local, per-machine)
 version.txt
 include/fw_version.h
+# local bridge address + web login for `pio run -t push` (see platformio.local.ini.example)
+platformio.local.ini
 # CI staging dir for release binaries (.github/workflows/build.yml)
 dist/
 PROJECT_NOTES.md

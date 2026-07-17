@@ -1,0 +1,14 @@
+; Copy this file to platformio.local.ini (git-ignored) and fill in your bridge.
+; It is merged into platformio.ini via [platformio] extra_configs and overrides the blank
+; custom_push_* defaults, so `pio run -e obi_gateway_c3 -t push` targets your device.
+;
+; Leave custom_push_user blank if the bridge web UI has no login configured (open access) —
+; the push tool then skips authentication automatically.
+;
+; Alternatively, skip this file and export OBI_BRIDGE_HOST / OBI_BRIDGE_USER / OBI_BRIDGE_PASS
+; in your shell; environment variables take precedence over these values.
+
+[env]
+custom_push_host = 192.168.60.99
+custom_push_user =
+custom_push_pass =
