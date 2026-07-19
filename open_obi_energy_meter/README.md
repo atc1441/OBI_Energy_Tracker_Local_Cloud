@@ -216,9 +216,12 @@ set once for all readers), and a raw Watt table with both the meter's own power 
 purely from the import/export counter deltas — useful when a meter's own Watt value is missing or wrong
 (e.g. a broken 24-bit sign extension on negative power some DWSB20-2TH units hit).
 
-- **Daily summaries** (one row per calendar day, ~240 days retained) always live in the small 128 KB
-  "userdata" data partition every board ships — the one storage location that's never resized or
-  reformatted, so long-term totals are never at risk.
+- **Daily summaries** (one row per calendar day) always live in the small 128 KB "userdata" data partition
+  every board ships — the one storage location that's never resized or reformatted, so long-term totals
+  are never at risk. Retention isn't a fixed day count: the partition's capacity is split fairly across
+  however many readers currently have daily history, recalculated on every write. A single reader gets
+  almost the whole 128 KB to itself (rows are ~30 bytes, so that's thousands of days); adding another
+  reader automatically shrinks both readers' shares going forward, with no separate rebalance step needed.
 - **Raw samples** (every logged reading) use that same 128 KB partition on most boards, but on the
   **stock OBI C3 gateway** (env `obi_gateway_c3`) they instead use the free space of whichever OTA app
   partition isn't currently booted — up to **~1.6 MB**, many times the old capacity, at no extra hardware
@@ -234,14 +237,18 @@ purely from the import/export counter deltas — useful when a meter's own Watt 
 
 An OTA update always overwrites the *inactive* OTA partition with the new firmware image — including
 whatever raw-sample data happened to be using that free space. To not lose everything on every single
-update, a small **256 KB reserve** at the very end of that partition mirrors just the newest data (a much
-smaller per-reader cap than the main store), placed far enough past any realistic firmware size that the
-flash write never reaches it — so it survives the update untouched, automatically, without any special
-handling during the flash itself. On the next boot, that reserve is read back from what is now the
-*active* partition (read-only) and copied into the new inactive partition, which then re-seeds the large
-main store from it so history keeps flowing right where it left off. Net effect: nearly all of the OTA
-partition's free space goes to day-to-day capacity, and only the newest slice is *guaranteed* to survive
-an update — not zero, and not everything either.
+update, a small **256 KB reserve** at the very end of that partition is placed far enough past any
+realistic firmware size that the flash write never reaches it — so it survives the update untouched,
+automatically, without any special handling during the flash itself. Right *before* the flash starts, the
+whole main store is snapshotted into that reserve in one shot, fair-shared across however many readers
+currently have raw data (a single reader gets the *entire* 256 KB; several readers split it evenly, with
+any spare share from small readers handed to the ones that need more) — so as much of the *current* data
+survives as will actually fit, rather than a small fixed per-reader slice being kept in sync continuously
+on every sample. On the next boot, that reserve is read back from what is now the *active* partition
+(read-only) and copied into the new inactive partition, which then re-seeds the large main store from it
+so history keeps flowing right where it left off. Net effect: nearly all of the OTA partition's free space
+goes to day-to-day capacity, and only the newest slice is *guaranteed* to survive an update — not zero,
+and not everything either.
 
 ## Setting the upload interval
 
@@ -583,9 +590,13 @@ dem Leistungswert des Zählers selbst als auch einem rein aus den Import/Export-
 — nützlich, wenn der eigene Watt-Wert eines Zählers fehlt oder falsch ist (z. B. eine fehlerhafte 24-Bit-
 Vorzeichenerweiterung bei negativer Leistung, die manche DWSB20-2TH-Einheiten betrifft).
 
-- **Tageswerte** (eine Zeile pro Kalendertag, ~240 Tage aufgehoben) liegen immer in der kleinen 128-KB-
-  „userdata"-Datenpartition, die jedes Board mitbringt — der eine Speicherort, der nie in der Größe verändert
-  oder neu formatiert wird, sodass Langzeit-Summen nie in Gefahr sind.
+- **Tageswerte** (eine Zeile pro Kalendertag) liegen immer in der kleinen 128-KB-„userdata"-Datenpartition,
+  die jedes Board mitbringt — der eine Speicherort, der nie in der Größe verändert oder neu formatiert wird,
+  sodass Langzeit-Summen nie in Gefahr sind. Die Aufbewahrung ist keine feste Tagesanzahl: die Kapazität der
+  Partition wird bei jedem Schreibvorgang neu fair auf die Anzahl der Reader mit Tageswerten aufgeteilt. Ein
+  einzelner Reader bekommt fast die gesamte 128 KB für sich (Zeilen sind ~30 Byte groß, also tausende Tage);
+  kommt ein weiterer Reader dazu, schrumpft der Anteil beider automatisch bei ihrem nächsten Schreibvorgang —
+  ohne separaten Ausgleichsschritt.
 - **Rohdaten** (jede geloggte Messung) nutzen auf den meisten Boards dieselbe 128-KB-Partition, aber auf dem
   **Stock-OBI-C3-Gateway** (Env `obi_gateway_c3`) stattdessen den freien Speicher der jeweils nicht gebooteten
   OTA-App-Partition — bis zu **~1,6 MB**, ein Vielfaches der alten Kapazität, ganz ohne zusätzliche Hardware.
@@ -602,15 +613,19 @@ Vorzeichenerweiterung bei negativer Leistung, die manche DWSB20-2TH-Einheiten be
 
 Ein OTA-Update überschreibt immer die *inaktive* OTA-Partition mit dem neuen Firmware-Image — inklusive
 was auch immer an Rohdaten diesen freien Platz gerade nutzte. Um nicht bei jedem einzelnen Update alles zu
-verlieren, spiegelt eine kleine **256-KB-Reserve** ganz am Ende dieser Partition nur die neuesten Daten
-(mit einer deutlich kleineren Obergrenze pro Reader als der Hauptspeicher) — platziert weit genug hinter
-jeder realistischen Firmware-Größe, dass der Flash-Schreibvorgang sie nie erreicht. Sie übersteht das
-Update also unangetastet, automatisch, ohne jede Sonderbehandlung während des Flashens selbst. Beim
-nächsten Boot wird diese Reserve aus der jetzt *aktiven* Partition zurückgelesen (nur lesend) und in die
-neue inaktive Partition kopiert, die daraus dann den großen Hauptspeicher neu befüllt — die Historie läuft
-also genau dort weiter, wo sie aufgehört hat. Netto-Effekt: fast der gesamte freie OTA-Speicher geht in die
-Alltagskapazität, und nur die neueste Scheibe davon ist *garantiert*, ein Update zu überstehen — nicht null,
-aber auch nicht alles.
+verlieren, liegt eine kleine **256-KB-Reserve** ganz am Ende dieser Partition, platziert weit genug hinter
+jeder realistischen Firmware-Größe, dass der Flash-Schreibvorgang sie nie erreicht — sie übersteht das
+Update also unangetastet, automatisch, ohne jede Sonderbehandlung während des Flashens selbst. Direkt
+*bevor* der Flash-Vorgang beginnt, wird der gesamte Hauptspeicher in einem Zug in diese Reserve
+gespiegelt, fair aufgeteilt auf die Anzahl der Reader mit Rohdaten (ein einzelner Reader bekommt die
+*gesamten* 256 KB; mehrere teilen sie gleichmäßig auf, wobei ungenutzter Anteil kleiner Reader an die
+verteilt wird, die mehr brauchen) — es überlebt also so viel der *aktuellen* Daten wie tatsächlich
+hineinpasst, statt dass ständig bei jeder Messung eine kleine feste Obergrenze pro Reader synchron
+gehalten wird. Beim nächsten Boot wird diese Reserve aus der jetzt *aktiven* Partition zurückgelesen (nur
+lesend) und in die neue inaktive Partition kopiert, die daraus dann den großen Hauptspeicher neu befüllt —
+die Historie läuft also genau dort weiter, wo sie aufgehört hat. Netto-Effekt: fast der gesamte freie
+OTA-Speicher geht in die Alltagskapazität, und nur die neueste Scheibe davon ist *garantiert*, ein Update
+zu überstehen — nicht null, aber auch nicht alles.
 
 ## Upload-Intervall setzen
 

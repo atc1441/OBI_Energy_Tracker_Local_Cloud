@@ -120,6 +120,10 @@ static char     g_apPass[64] = "";
 static bool     g_ghAuto      = false;
 static char     g_ghRepo[80]  = "";     // blank = GH_DEFAULT_REPO
 static uint32_t g_ghIntervalH = 24;     // hours between auto-checks (UI offers hours or days, stored as hours)
+// millis() of the last periodic check (0xFFFFFFFF sentinel = not seeded yet, see the webTask() loop below).
+// File-scope so statusJson() can report a countdown to the next check for the Settings page, alongside the
+// loop that actually owns/advances it.
+static uint32_t g_ghLastCheckMs = 0xFFFFFFFF;
 
 // History storage state (see ota_hist.h + the "energy history" section below for the rest) -- declared
 // this early only because statusJson() needs them and is defined well above that section.
@@ -269,8 +273,16 @@ static String statusJson() {
   j += ",\"ip\":\"" + (g_wifiOk ? WiFi.localIP().toString() : String("-")) + "\"";
   j += ",\"wifi_rssi\":" + String(g_wifiOk ? WiFi.RSSI() : 0);
   j += ",\"ap\":{\"ssid\":" + jstr(apSsid()) + ",\"pass_set\":" + String(g_apPass[0] ? "true" : "false") + "}";
-  j += ",\"gh_auto\":{\"enabled\":" + String(g_ghAuto ? "true" : "false") + ",\"repo\":" + jstr(g_ghRepo) +
-       ",\"interval_h\":" + String(g_ghIntervalH) + "}";
+  { uint32_t nextS = 0;   // seconds until the next periodic check -- 0 when auto-update is off/mid-update
+    if (g_ghAuto) {
+      uint64_t intervalMs = (uint64_t)g_ghIntervalH * 3600000ULL;
+      if (g_ghLastCheckMs == 0xFFFFFFFF) nextS = (uint32_t)(intervalMs / 1000);   // not seeded yet -- full interval
+      else { uint32_t elapsed = millis() - g_ghLastCheckMs;                       // (unsigned wrap-safe vs. millis() overflow)
+             nextS = ((uint64_t)elapsed >= intervalMs) ? 0 : (uint32_t)((intervalMs - elapsed) / 1000); }
+    }
+    j += ",\"gh_auto\":{\"enabled\":" + String(g_ghAuto ? "true" : "false") + ",\"repo\":" + jstr(g_ghRepo) +
+         ",\"interval_h\":" + String(g_ghIntervalH) + ",\"next_check_s\":" + String(nextS) + "}";
+  }
   { size_t ht = 0, hu = 0; historySpace(ht, hu);
     size_t dt = 0, du = 0; dailySpace(dt, du);
     j += ",\"hist_fs\":{\"ok\":" + String(g_fsOk ? "true" : "false") +
@@ -1346,6 +1358,10 @@ static void handleGithubAuto() {
 
     g_ghIntervalH = (uint32_t)h;
   }
+  g_ghLastCheckMs = millis();   // restart the countdown from now -- a saved interval/repo/enable change
+                                 // should count down from this moment, not from whenever the old interval
+                                 // last happened to fire (or the 0xFFFFFFFF "not seeded" sentinel forever,
+                                 // if auto-update had never run yet).
   prefs.begin("obigw", false);
   prefs.putBool("ghauto", g_ghAuto);
   prefs.putString("ghrepo", g_ghRepo);
@@ -1496,6 +1512,10 @@ const de=(localStorage.getItem('lang')||'de')=='de';
 const t=(d,e)=>de?d:e;
 function setL(x){localStorage.setItem('lang',x);location.reload();}   // switch language + re-render
 $('l'+(de?'de':'en')).className='act';                                // mark the active language button
+// h:mm:ss (or m:ss under an hour) countdown text -- re-derived from the server's next_check_s on every
+// 5 s status poll, so it stays accurate without a separate client-side ticking timer.
+function fmtDur(s){s=Math.max(0,s|0);const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;
+ return h>0?`${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`:`${m}:${String(sec).padStart(2,'0')}`;}
 // localise the few static labels for EN users
 $('lnet').textContent=t('Netzwerk (Scan)','Network (scan)');$('bscan').textContent=t('Scan','Scan');
 $('lman').textContent=t('…oder SSID eingeben','…or type SSID');$('lwpass').textContent=t('Passwort','Password');
@@ -1530,7 +1550,7 @@ async function load(){try{
   if(s.gh_auto&&!ghc){ghc=true;$('ghauto').checked=!!s.gh_auto.enabled;$('ghrepo').value=s.gh_auto.repo||'';
    let h=s.gh_auto.interval_h||24;
    if(h>=24&&h%24===0){$('ghivlu').value=24;$('ghivln').value=h/24;}else{$('ghivlu').value=1;$('ghivln').value=h;}}
-  if(s.gh_auto)$('ghautonote').textContent=s.gh_auto.enabled?t('aktiv — prüft alle ','on — checking every ')+s.gh_auto.interval_h+t(' Std. auf ',' h against ')+(s.gh_auto.repo||'atc1441/OBI_Energy_Tracker_Local_Cloud'):t('deaktiviert — Firmware ändert sich nur manuell','off — firmware only changes manually');
+  if(s.gh_auto)$('ghautonote').textContent=s.gh_auto.enabled?t('aktiv — prüft alle ','on — checking every ')+s.gh_auto.interval_h+t(' Std. auf ',' h against ')+(s.gh_auto.repo||'atc1441/OBI_Energy_Tracker_Local_Cloud')+t(' · nächster Check in ',' · next check in ')+fmtDur(s.gh_auto.next_check_s):t('deaktiviert — Firmware ändert sich nur manuell','off — firmware only changes manually');
   $('tzstat').innerHTML=(s.time_valid?'<span class="dot on"></span>':'<span class="dot idle"></span>')+`${t('Gerätezeit','Device time')}: <code>${s.time||'?'}</code>`+(s.time_valid?'':` · ${t('noch nicht per NTP synchronisiert','not NTP-synced yet')}`);
   if(!tzc){tzc=true;$('tztext').value=s.tz||'';$('ntptext').value=s.ntp||'';$('tzsel').value=s.tz||'';if($('tzsel').value!==(s.tz||''))$('tzsel').value='';}
 }catch(e){}}
@@ -2126,9 +2146,13 @@ struct DailyState { uint32_t day = 0, imp = 0, exp = 0; };
 static DailyState hDaily[HIST_SLOTS];   // current day and its latest observed counters
 
 // Daily summaries ("/d<id>") always live in the 128 KB "userdata" partition, on every board -- they're
-// tiny (a handful of KB per reader even at 240 days) and matter for the long term, so they get the one
-// storage location that's never resized, reformatted, or otherwise at risk from anything below. Raw
-// samples ("/s<id>") go to the large, dynamically-sized OTA-tail store where supported (obi_gateway_c3,
+// tiny (rows are ~30 bytes) and matter for the long term, so they get the one storage location that's
+// never resized, reformatted, or otherwise at risk from anything below. The partition's capacity is
+// split fairly across however many readers currently have daily history -- not a fixed day count per
+// reader -- so a lone reader gets (almost) the whole 128 KB (years of history) and adding a new reader
+// automatically shrinks everyone's share on their next write, without needing a separate rebalance step.
+// See dailyReaderCount()/dailyCapBytes() below.
+// Raw samples ("/s<id>") go to the large, dynamically-sized OTA-tail store where supported (obi_gateway_c3,
 // see ota_hist.h), falling back to the SAME "userdata" partition (i.e. no change from before this feature
 // existed) on every other board, or if the OTA-tail mount fails for any reason.
 // All history file I/O below goes through plain POSIX stdio (fopen/fread/...) rather than the Arduino
@@ -2239,9 +2263,52 @@ static void appendSample(const String &id, uint32_t ep, uint32_t imp, uint32_t e
   appendLineCapped(fpS(id), line, sampleCapBytes(), sampleTrimBytes());
 }
 
+// How many readers currently need a slice of the daily-summary budget: every live (used) RAM slot, plus
+// any reader that's gone quiet but still has a /d<id> file on flash (same "offline reader" cases the
+// /history page already keeps reachable -- see handleHistoryReaders()). Deliberately NOT a config value:
+// re-scanned on every call so it tracks reality the moment a reader is added, unbound, or its file is
+// cleared -- no separate "rebalance" step needed anywhere.
+static int dailyReaderCount() {
+  String seen[HIST_SLOTS]; int n = 0;
+  for (int i = 0; i < MAX_READERS && n < HIST_SLOTS; i++)
+    if (readers[i].used) seen[n++] = hex(readers[i].handle, 3);
+  if (g_fsOk) {
+    DIR *dir = opendir(g_dailyBase.c_str());
+    if (dir) {
+      struct dirent *de;
+      while ((de = readdir(dir)) != nullptr && n < HIST_SLOTS) {
+        String name = de->d_name;
+        if (name.length() != 7 || name[0] != 'd') continue;
+        String id = name.substring(1);
+        bool dup = false;
+        for (int k = 0; k < n; k++) if (seen[k] == id) { dup = true; break; }
+        if (!dup) seen[n++] = id;
+      }
+      closedir(dir);
+    }
+  }
+  return n > 0 ? n : 1;
+}
+
+// Per-reader byte budget for the daily-summary log -- the userdata partition's whole capacity split evenly
+// across however many readers dailyReaderCount() currently counts, NOT a fixed day count. A single reader
+// gets (almost) the entire partition to itself (thousands of days -- rows are ~30 bytes each); the moment a
+// second reader's first daily row is written, both share the partition roughly in half going forward, each
+// trimming its oldest rows down to the new, smaller share on its own next write. No rebalance pass needed:
+// every persistDaily() call recomputes this fresh, so the split just tracks however many readers exist now.
+static size_t dailyCapBytes() {
+  size_t total = 0, used = 0; dailySpace(total, used);
+  if (!total) total = 131072;                    // partition not mounted yet -- assume the stock 128 KB
+  size_t reserve = total / 8;                     // headroom for LittleFS's own metadata/wear-leveling
+  size_t budget = total > reserve ? total - reserve : total;
+  return budget / (size_t)dailyReaderCount();
+}
+
 // Return daily CSV with one row upserted. The same helper persists completed days and adds today's
-// RAM-only row to API responses.
-static String withDailyRow(String all, uint32_t dayStart, uint32_t imp, uint32_t exp) {
+// RAM-only row to API responses. `capBytes` is this reader's current fair share (see dailyCapBytes());
+// trimming is byte-based (like appendLineCapped()'s raw-sample cap) rather than a fixed row count so it
+// grows and shrinks smoothly as the reader count changes instead of jumping between fixed slot sizes.
+static String withDailyRow(String all, uint32_t dayStart, uint32_t imp, uint32_t exp, size_t capBytes) {
   char row[56];
   snprintf(row, sizeof row, "%lu,%lu,%lu", (unsigned long)dayStart, (unsigned long)imp, (unsigned long)exp);
   String content;
@@ -2259,19 +2326,18 @@ static String withDailyRow(String all, uint32_t dayStart, uint32_t imp, uint32_t
       content += String(row) + "\n";                     // a new day -> append
     }
   }
-  // cap to the most recent ~240 days
-  int lines = 0; for (size_t k = 0; k < content.length(); k++) if (content[k] == '\n') lines++;
-  if (lines > 240) {
-    int drop = lines - 240, idx = 0;
-    for (int d = 0; d < drop; d++) idx = content.indexOf('\n', idx) + 1;
-    content = content.substring(idx);
+  // trim the oldest rows until back under this reader's current fair-share budget
+  if (content.length() > capBytes) {
+    int cut = (int)content.length() - (int)capBytes;
+    int nl = content.indexOf('\n', cut > 0 ? cut : 0);
+    content = (nl >= 0) ? content.substring(nl + 1) : String();
   }
   return content;
 }
 
 static void persistDaily(const String &id, uint32_t dayStart, uint32_t imp, uint32_t exp) {
   String path = fpD(id);
-  fsWrite(path, withDailyRow(fsRead(path), dayStart, imp, exp));
+  fsWrite(path, withDailyRow(fsRead(path), dayStart, imp, exp, dailyCapBytes()));
 }
 
 static uint32_t localDayStart(time_t ep) {
@@ -2446,7 +2512,7 @@ static void handleHistoryApi() {
     String d = g_fsOk ? fsRead(fpD(id)) : String();
     for (int i = 0; i < MAX_READERS; i++)
       if (hDaily[i].day && readers[i].used && hex(readers[i].handle, 3) == id) {
-        d = withDailyRow(d, hDaily[i].day, hDaily[i].imp, hDaily[i].exp);
+        d = withDailyRow(d, hDaily[i].day, hDaily[i].imp, hDaily[i].exp, dailyCapBytes());
         break;
       }
     streamRows(d);
@@ -2503,7 +2569,7 @@ static void handleHistoryCsv() {
       String d = fsRead(fpD(id));
       for (int i = 0; i < MAX_READERS; i++)
         if (hDaily[i].day && readers[i].used && hex(readers[i].handle, 3) == id) {
-          d = withDailyRow(d, hDaily[i].day, hDaily[i].imp, hDaily[i].exp);
+          d = withDailyRow(d, hDaily[i].day, hDaily[i].imp, hDaily[i].exp, dailyCapBytes());
           break;
         }
       sendCsvRows(d, "date,day_start_epoch,import_wh,export_wh");
@@ -3587,11 +3653,10 @@ static void webTask(void *) {
         // actually lands, instead of requiring the user to notice and manually re-save the NTP settings.
         if (conn && !timeValid()) syncNtp(); } }
     if (g_ghAuto && conn && g_ghState == 0) {   // periodic GitHub auto-update -- default OFF, see /api/github/auto
-      static uint32_t lastGhCheckMs = 0xFFFFFFFF;   // sentinel: seed on first pass so the first check lands one
       uint32_t nowMs = millis();                     // full interval after boot, not immediately -- an unplanned
-      if (lastGhCheckMs == 0xFFFFFFFF) lastGhCheckMs = nowMs;   // reboot right at power-up would be surprising.
-      if (nowMs - lastGhCheckMs >= g_ghIntervalH * 3600000UL) {
-        lastGhCheckMs = nowMs;
+      if (g_ghLastCheckMs == 0xFFFFFFFF) g_ghLastCheckMs = nowMs;   // reboot right at power-up would be surprising.
+      if (nowMs - g_ghLastCheckMs >= g_ghIntervalH * 3600000UL) {
+        g_ghLastCheckMs = nowMs;
         String tag, url;
         if (githubLatest(tag, url) && url.length() && verNewer(tag.c_str(), FW_VERSION)) {
           Serial.printf("[gh] auto-update: %s -> %s (%s)\n", FW_VERSION, tag.c_str(), ghRepoNorm().c_str());
