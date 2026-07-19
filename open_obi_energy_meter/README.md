@@ -54,17 +54,22 @@ range. Filter by id/cmd, pause, or clear.
 ### Settings — WiFi, MQTT(S), login, time, firmware
 ![Settings page](images/Overview_settings.png)
 
-One page for everything: **WiFi** (scan/join or captive AP), **MQTT** with optional **MQTTS/TLS**, a CA
-field and *Send discovery*, a **web-access login** to lock the dashboard, **timezone**, and the **Firmware**
-block — *check for updates* / pull a GitHub release / manually flash a `.bin`, plus a **factory reset**.
+One page for everything: **WiFi** (scan/join or captive AP, plus an optional **password for the setup
+hotspot** itself — blank/open by default), **MQTT** with optional **MQTTS/TLS**, a CA field and *Send
+discovery*, a **web-access login** to lock the dashboard, **timezone**, and the **Firmware** block — *check
+for updates* / pull a GitHub release / manually flash a `.bin` / an **automatic update schedule** (off by
+default — hours or days, pulls from this repo or your own fork), plus a **factory reset**.
 
-### Debug — raw flash tool & full backup
+### Debug — raw flash tool, flash map & full backup
 ![Flash debug hex tool](images/Overview_debug.png)
 
 A power-user flash inspector: browse raw flash as hex, read **eFuses**, and — most importantly — **Dump
 full flash** to pull a complete backup of the device (bootloader + partition table + both OTA app slots +
 NVS). Because the partition table is dual-OTA, your **original stock firmware is still intact in the other
-slot** after conversion, so this is how you grab a full stock backup straight from the device.
+slot** after conversion, so this is how you grab a full stock backup straight from the device. Below the
+hex editor, a **flash map** section renders the whole chip as a defrag-style grid — which OTA bank is
+active, how much of it is firmware vs. history data, and how full each history region is (see
+[Energy history & storage](#energy-history--storage) below).
 
 ---
 
@@ -91,6 +96,8 @@ bind + ECDH). Everything was reverse-engineered from firmware `1.2.1`; details i
 | 8 | **Persistence** | reader UUIDs + MQTT settings saved in NVS, survive reboots |
 | 9 | **Board-generic** | any ESP32 / ESP32-S3 + SX1262 via `board_config.h`; not tied to one vendor board |
 | 10 | **On-board e-paper** | Heltec Vision Master E290 2.9″ display shows live gateway + reader status (auto-detected via the board flag; other boards unaffected) |
+| 11 | **Auto-update from GitHub** | pulls the newest release on a schedule (hours or days) — **off by default**, points at this repo or your own fork |
+| 12 | **Large on-device history** | daily summaries always in the small 128 KB partition; on the stock C3 gateway, raw samples use up to **~1.6 MB** of otherwise-unused OTA-partition space, and still survive a firmware update via a small guaranteed reserve |
 
 ## Hardware & wiring
 
@@ -173,7 +180,10 @@ running firmware kept (brick-safe dual-OTA). The build → flash → verify loop
 
 ## Web dashboard
 
-- **WiFi captive portal** (WiFiManager) — no hard-coded credentials; reconfigurable any time.
+- **WiFi captive portal** (WiFiManager) — no hard-coded credentials; reconfigurable any time. If the
+  connection drops, the gateway retries the saved network every 30 s in the background (in addition to
+  raising its setup hotspot), so it recovers on its own instead of needing a manual reboot. The setup
+  hotspot itself (`OpenOBI-<MAC>`) can optionally be given a password in Settings — blank/open by default.
 - **Live reader cards**: 3-byte id, 16-byte **UUID**, device type, firmware/hardware version, RSSI,
   battery, infrared (meter-reading) status, and import / export / power.
 - **Per reader**: set the **upload interval**, **flash firmware** (`.bin` picker → over-the-air update), and
@@ -197,6 +207,41 @@ id, import/export (kWh), infrared status, RSSI and battery. It runs on **core 0*
 slow, wear-prone panel it only redraws when the shown values change (flicker-free partial refresh, with an
 occasional full refresh to clear ghosting). Other boards are unaffected — the display code is gated behind the
 `OBI_HAS_EPD` board flag and the GxEPD2 library is only pulled for the Heltec env.
+
+## Energy history & storage <a id="energy-history--storage"></a>
+
+Every reader's energy counters are logged **on-device** — no cloud, no SD card. The `/history` page shows
+cumulative import/export, daily consumption/feed-in bar charts (with cost, at a settable ct/kWh price you
+set once for all readers), and a raw Watt table with both the meter's own power reading and one calculated
+purely from the import/export counter deltas — useful when a meter's own Watt value is missing or wrong
+(e.g. a broken 24-bit sign extension on negative power some DWSB20-2TH units hit).
+
+- **Daily summaries** (one row per calendar day, ~240 days retained) always live in the small 128 KB
+  "userdata" data partition every board ships — the one storage location that's never resized or
+  reformatted, so long-term totals are never at risk.
+- **Raw samples** (every logged reading) use that same 128 KB partition on most boards, but on the
+  **stock OBI C3 gateway** (env `obi_gateway_c3`) they instead use the free space of whichever OTA app
+  partition isn't currently booted — up to **~1.6 MB**, many times the old capacity, at no extra hardware
+  cost. See [`PROJECT_NOTES.md`](PROJECT_NOTES.md) for the exact partition layout and byte offsets.
+- Export **CSV** any time — raw samples or daily values — via the ⬇ buttons on `/history`.
+- A reader that's gone out of range (or been removed) still keeps its history reachable and deletable: the
+  reader picker also lists "offline" ids that only exist in stored history, not the live radio list.
+- `/debug` has a **flash map** below the hex editor — a defrag-style visualization of the whole chip
+  showing which OTA bank is active, how much of it is firmware vs. history data, and how full each region
+  currently is.
+
+### Surviving a firmware update (stock C3 gateway only)
+
+An OTA update always overwrites the *inactive* OTA partition with the new firmware image — including
+whatever raw-sample data happened to be using that free space. To not lose everything on every single
+update, a small **256 KB reserve** at the very end of that partition mirrors just the newest data (a much
+smaller per-reader cap than the main store), placed far enough past any realistic firmware size that the
+flash write never reaches it — so it survives the update untouched, automatically, without any special
+handling during the flash itself. On the next boot, that reserve is read back from what is now the
+*active* partition (read-only) and copied into the new inactive partition, which then re-seeds the large
+main store from it so history keeps flowing right where it left off. Net effect: nearly all of the OTA
+partition's free space goes to day-to-day capacity, and only the newest slice is *guaranteed* to survive
+an update — not zero, and not everything either.
 
 ## Setting the upload interval
 
@@ -369,18 +414,23 @@ die Reichweite zu debuggen. Nach id/cmd filtern, pausieren oder leeren.
 ### Einstellungen — WLAN, MQTT(S), Login, Zeit, Firmware
 ![Einstellungsseite](images/Overview_settings.png)
 
-Eine Seite für alles: **WLAN** (Scan/Verbinden oder Captive-AP), **MQTT** mit optionalem **MQTTS/TLS**,
+Eine Seite für alles: **WLAN** (Scan/Verbinden oder Captive-AP, dazu ein optionales **Passwort für den
+Einrichtungs-Hotspot** selbst — standardmäßig offen/ohne Passwort), **MQTT** mit optionalem **MQTTS/TLS**,
 CA-Feld und *Discovery senden*, ein **Web-Zugang-Login** zum Sperren des Dashboards, **Zeitzone** und der
-**Firmware**-Block — *nach Updates suchen* / GitHub-Release ziehen / manuell eine `.bin` flashen, dazu ein
-**Werksreset**.
+**Firmware**-Block — *nach Updates suchen* / GitHub-Release ziehen / manuell eine `.bin` flashen / ein
+**automatischer Update-Zeitplan** (standardmäßig aus — Stunden oder Tage, zieht aus diesem Repo oder einem
+eigenen Fork), dazu ein **Werksreset**.
 
-### Debug — Roh-Flash-Tool & Voll-Backup
+### Debug — Roh-Flash-Tool, Speicherkarte & Voll-Backup
 ![Flash-Debug-Hex-Tool](images/Overview_debug.png)
 
 Ein Flash-Inspektor für Power-User: Roh-Flash als Hex ansehen, **eFuses** lesen und — am wichtigsten —
 **Dump full flash**, um ein vollständiges Backup des Geräts zu ziehen (Bootloader + Partitionstabelle +
 beide OTA-App-Slots + NVS). Da die Partitionstabelle Dual-OTA ist, liegt deine **originale Stock-Firmware
 nach dem Umflashen weiter unangetastet im anderen Slot** — so holst du ein volles Stock-Backup direkt vom
+Gerät. Unter dem Hex-Editor zeigt eine **Speicherkarte** den ganzen Chip als Defragmentierungs-artige
+Übersicht — welche OTA-Bank aktiv ist, wie viel davon Firmware bzw. History-Daten sind, und wie voll jeder
+History-Bereich gerade ist (siehe [Energie-Historie & Speicher](#energie-historie--speicher) unten).
 Gerät.
 
 ---
@@ -408,6 +458,8 @@ Bind + ECDH). Alles wurde aus Firmware `1.2.1` reversed; Details in
 | 8 | **Persistenz** | Reader-UUIDs + MQTT-Einstellungen im NVS gespeichert, überstehen Neustarts |
 | 9 | **Board-generisch** | beliebiger ESP32 / ESP32-S3 + SX1262 via `board_config.h`; nicht an ein Hersteller-Board gebunden |
 | 10 | **On-Board-E-Ink** | Heltec Vision Master E290 2,9″-Display zeigt Live-Status von Gateway + Readern (über das Board-Flag automatisch; andere Boards unberührt) |
+| 11 | **Auto-Update von GitHub** | zieht das neueste Release nach Zeitplan (Stunden oder Tage) — **standardmäßig aus**, zeigt auf dieses Repo oder einen eigenen Fork |
+| 12 | **Große On-Device-History** | Tageswerte liegen immer in der kleinen 128-KB-Partition; auf dem Stock-C3-Gateway nutzen Rohdaten bis zu **~1,6 MB** sonst ungenutzten OTA-Partitionsspeicher und überstehen trotzdem ein Firmware-Update über eine kleine garantierte Reserve |
 
 ## Hardware & Verdrahtung
 
@@ -493,6 +545,9 @@ Build-→-Flash-→-Verify-Ablauf und die Endpoint-Details stehen in [`PROJECT_N
 ## Web-Dashboard
 
 - **WLAN-Captive-Portal** (WiFiManager) — keine fest verdrahteten Zugangsdaten; jederzeit neu konfigurierbar.
+  Bricht die Verbindung ab, versucht das Gateway im Hintergrund alle 30 s erneut das gespeicherte Netz (zusätzlich
+  zu seinem Einrichtungs-Hotspot) — erholt sich also von selbst, ohne manuellen Neustart. Der Einrichtungs-Hotspot
+  (`OpenOBI-<MAC>`) kann in den Einstellungen optional ein Passwort bekommen — standardmäßig offen/ohne.
 - **Live-Reader-Karten**: 3-Byte-ID, 16-Byte-**UUID**, Gerätetyp, Firmware-/Hardware-Version, RSSI,
   Batterie, Infrarot-(Zähler-Lese-)Status sowie Bezug / Einspeisung / Leistung.
 - **Je Reader**: **Upload-Intervall** setzen, **Firmware flashen** (`.bin`-Auswahl → Over-the-Air-Update) und
@@ -518,6 +573,44 @@ SPI-Bus** (Pins in [`include/board_config.h`](include/board_config.h)) und rühr
 langsame, verschleißende Panel zu schonen, wird nur neu gezeichnet, wenn sich die Werte ändern (flackerfreier
 Partial-Refresh, gelegentlich ein Full-Refresh gegen Ghosting). Andere Boards sind unberührt — der Display-Code
 hängt am Board-Flag `OBI_HAS_EPD`, und GxEPD2 wird nur im Heltec-Env eingebunden.
+
+## Energie-Historie & Speicher <a id="energie-historie--speicher"></a>
+
+Die Energiezähler jedes Readers werden **direkt auf dem Gerät** protokolliert — keine Cloud, keine SD-Karte.
+Die `/history`-Seite zeigt kumulierten Bezug/Einspeisung, Balkendiagramme für Verbrauch/Einspeisung pro Tag
+(mit Kosten, zu einem einmal für alle Reader gesetzten ct/kWh-Preis) und eine rohe Watt-Tabelle mit sowohl
+dem Leistungswert des Zählers selbst als auch einem rein aus den Import/Export-Zählerstand-Deltas berechneten
+— nützlich, wenn der eigene Watt-Wert eines Zählers fehlt oder falsch ist (z. B. eine fehlerhafte 24-Bit-
+Vorzeichenerweiterung bei negativer Leistung, die manche DWSB20-2TH-Einheiten betrifft).
+
+- **Tageswerte** (eine Zeile pro Kalendertag, ~240 Tage aufgehoben) liegen immer in der kleinen 128-KB-
+  „userdata"-Datenpartition, die jedes Board mitbringt — der eine Speicherort, der nie in der Größe verändert
+  oder neu formatiert wird, sodass Langzeit-Summen nie in Gefahr sind.
+- **Rohdaten** (jede geloggte Messung) nutzen auf den meisten Boards dieselbe 128-KB-Partition, aber auf dem
+  **Stock-OBI-C3-Gateway** (Env `obi_gateway_c3`) stattdessen den freien Speicher der jeweils nicht gebooteten
+  OTA-App-Partition — bis zu **~1,6 MB**, ein Vielfaches der alten Kapazität, ganz ohne zusätzliche Hardware.
+  Das genaue Partitions-Layout mit Byte-Offsets steht in [`PROJECT_NOTES.md`](PROJECT_NOTES.md).
+- Jederzeit als **CSV** exportierbar — Rohdaten oder Tageswerte — über die ⬇-Buttons auf `/history`.
+- Ein Reader, der außer Reichweite geraten ist (oder entfernt wurde), bleibt trotzdem erreich- und löschbar:
+  die Reader-Auswahl listet auch „offline"-IDs, die nur noch in der gespeicherten Historie existieren, nicht
+  mehr in der Live-Funkliste.
+- `/debug` hat unter dem Hex-Editor eine **Speicherkarte** — eine Defragmentierungs-artige Übersicht des
+  ganzen Chips: welche OTA-Bank aktiv ist, wie viel davon Firmware bzw. History-Daten sind, und wie voll
+  jeder History-Bereich gerade ist.
+
+### Ein Firmware-Update überstehen (nur Stock-C3-Gateway)
+
+Ein OTA-Update überschreibt immer die *inaktive* OTA-Partition mit dem neuen Firmware-Image — inklusive
+was auch immer an Rohdaten diesen freien Platz gerade nutzte. Um nicht bei jedem einzelnen Update alles zu
+verlieren, spiegelt eine kleine **256-KB-Reserve** ganz am Ende dieser Partition nur die neuesten Daten
+(mit einer deutlich kleineren Obergrenze pro Reader als der Hauptspeicher) — platziert weit genug hinter
+jeder realistischen Firmware-Größe, dass der Flash-Schreibvorgang sie nie erreicht. Sie übersteht das
+Update also unangetastet, automatisch, ohne jede Sonderbehandlung während des Flashens selbst. Beim
+nächsten Boot wird diese Reserve aus der jetzt *aktiven* Partition zurückgelesen (nur lesend) und in die
+neue inaktive Partition kopiert, die daraus dann den großen Hauptspeicher neu befüllt — die Historie läuft
+also genau dort weiter, wo sie aufgehört hat. Netto-Effekt: fast der gesamte freie OTA-Speicher geht in die
+Alltagskapazität, und nur die neueste Scheibe davon ist *garantiert*, ein Update zu überstehen — nicht null,
+aber auch nicht alles.
 
 ## Upload-Intervall setzen
 

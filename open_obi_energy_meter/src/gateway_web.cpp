@@ -11,12 +11,16 @@
 #include <HTTPClient.h>           // pull the latest release .bin from GitHub (settings -> firmware)
 #include <WiFiClientSecure.h>     // HTTPS to api.github.com / release asset host
 #include <esp_partition.h>        // partition list for the /debug hex editor
+#include <esp_ota_ops.h>           // running/inactive OTA partition -- /debug flash map
+#include <esp_image_format.h>      // esp_image_get_metadata() -- real firmware byte size for the flash map
 #include <esp_mac.h>              // base MAC for the per-device setup-AP name
 #include <esp_random.h>           // esp_random() for login session tokens
 #include <soc/soc_caps.h>         // SOC_TEMP_SENSOR_SUPPORTED (internal temperature sensor)
 #include <PubSubClient.h>         // knolleary/PubSubClient
 #include <Preferences.h>
-#include <LittleFS.h>             // per-reader energy history log (128 KB "spiffs" partition)
+#include <LittleFS.h>             // per-reader energy history log -- fallback 128 KB "userdata" partition
+#include "ota_hist.h"              // ...or, on obi_gateway_c3, the far larger unused OTA-partition tail
+#include <dirent.h>                // opendir/readdir -- history file listing works against either store
 #include <time.h>                 // NTP wall-clock -> per-day kWh buckets
 #include <sys/time.h>             // settimeofday() — clampTimeSanity() self-heals a corrupted RTC clock
 #include "board_config.h"         // OBI_HAS_EPD + e-paper pins (Heltec Vision Master E290)
@@ -116,6 +120,13 @@ static char     g_apPass[64] = "";
 static bool     g_ghAuto      = false;
 static char     g_ghRepo[80]  = "";     // blank = GH_DEFAULT_REPO
 static uint32_t g_ghIntervalH = 24;     // hours between auto-checks (UI offers hours or days, stored as hours)
+
+// History storage state (see ota_hist.h + the "energy history" section below for the rest) -- declared
+// this early only because statusJson() needs them and is defined well above that section.
+static bool g_fsOk       = false;   // a history store (either backend) is mounted and usable
+static bool g_usingOtaHist = false; // true: raw samples use the OTA-tail store; false: 128 KB "userdata" only
+static void historySpace(size_t &total, size_t &used);   // fwd: raw-sample store; defined in "energy history"
+static void dailySpace(size_t &total, size_t &used);      // fwd: daily-summary store (always userdata)
 
 // Point PubSubClient at the plain or TLS socket per g_mqttTls, then (re)set the broker address.
 // With a CA cert we verify the broker; without one we only encrypt (setInsecure) — fine for a self-signed
@@ -260,6 +271,12 @@ static String statusJson() {
   j += ",\"ap\":{\"ssid\":" + jstr(apSsid()) + ",\"pass_set\":" + String(g_apPass[0] ? "true" : "false") + "}";
   j += ",\"gh_auto\":{\"enabled\":" + String(g_ghAuto ? "true" : "false") + ",\"repo\":" + jstr(g_ghRepo) +
        ",\"interval_h\":" + String(g_ghIntervalH) + "}";
+  { size_t ht = 0, hu = 0; historySpace(ht, hu);
+    size_t dt = 0, du = 0; dailySpace(dt, du);
+    j += ",\"hist_fs\":{\"ok\":" + String(g_fsOk ? "true" : "false") +
+         ",\"backend\":" + jstr(g_usingOtaHist ? "ota" : "userdata") +
+         ",\"total\":" + String((uint32_t)ht) + ",\"used\":" + String((uint32_t)hu) +
+         ",\"daily_total\":" + String((uint32_t)dt) + ",\"daily_used\":" + String((uint32_t)du) + "}"; }
   j += ",\"freq_mhz\":869.5,\"bw_khz\":500,\"sf\":7";
   j += ",\"mqtt\":{\"host\":" + jstr(g_mqttHost) + ",\"port\":" + String(g_mqttPort);
   j += ",\"user\":" + jstr(g_mqttUser) + ",\"topic\":" + jstr(g_mqttTopic);
@@ -467,7 +484,7 @@ const T={
   none:'Noch keine Reader',waiting:'Warte auf einen Reader — Reader-Taste ~10 s halten (echtes Gateway aus).',
   uuidwait:'UUID noch unbekannt — Reader per Taste neu verbinden',
   irhint:'Noch keine Messwerte — Reader-Taste einmal kurz drücken, um die Infrarot-Lesung zu starten.',
-  uptime:'Laufzeit',heapfree:'Speicher frei',
+  uptime:'Laufzeit',heapfree:'Speicher frei',histfs:'Rohdaten',dailyfs:'Tageswerte',
   heapwarn:'⚠ Firmware (%s) ist größer als der aktuell freie zusammenhängende Speicherblock (%s) — der Flash-Vorgang wird vermutlich fehlschlagen.\n\nDeaktiviere kurz MQTT (weiter unten), das gibt genug Speicher frei — danach erneut versuchen.',
   mqcfg:'MQTT-Einstellungen',host:'Server',port:'Port',user:'Benutzer',pass:'Passwort',
   topic:'Basis-Topic',save:'Speichern',disc:'Discovery senden',discok:'Discovery gesendet ✓',discno:'MQTT nicht verbunden',con:'verbunden',dis:'getrennt',lastpub:'zuletzt gesendet',
@@ -494,7 +511,7 @@ const T={
   none:'No readers yet',waiting:'Waiting for a reader — hold its button ~10 s (real gateway off).',
   uuidwait:'UUID unknown yet — reconnect the reader with its button',
   irhint:'No readings yet — tap the reader button once to start its infrared readout.',
-  uptime:'uptime',heapfree:'free heap',
+  uptime:'uptime',heapfree:'free heap',histfs:'raw data',dailyfs:'daily values',
   heapwarn:'⚠ Firmware (%s) is larger than the currently free contiguous memory block (%s) — flashing will likely fail.\n\nTemporarily disable MQTT (further down), that frees up enough memory — then try again.',
   mqcfg:'MQTT settings',host:'Server',port:'Port',user:'User',pass:'Password',
   topic:'Base topic',save:'Save',disc:'Send discovery',discok:'Discovery sent ✓',discno:'MQTT not connected',con:'connected',dis:'disconnected',lastpub:'last publish',
@@ -547,7 +564,9 @@ async function tick(){try{
  $('#logout_btn').style.display=(st.auth&&st.auth.enabled)?'':'none';   // only show logout when a login is required
  $('#sub').textContent='OBI Gateway '+(st.gw||st.gwid).toUpperCase();
  $('#gw').textContent=st.gwid_ascii+' · '+(st.mac||st.gwid);
- $('#ft').textContent=L.uptime+' '+fmt(st.uptime_s)+' · '+L.heapfree+' '+fmtKB(st.max_alloc_heap)+(st.fw?' · fw '+st.fw.version+' ('+st.fw.target+')':'');
+ const hf=st.hist_fs;
+ const fsTxt=hf&&hf.ok?' · '+L.histfs+' '+fmtKB(hf.total-hf.used)+'/'+fmtKB(hf.total)+' · '+L.dailyfs+' '+fmtKB(hf.daily_total-hf.daily_used)+'/'+fmtKB(hf.daily_total):'';
+ $('#ft').textContent=L.uptime+' '+fmt(st.uptime_s)+' · '+L.heapfree+' '+fmtKB(st.max_alloc_heap)+(st.fw?' · fw '+st.fw.version+' ('+st.fw.target+')':'')+fsTxt;
  const q=st.mqtt;
  const mqp=!q.enabled?`<span class="dot idle"></span>${L.disabled}`
   :q.connected?`<span class="dot on"></span>${q.host} · ${q.pub_count} ${L.msgs} · ${q.last_pub_s<0?L.never:L.lastpub+' '+q.last_pub_s+'s '+L.ago}`
@@ -1066,15 +1085,21 @@ static void handleSelfOtaUpload() {
   HTTPUpload &up = server.upload();
   if (up.status == UPLOAD_FILE_START) {
     if (!authValid()) { s_selfOtaOk = false; return; }      // reject the stream; the done-handler guard sends 401
+    // Pause history writes and release the OTA-tail store's VFS handle (if in use) before Update.begin()
+    // overwrites the same partition -- see ota_hist.h (history does not survive the update, by design;
+    // this is just about not racing a live filesystem against the incoming flash write). This is THE
+    // single choke point for self-OTA: browser upload, push.py, and any headless/remote trigger (cloud
+    // path) all post here, so wrapping it here covers every caller in one place.
+    otaHist_prepareForFlash();
     s_selfOtaOk = Update.begin(UPDATE_SIZE_UNKNOWN);        // grow into the whole free OTA partition
-    if (!s_selfOtaOk) Update.printError(Serial);
+    if (!s_selfOtaOk) { Update.printError(Serial); otaHist_abortFlash(); }
     Serial.printf("[selfota] start: %s\n", up.filename.c_str());
   } else if (up.status == UPLOAD_FILE_WRITE) {
     if (s_selfOtaOk && Update.write(up.buf, up.currentSize) != up.currentSize) {
-      Update.printError(Serial); s_selfOtaOk = false;
+      Update.printError(Serial); s_selfOtaOk = false; otaHist_abortFlash();
     }
   } else if (up.status == UPLOAD_FILE_END) {
-    if (s_selfOtaOk && !Update.end(true)) { Update.printError(Serial); s_selfOtaOk = false; }
+    if (s_selfOtaOk && !Update.end(true)) { Update.printError(Serial); s_selfOtaOk = false; otaHist_abortFlash(); }
     else if (s_selfOtaOk) Serial.printf("[selfota] ok, %u bytes — rebooting\n", up.totalSize);
   }
 }
@@ -1240,6 +1265,9 @@ static void ghOtaTask(void *) {
   // (mqttService() also skips while g_ghState==1, so it won't reconnect mid-flash). On success we reboot;
   // on failure MQTT reconnects on its own.
   mqtt.disconnect();
+  // Same pause as the self-update path (see handleSelfOtaUpload) -- this is the OTHER of the two places
+  // that call Update.begin(..., U_FLASH), so it needs the identical treatment.
+  otaHist_prepareForFlash();
   bool ok = false;
   String tag, url;
   if (githubLatest(tag, url) && url.length()) {
@@ -1284,6 +1312,7 @@ static void ghOtaTask(void *) {
   }
   g_ghState = ok ? 2 : 3;
   if (ok) { delay(900); ESP.restart(); }
+  else otaHist_abortFlash();   // failed/rejected -- stay on current firmware, recover history right away
   vTaskDelete(nullptr);
 }
 static void handleGithubUpdate() {
@@ -1606,6 +1635,73 @@ static void handleFlashInfo() {
   j += "]}";
   server.send(200, "application/json", j);
 }
+
+// Real on-flash size of the app image in a partition (magic byte + segment headers), NOT the partition's
+// own (much larger) capacity -- this is what actually distinguishes "firmware" from "free/reserved" space
+// in the /debug flash-map view. 0 if the partition holds no valid image (e.g. a never-yet-flashed slot).
+static uint32_t appImageSize(const esp_partition_t *p) {
+  if (!p) return 0;
+  esp_partition_pos_t pos = { p->address, p->size };
+  esp_image_metadata_t meta = {};
+  if (esp_image_get_metadata(&pos, &meta) != ESP_OK) return 0;
+  return meta.image_len;
+}
+
+// /api/flash/map — full picture of the physical flash chip for the /debug "Speicherkarte" (flash map)
+// page: every partition, which OTA slot is running vs. next-to-be-overwritten, how many of an app
+// partition's bytes are the actual firmware image vs. free, and -- the point of the whole page -- where
+// the history filesystem's reserved OTA-tail region sits and how full it is (see ota_hist.h).
+static void handleFlashMapJson() {
+  const esp_partition_t *running  = esp_ota_get_running_partition();
+  const esp_partition_t *inactive = esp_ota_get_next_update_partition(NULL);
+  uint32_t histAddr = 0, histSize = 0;
+#ifdef OBI_OTA_HIST_SUPPORTED
+  otaHist_regionInfo(histAddr, histSize);
+#endif
+  size_t histTotal = 0, histUsed = 0; historySpace(histTotal, histUsed);
+  size_t dailyTotal = 0, dailyUsed = 0; dailySpace(dailyTotal, dailyUsed);
+
+  String j = "{\"chip_size\":" + String(flash_dbg_size()) +
+             ",\"hist_backend\":" + jstr(g_fsOk ? (g_usingOtaHist ? "ota" : "userdata") : "none") + ",\"parts\":[";
+  esp_partition_iterator_t it = esp_partition_find(ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, nullptr);
+  bool first = true;
+  for (; it; it = esp_partition_next(it)) {
+    const esp_partition_t *p = esp_partition_get(it);
+    j += (first ? "" : ",");
+    first = false;
+    j += "{\"label\":" + jstr(p->label) + ",\"type\":" + String(p->type) + ",\"sub\":" + String(p->subtype) +
+         ",\"addr\":" + String(p->address) + ",\"size\":" + String(p->size);
+    if (p->type == ESP_PARTITION_TYPE_APP) {
+      bool isRunning  = running  && p->address == running->address;
+      bool isInactive = inactive && p->address == inactive->address;
+      j += ",\"role\":" + jstr(isRunning ? "active" : (isInactive ? "inactive" : "other"));
+      uint32_t fwUsed = appImageSize(p);
+      j += ",\"fw_used\":" + String(fwUsed);
+#ifdef OBI_OTA_HIST_SUPPORTED
+      // Two regions on THIS partition (see ota_hist.h): bulk spans nearly the whole thing (wiped by any
+      // OTA into this partition -- firmware occupies exactly that space, no way around it); tail is a
+      // small FIXED reserve at the very end that survives updates. Computed the same way for whichever
+      // partition isn't currently mounted too, purely from its own size, so the map can still show it.
+      uint32_t tailAddr = p->address + p->size - OTA_HIST_TAIL_RESERVE;
+      uint32_t bulkAddr = p->address;
+      uint32_t bulkSize = p->size - OTA_HIST_TAIL_RESERVE;
+      bool bulkMountedHere = g_usingOtaHist && histSize && bulkAddr == histAddr;
+      j += ",\"bulk\":{\"addr\":" + String(bulkAddr) + ",\"size\":" + String(bulkSize) +
+           ",\"mounted\":" + String(bulkMountedHere ? "true" : "false");
+      if (bulkMountedHere) j += ",\"total\":" + String((uint32_t)histTotal) + ",\"used\":" + String((uint32_t)histUsed);
+      j += "},\"tail\":{\"addr\":" + String(tailAddr) + ",\"size\":" + String((uint32_t)OTA_HIST_TAIL_RESERVE) +
+           ",\"mounted\":" + String(bulkMountedHere ? "true" : "false") + "}";
+#endif
+    } else if (String(p->label) == "userdata" && g_fsOk) {
+      j += ",\"used\":" + String((uint32_t)dailyUsed) + ",\"total\":" + String((uint32_t)dailyTotal);
+    }
+    j += "}";
+  }
+  esp_partition_iterator_release(it);
+  j += "]}";
+  server.send(200, "application/json", j);
+}
+
 static void handleFlashRead() {
   uint32_t addr = strtoul(server.arg("addr").c_str(), nullptr, 0);
   uint32_t len  = strtoul(server.arg("len").c_str(), nullptr, 0);
@@ -1743,7 +1839,7 @@ static void handleRadioPage() { server.send_P(200, "text/html", RADIO_HTML); }
 // served via send_P() — see the comment on UPDATE_HTML for why (avoids a heap String copy of the whole page).
 static const char DEBUG_HTML[] PROGMEM = R"HTML(<!doctype html><html><head><meta charset=utf-8><link rel=icon href=/favicon.svg>
 <meta name=viewport content='width=device-width,initial-scale=1'><title>Open OBI Energy Tracker — Flash Debug</title><style>
-:root{--bg:#0a0e14;--panel:#141a23;--panel2:#1b2430;--line:#232e3c;--txt:#eaf0f7;--dim:#7d8da0;--accent:#31d07a;--amber:#e3b341;--red:#f0616d;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+:root{--bg:#0a0e14;--panel:#141a23;--panel2:#1b2430;--line:#232e3c;--txt:#eaf0f7;--dim:#7d8da0;--accent:#31d07a;--amber:#e3b341;--red:#f0616d;--blue:#5aa9ff;--purple:#b48cff;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 *{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:0;background:var(--bg);color:var(--txt)}
 header{display:flex;align-items:center;gap:12px;padding:11px 16px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
 header b{font-size:15px}header a{color:var(--accent);text-decoration:none;font-size:13px}.sp{flex:1}
@@ -1769,6 +1865,28 @@ table.hex td{padding:0 2px;text-align:center}td.off{color:var(--accent);padding:
 #efuse.show{display:block}#efuse table{border-collapse:collapse}#efuse td{padding:2px 14px 2px 0}
 .ok{color:var(--accent)}.bad{color:var(--red);font-weight:700}
 #msg{color:#9fd;font-size:12px;margin-left:4px}
+.seg{display:flex;background:var(--panel2);border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.seg button{background:transparent;border:0;border-radius:0;color:var(--dim);padding:6px 10px;cursor:pointer;font-size:12px;font-weight:600}
+.seg button.act{background:var(--accent);color:#04140a}
+.mapwrap{padding:16px 18px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+.card h2{margin:0 0 3px;font-size:15px}.cap{color:var(--dim);font-size:12px;margin:0 0 12px}
+.mgrid{display:grid;grid-template-columns:repeat(64,1fr);gap:2px;margin-bottom:8px}
+.blk{height:11px;border-radius:1px;border:1px solid #0006;cursor:crosshair}
+.mapinfo{font-family:var(--mono);font-size:12.5px;color:var(--dim);background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 11px;margin-bottom:10px;min-height:17px}
+.mapinfo b{color:var(--txt)}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12.5px;color:var(--dim);margin-top:10px}
+.legend i{display:inline-block;width:13px;height:13px;border-radius:3px;margin-right:6px;vertical-align:-2px;border:1px solid #0006}
+.ptable{width:100%;border-collapse:collapse;font-size:13px;margin-top:4px}
+.ptable th,.ptable td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+.ptable th{color:var(--dim);font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.03em}
+.tag{display:inline-block;font-size:10.5px;padding:1px 6px;border-radius:5px;background:var(--panel2);color:var(--dim);margin-left:6px}
+.tag.on{background:#12351f;color:var(--accent)}
+.fwused{background:var(--accent)}.histused{background:var(--amber)}
+.histfree{background:#2a3f2a}.histidle{background:var(--purple);opacity:.45}.sys{background:#39465a}.gap{background:#050709}
+.tailused{background:#ff6fae}
+.sysnvs{background:var(--blue)}.sysota{background:#3ddbd9}.sysphy{background:#e08a4f}.syscore{background:var(--red)}
+.empty{color:var(--dim);padding:20px;text-align:center}
 @media (max-width:760px){
  header,.bar{position:static}                    /* both scroll away → full height for the hex view */
  header{flex-wrap:wrap;gap:8px;padding:11px 13px}.sp{display:none}
@@ -1780,10 +1898,12 @@ table.hex td{padding:0 2px;text-align:center}td.off{color:var(--accent);padding:
  .hexwrap{max-height:none}                        /* page scrolls vertically; hex table scrolls sideways in its box */
  #insp{position:static}
  .warn{font-size:11.5px;padding:8px 12px}
+ .mgrid{grid-template-columns:repeat(24,1fr)}
 }
 </style></head><body>
 <header><b>Open OBI Energy Tracker · 🐞 Flash Debug</b><span class=lbl id=chip></span><span class=sp></span>
-<a href="/update">firmware ⬆</a><a href="/">← dashboard</a></header>
+<span class=seg><button id=lde onclick="setL('de')">DE</button><button id=len onclick="setL('en')">EN</button></span>
+<a href="/update" id=lfw>firmware ⬆</a><a href="/" id=ldash>← dashboard</a></header>
 <div class=bar>
 <span class=lbl>addr</span><input id=addr value=0x0><button onclick=go()>Go</button>
 <button onclick=page(-1)>◀</button><button onclick=page(1)>▶</button>
@@ -1797,6 +1917,7 @@ table.hex td{padding:0 2px;text-align:center}td.off{color:var(--accent);padding:
 <div id=efuse></div>
 <div class=hexwrap><table class=hex><thead><tr id=head></tr></thead><tbody id=body></tbody></table></div>
 <div id=insp><span>click a byte</span></div>
+<div class=mapwrap id=mapmain><div class=empty>…</div></div>
 <script>
 const $=i=>document.getElementById(i);
 const h2=n=>n.toString(16).toUpperCase().padStart(2,'0'),h8=n=>('00000000'+n.toString(16).toUpperCase()).slice(-8);
@@ -1871,13 +1992,123 @@ for(let i=0;i<rows.length;i+=2)html+='<tr>'+rows[i]+(rows[i+1]||'')+'</tr>';
 e.innerHTML=html+'</table>';e.classList.add('show');}
 document.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'&&e.target.id!=='addr')return;
 if(e.key==='PageDown'){page(1);e.preventDefault();}else if(e.key==='PageUp'){page(-1);e.preventDefault();}});
+
+// ---- flash map ("defrag view"), merged into this page below the hex editor -----------------------------
+const MT={
+ de:{loading:'lädt…',loadErr:'Fehler beim Laden.',dash:'← Dashboard',fw:'Firmware ⬆',
+  title:n=>'Speicherkarte ('+n+' Flash gesamt)',
+  cap:n=>'Jeder Block ≈ '+n+'. Grün = Firmware-Bytes, Gelb = History-Daten, gedämpft-lila = History-Bereich der gerade inaktiven OTA-Bank (wird beim nächsten Update dorthin verschoben), die übrigen Farben = einzelne Systempartitionen (siehe Legende) statt einem grauen Block.',
+  legFwUsed:'Firmware (aktiv)',legHistUsed:'History belegt (bulk)',legHistFree:'History frei (bulk)',legHistIdle:'History (inaktive Bank, überschreibbar)',legTail:'Reserve — übersteht Updates',
+  legNvs:'NVS (WLAN/MQTT/Einstellungen)',legOtaData:'OTA-Data (Boot-Auswahl)',legPhy:'PHY-Init (Funk-Kalibrierung)',legCore:'Coredump (Absturz-Speicher)',legSys:'Sonstige Systempartition',
+  parts:'Partitionen',backend:'Rohdaten (Messpunkte) gerade gespeichert in:',beOta:'OTA-Bereich',beUser:'userdata (128 KB)',beNone:'keins',dailyNote:'Tageswerte liegen immer in userdata.',
+  label:'Label',addr:'Adresse',size:'Größe',details:'Details',idle:'(idle)',used:'belegt',
+  roleActive:'aktiv',roleInactive:'inaktiv',roleOther:'andere'},
+ en:{loading:'loading…',loadErr:'Failed to load.',dash:'← dashboard',fw:'firmware ⬆',
+  title:n=>'Flash map ('+n+' flash total)',
+  cap:n=>'Each block ≈ '+n+'. Green = firmware bytes, yellow = history data, dimmed purple = the history region on the currently INACTIVE OTA bank (moves there on the next update), the remaining colors are individual system partitions (see legend) instead of one gray block.',
+  legFwUsed:'Firmware (active)',legHistUsed:'History used (bulk)',legHistFree:'History free (bulk)',legHistIdle:'History (inactive bank, gets overwritten)',legTail:'Reserve — survives updates',
+  legNvs:'NVS (WiFi/MQTT/settings)',legOtaData:'OTA data (boot selector)',legPhy:'PHY init (radio calibration)',legCore:'Coredump (crash storage)',legSys:'Other system partition',
+  parts:'Partitions',backend:'Raw samples currently stored in:',beOta:'OTA region',beUser:'userdata (128 KB)',beNone:'none',dailyNote:'Daily summaries always live in userdata.',
+  label:'Label',addr:'Address',size:'Size',details:'Details',idle:'(idle)',used:'used',
+  roleActive:'active',roleInactive:'inactive',roleOther:'other'}
+};
+let mlang=localStorage.getItem('lang')||'de';
+function setL(x){localStorage.setItem('lang',x);location.reload();}
+function applyMapLang(){
+ $('lde').className=mlang==='de'?'act':'';$('len').className=mlang==='en'?'act':'';
+ $('lfw').textContent=MT[mlang].fw;$('ldash').textContent=MT[mlang].dash;
+}
+const mhex=n=>'0x'+n.toString(16).toUpperCase();
+const mkb=n=>(n/1024).toFixed(n<10240?1:0)+' KB';
+function mclassify(off,parts){
+ for(const p of parts){
+  if(off<p.addr||off>=p.addr+p.size)continue;
+  if(p.type===0){
+   if(p.bulk&&p.bulk.mounted){
+    // bulk is mounted starting at THIS partition's own address 0 -- there's no real firmware byte left
+    // here to show (mounting already overwrote/reformatted it), only raw-sample data.
+    if(p.tail&&off>=p.tail.addr)return{c:'tailused',p};
+    return off<p.bulk.addr+(p.bulk.used||0)?{c:'histused',p}:{c:'histfree',p};
+   }
+   // not mounted here (this is the ACTIVE partition, actually executing code -- or a genuinely idle one):
+   // show its real firmware, then whatever stale bulk/tail data is still physically sitting past it from
+   // an earlier stint as the inactive partition (superseded, gets overwritten on the next OTA into it).
+   const fwEnd=p.addr+(p.fw_used||0);
+   return off<fwEnd?{c:'fwused',p}:{c:'histidle',p};
+  }
+  if(p.label==='userdata'&&p.total){
+   return off<p.addr+(p.used||0)?{c:'histused',p}:{c:'histfree',p};
+  }
+  const sysCls={nvs:'sysnvs',otadata:'sysota',phy_init:'sysphy',coredump:'syscore'}[p.label];
+  return{c:sysCls||'sys',p};
+ }
+ return{c:'gap',p:null};
+}
+function mroleLabel(r){const t=MT[mlang];return r==='active'?t.roleActive:r==='inactive'?t.roleInactive:t.roleOther;}
+function mpartLine(p){
+ const t=MT[mlang];let extra='';
+ if(p.type===0){
+  const fwPct=(p.fw_used/p.size*100).toFixed(0);
+  extra=`<span class=tag${p.role==='active'?' on':''}>${mroleLabel(p.role)}</span><span class=tag>fw ${mkb(p.fw_used)} (${fwPct}%)</span>`;
+  if(p.bulk){const b=p.bulk;
+   extra+=`<span class=tag${b.mounted?' on':''}>raw bulk ${mkb(b.size)}${b.mounted?': '+mkb(b.used)+'/'+mkb(b.total)+' '+t.used:' '+t.idle}</span>`;}
+  if(p.tail){const tl=p.tail;
+   extra+=`<span class=tag${tl.mounted?' on':''}>raw tail ${mkb(tl.size)}${tl.mounted?' '+t.used:' '+t.idle}</span>`;}
+ } else if(p.label==='userdata'&&p.total){
+  extra=`<span class=tag on>daily: ${mkb(p.used)}/${mkb(p.total)} ${t.used}</span>`;
+ }
+ return `<tr><td>${p.label}</td><td class=mono>${mhex(p.addr)}</td><td class=mono>${mkb(p.size)}</td><td>${extra}</td></tr>`;
+}
+function mcatLabel(c,t){return{fwused:t.legFwUsed,histused:t.legHistUsed,histfree:t.legHistFree,histidle:t.legHistIdle,tailused:t.legTail,
+ sysnvs:t.legNvs,sysota:t.legOtaData,sysphy:t.legPhy,syscore:t.legCore,sys:t.legSys,gap:'—'}[c]||c;}
+async function loadMap(){
+ applyMapLang();
+ const t=MT[mlang],main=$('mapmain');
+ main.innerHTML='<div class=empty>'+t.loading+'</div>';
+ let d;try{d=await(await fetch('/api/flash/map')).json();}catch(e){main.innerHTML='<div class=card><div class=empty>'+t.loadErr+'</div></div>';return;}
+ const parts=d.parts;
+ // one continuous block grid across the WHOLE chip, in flash order -- classic "defrag" look. Small, fixed-
+ // size blocks (not stretched to fill a wide container) + a live readout on hover, not just a native
+ // tooltip, so it's actually legible at a glance which block is what.
+ const BLOCKS=1536, step=Math.ceil(d.chip_size/BLOCKS);
+ let grid='';
+ for(let off=0;off<d.chip_size;off+=step){const k=mclassify(off,parts);
+  grid+=`<div class="blk ${k.c}" data-off=${off} data-cat=${k.c} data-lbl="${k.p?k.p.label:''}"></div>`;}
+ let rows=parts.map(mpartLine).join('');
+ const be=d.hist_backend==='ota'?t.beOta:d.hist_backend==='userdata'?t.beUser:t.beNone;
+ main.innerHTML=`
+ <div class=card><h2>${t.title(mkb(d.chip_size))}</h2>
+ <p class=cap>${t.cap(mkb(step))}</p>
+ <div class=mapinfo id=mapinfo>&nbsp;</div>
+ <div class=mgrid id=mgrid>${grid}</div>
+ <div class=legend>
+  <span><i class=fwused></i>${t.legFwUsed}</span>
+  <span><i class=histused></i>${t.legHistUsed}</span>
+  <span><i class=histfree></i>${t.legHistFree}</span>
+  <span><i class=histidle></i>${t.legHistIdle}</span>
+  <span><i class=tailused></i>${t.legTail}</span>
+  <span><i class=sysnvs></i>${t.legNvs}</span>
+  <span><i class=sysota></i>${t.legOtaData}</span>
+  <span><i class=sysphy></i>${t.legPhy}</span>
+  <span><i class=syscore></i>${t.legCore}</span>
+  <span><i class=sys></i>${t.legSys}</span>
+ </div></div>
+ <div class=card><h2>${t.parts}</h2><p class=cap>${t.backend} <b>${be}</b> · ${t.dailyNote}</p>
+ <table class=ptable><thead><tr><th>${t.label}</th><th class=mono>${t.addr}</th><th class=mono>${t.size}</th><th>${t.details}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+ $('mgrid').addEventListener('mouseover',e=>{
+  if(!e.target.classList.contains('blk'))return;
+  const off=+e.target.dataset.off,cat=e.target.dataset.cat,lbl=e.target.dataset.lbl;
+  $('mapinfo').innerHTML=`<b>${mhex(off)}</b> · ${lbl||(mlang==='de'?'nicht zugewiesen':'unallocated')} · ${mcatLabel(cat,t)}`;
+ });
+}
 loadInfo().then(read);
+loadMap();
 </script></body></html>)HTML";
 static void handleDebugPage() { server.send_P(200, "text/html", DEBUG_HTML); }
 
 // ============================ energy history ================================
-// Persistent per-reader logging to LittleFS (the 128 KB "spiffs" partition of min_spiffs):
-//   /s<id>  recent samples  "epoch,importWh,exportWh,powerW\n"  (ring buffer, capped ~8 KB)
+// Persistent per-reader logging to LittleFS, mounted on either store (see bootHistoryFS() below):
+//   /s<id>  recent samples  "epoch,importWh,exportWh,powerW\n"  (ring buffer, capped -- see sampleCapBytes())
 //   /d<id>  daily summary    "dayStartEpoch,importWh,exportWh\n" (one row per LOCAL calendar day)
 // The /history page draws the cumulative kWh lines from the samples and — the headline the user
 // asked for — the per-day consumption from the kWh-COUNTER deltas (day[i].import - day[i-1].import),
@@ -1885,7 +2116,6 @@ static void handleDebugPage() { server.send_P(200, "text/html", DEBUG_HTML); }
 // All file I/O runs on the web task (core 0), never on the LoRa loop.
 #define HIST_SLOTS 64                   // must stay >= MAX_READERS (defined in main.cpp; it's an extern const,
                                         // so it can't size a static array here)
-static bool     g_fsOk = false;
 static float    g_priceCent = 31.0f;    // GLOBAL electricity price in € cent per kWh (one device-wide setting,
                                         // not per reader; user-set, persisted to NVS namespace "obigw" key "pkwh")
 static float    g_exportCent = 0.0f;    // GLOBAL feed-in tariff in € cent per kWh for exported energy; default 0
@@ -1895,60 +2125,118 @@ static uint32_t hLastMs[HIST_SLOTS];    // millis() of last sample append (0 = n
 struct DailyState { uint32_t day = 0, imp = 0, exp = 0; };
 static DailyState hDaily[HIST_SLOTS];   // current day and its latest observed counters
 
-// Mount LittleFS on whatever spare data partition this device actually has. The partition table is fixed
-// at the original serial flash and is NOT changed by OTA, so we can't rely on a "spiffs" label — this
-// build's boards ship a 128 KB "userdata" data partition instead. Try the known labels in order; the first
-// data partition that exists gets LittleFS (formatted on first use). The WiFi/MQTT config lives in the
-// separate "nvs" partition, so formatting this spare partition is safe.
-static bool mountHistoryFS() {
+// Daily summaries ("/d<id>") always live in the 128 KB "userdata" partition, on every board -- they're
+// tiny (a handful of KB per reader even at 240 days) and matter for the long term, so they get the one
+// storage location that's never resized, reformatted, or otherwise at risk from anything below. Raw
+// samples ("/s<id>") go to the large, dynamically-sized OTA-tail store where supported (obi_gateway_c3,
+// see ota_hist.h), falling back to the SAME "userdata" partition (i.e. no change from before this feature
+// existed) on every other board, or if the OTA-tail mount fails for any reason.
+// All history file I/O below goes through plain POSIX stdio (fopen/fread/...) rather than the Arduino
+// LittleFS::File API, specifically so the SAME code works against either mount transparently -- the
+// OTA-tail store is registered with the raw esp_vfs_littlefs_register() API (see ota_hist.cpp), which
+// the Arduino LittleFS wrapper class has no way to target (it only ever mounts by partition label).
+static String g_dailyBase = "/littlefs";
+static String g_rawBase   = "/littlefs";
+
+// Mount the 128 KB fallback store (also the permanent home for daily summaries). The partition table is
+// fixed at the original serial flash and is NOT changed by OTA, so we can't rely on a "spiffs" label —
+// this build's boards ship a "userdata" data partition instead. Try the known labels in order; the first
+// that exists gets LittleFS (formatted on first use). The WiFi/MQTT config lives in the separate "nvs"
+// partition, so formatting this is safe.
+static bool mountFallbackFS() {
   static const char *labels[] = {"userdata", "spiffs", "storage", "littlefs", "ffat"};
   for (const char *l : labels) {
     if (esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, l) &&
         LittleFS.begin(true, "/littlefs", 5, l)) {
-      Serial.printf("[web] history: LittleFS on partition '%s'\n", l);
+      Serial.printf("[web] history: LittleFS fallback on partition '%s' (128 KB)\n", l);
       return true;
     }
   }
   return false;
 }
 
-static String fpS(const String &id) { return "/s" + id; }
-static String fpD(const String &id) { return "/d" + id; }
+static bool bootHistoryFS() {
+  bool dailyOk = mountFallbackFS();       // userdata -- ALWAYS the daily-summary home, and raw's fallback too
+  g_dailyBase = "/littlefs";
+  if (dailyOk && otaHist_mount()) {
+    g_rawBase = OTA_HIST_BASE; g_usingOtaHist = true;   // raw samples get the big, growable OTA-tail store
+    Serial.println("[web] history: raw samples on the OTA-tail store, daily summaries in userdata");
+  } else {
+    g_rawBase = "/littlefs"; g_usingOtaHist = false;    // everyone else: raw shares the 128 KB partition too
+  }
+  return dailyOk;
+}
+
+// Free/used space for the raw-sample store (the interesting, potentially large one) -- surfaced on the
+// dashboard, /history, and (alongside dailySpace()) the /debug flash-map page.
+static void historySpace(size_t &total, size_t &used) {
+  total = used = 0;
+  if (!g_fsOk) return;
+  if (g_usingOtaHist) otaHist_space(total, used);
+  else { total = LittleFS.totalBytes(); used = LittleFS.usedBytes(); }
+}
+// Free/used space for the daily-summary store (always userdata).
+static void dailySpace(size_t &total, size_t &used) {
+  total = used = 0;
+  if (!g_fsOk) return;
+  total = LittleFS.totalBytes(); used = LittleFS.usedBytes();
+}
+
+static String fpS(const String &id) { return g_rawBase + "/s" + id; }
+static String fpD(const String &id) { return g_dailyBase + "/d" + id; }
 
 static String fsRead(const String &path) {
-  File f = LittleFS.open(path, "r");
+  FILE *f = fopen(path.c_str(), "rb");
   if (!f) return String();
-  String s = f.readString();
-  f.close();
+  String s; char buf[512]; size_t n;
+  while ((n = fread(buf, 1, sizeof buf, f)) > 0) s.concat(buf, n);
+  fclose(f);
   return s;
 }
 static bool fsWrite(const String &path, const String &data) {
-  File f = LittleFS.open(path, "w");
+  FILE *f = fopen(path.c_str(), "wb");
   if (!f) return false;
-  f.print(data);
-  f.close();
-  return true;
+  size_t n = data.length();
+  bool ok = (n == 0) || (fwrite(data.c_str(), 1, n, f) == n);
+  fclose(f);
+  return ok;
 }
 
-// Append one sample line, then keep the file bounded (drop the oldest lines past ~8 KB).
-static void appendSample(const String &id, uint32_t ep, uint32_t imp, uint32_t exp, uint32_t pw) {
-  String path = fpS(id);
-  File f = LittleFS.open(path, "a");
+// Per-reader raw-sample file cap before compaction -- 5x larger on the OTA-tail store (many times the
+// space of the 128 KB fallback, so it can actually hold "much longer" history rather than the same ~8 KB
+// per reader sitting in a bigger-but-otherwise-unused partition).
+static size_t sampleCapBytes()  { return g_usingOtaHist ? 40000 : 8000; }
+static size_t sampleTrimBytes() { return g_usingOtaHist ? 25000 : 5000; }
+
+// Append one line to `path`, then keep it bounded to capBytes (trim to trimBytes, snapped to a line
+// boundary).
+static void appendLineCapped(const String &path, const char *line, size_t capBytes, size_t trimBytes) {
+  FILE *f = fopen(path.c_str(), "a");
   if (!f) return;
+  fputs(line, f);
+  long sz = ftell(f);
+  fclose(f);
+  if (sz > (long)capBytes) {
+    String all = fsRead(path);
+    int cut = (int)all.length() - (int)trimBytes;
+    int nl  = all.indexOf('\n', cut > 0 ? cut : 0);
+    if (nl >= 0) fsWrite(path, all.substring(nl + 1));
+  }
+}
+
+// Append one sample line, then keep the file bounded (drop the oldest lines past the cap). No separate
+// tail-mirror write here: on obi_gateway_c3, ota_hist.cpp's otaHist_prepareForFlash() instead takes a
+// single fresh snapshot of the whole bulk store into the small OTA-survival reserve right before a flash
+// starts -- fitting as much of the CURRENT data as possible (fair-shared across however many readers there
+// are), rather than keeping a small fixed-size mirror continuously in sync on every single sample (wastes
+// the reserve with few readers, and writes flash twice as often for no benefit between updates).
+static void appendSample(const String &id, uint32_t ep, uint32_t imp, uint32_t exp, uint32_t pw) {
   char line[80];
   if (obi_na(pw)) snprintf(line, sizeof line, "%lu,%lu,%lu,\n",
                            (unsigned long)ep, (unsigned long)imp, (unsigned long)exp);
   else            snprintf(line, sizeof line, "%lu,%lu,%lu,%ld\n",   // power is signed (negative on feed-in)
                            (unsigned long)ep, (unsigned long)imp, (unsigned long)exp, (long)(int32_t)pw);
-  f.print(line);
-  size_t sz = f.size();
-  f.close();
-  if (sz > 8000) {                       // compact: keep only the newest ~5 KB (whole lines)
-    String all = fsRead(path);
-    int cut = (int)all.length() - 5000;
-    int nl  = all.indexOf('\n', cut > 0 ? cut : 0);
-    if (nl >= 0) fsWrite(path, all.substring(nl + 1));
-  }
+  appendLineCapped(fpS(id), line, sampleCapBytes(), sampleTrimBytes());
 }
 
 // Return daily CSV with one row upserted. The same helper persists completed days and adds today's
@@ -2025,7 +2313,8 @@ static void beginDay(int slot, const String &id, uint32_t dayStart) {
 
 // Poll readers and log a sample when the counter moves or every 5 min (heartbeat). Throttled internally.
 static void historyService() {
-  if (!g_fsOk || !timeValid()) return;
+  if (!g_fsOk || !timeValid() || otaHist_writesPaused()) return;   // paused around a firmware flash --
+                                                                     // see otaHist_prepareForFlash()
   static uint32_t lastPoll = 0;
   uint32_t now = millis();
   if (now - lastPoll < 1000) return;
@@ -2099,17 +2388,18 @@ static void handleHistoryReaders() {
   bool first = true;
   if (g_fsOk) {
     String seen[HIST_SLOTS]; int nSeen = 0;
-    File root = LittleFS.open("/");
-    File f = root.openNextFile();
-    while (f) {
-      String name = f.name();
-      bool isDir = f.isDirectory();
-      f.close();
-      if (!isDir && name.length()) {
-        int slash = name.lastIndexOf('/');
-        String base = slash >= 0 ? name.substring(slash + 1) : name;   // tolerate a leading '/' or not
-        if (base.length() == 7 && (base[0] == 's' || base[0] == 'd')) {
-          String id = base.substring(1);
+    // Scan both stores -- daily and raw usually live in different places now (userdata vs. the OTA-tail
+    // store), but fall back to the SAME directory on non-C3 boards; skip the second scan then.
+    String bases[2] = { g_dailyBase, g_rawBase };
+    int nBases = (g_dailyBase == g_rawBase) ? 1 : 2;
+    for (int b = 0; b < nBases; b++) {
+      DIR *dir = opendir(bases[b].c_str());
+      if (!dir) continue;
+      struct dirent *de;
+      while ((de = readdir(dir)) != nullptr) {
+        String name = de->d_name;   // bare filename, no mountpoint/path prefix
+        if (name.length() == 7 && (name[0] == 's' || name[0] == 'd')) {
+          String id = name.substring(1);
           bool okid = true;
           for (size_t k = 0; k < 6; k++) {
             char c = id[k];
@@ -2124,7 +2414,7 @@ static void handleHistoryReaders() {
           }
         }
       }
-      f = root.openNextFile();
+      closedir(dir);
     }
   }
   j += "]";
@@ -2228,8 +2518,9 @@ static void handleHistoryClear() {
   String id = server.arg("id");
   if (id.length() == 6 && g_fsOk) {
     id.toLowerCase();
-    LittleFS.remove(fpS(id));
-    LittleFS.remove(fpD(id));
+    remove(fpS(id).c_str());
+    remove(fpD(id).c_str());
+    if (g_usingOtaHist) remove((String(OTA_HIST_TAIL_BASE) + "/s" + id).c_str());
     for (int i = 0; i < MAX_READERS; i++)
       if (readers[i].used && hex(readers[i].handle, 3) == id) {
         hLastMs[i] = 0; hImp[i] = 0;
@@ -2327,6 +2618,7 @@ td.mono{font-family:var(--mono)}
 <span class=sp></span>
 <span id=pbox class=pricebox>💶<input id=price type=number step=0.01 min=0><small>ct/kWh</small><span id=psaved></span></span>
 <span id=ebox class=pricebox>☀️<input id=eprice type=number step=0.01 min=0><small>ct/kWh</small><span id=esaved></span></span>
+<span id=fsstat class=dllabel></span>
 <a href="/">← dashboard</a>
 </header>
 <div class=wrap id=main><div class=empty>lädt…</div></div>
@@ -2337,7 +2629,7 @@ let readers=[],cur=null;
 const C={imp:'#31d07a',exp:'#5aa9ff',day:'#e3b341',pow:'#f0616d',calc:'#3ddbd9'};
 let lang=localStorage.getItem('obilang');if(lang!=='en'&&lang!=='de')lang=(navigator.language||'de').slice(0,2)==='de'?'de':'en';
 const T={
- de:{reload:'neu laden',dlLabel:'Export:',dlRawT:'Rohdaten (Messpunkte) als CSV herunterladen',dlDailyT:'Tageswerte als CSV herunterladen',clearT:'Historie dieses Readers löschen',priceT:'Strompreis – gilt global für alle Reader',priceTexp:'Einspeisevergütung – gilt global für alle Reader',
+ de:{reload:'neu laden',dlLabel:'Export:',dlRawT:'Rohdaten (Messpunkte) als CSV herunterladen',dlDailyT:'Tageswerte als CSV herunterladen',clearT:'Historie dieses Readers löschen',fsFreeT:'Freier Speicher für die Verlaufsdaten aller Reader (siehe /debug für Details)',fsRaw:'Rohdaten',fsDaily:'Tageswerte',priceT:'Strompreis – gilt global für alle Reader',priceTexp:'Einspeisevergütung – gilt global für alle Reader',
   loading:'lädt…',loadErr:'Fehler beim Laden.',
   noReaders:'Noch keine Reader bekannt.<br>Sobald ein Zähler empfangen wird, erscheint hier seine Historie.',
   offlineTag:'nicht in Reichweite',
@@ -2359,7 +2651,7 @@ const T={
   thTime:'Zeit',thPow:'Leistung W',thPowCalc:'Ø Leistung W (berechnet)',thImpK:'Import kWh',thDelta:'Δ Import kWh',thExpK:'Export kWh',thDeltaExp:'Δ Export kWh',
   fewPts:'zu wenige Messpunkte für einen Verlauf',noDay:'noch keine Tageswerte — bitte etwas Zeit sammeln',
   clearC:r=>'Gespeicherte Historie für '+r+' löschen?'},
- en:{reload:'reload',dlLabel:'Export:',dlRawT:'Download raw samples as CSV',dlDailyT:'Download daily values as CSV',clearT:"clear this reader's history",priceT:'Electricity price – global for all readers',priceTexp:'Feed-in tariff – global for all readers',
+ en:{reload:'reload',dlLabel:'Export:',dlRawT:'Download raw samples as CSV',dlDailyT:'Download daily values as CSV',clearT:"clear this reader's history",fsFreeT:'Free space for all readers\' history data (see /debug for details)',fsRaw:'raw data',fsDaily:'daily values',priceT:'Electricity price – global for all readers',priceTexp:'Feed-in tariff – global for all readers',
   loading:'loading…',loadErr:'Failed to load.',
   noReaders:'No readers known yet.<br>As soon as a meter is received, its history appears here.',
   offlineTag:'out of range',
@@ -2462,6 +2754,12 @@ async function boot(){
  applyLang();main.innerHTML='<div class=empty>'+t('loading')+'</div>';
  try{let p=await (await fetch('/api/price')).json();$('price').value=p.cent;$('eprice').value=p.ecent;}catch(e){}   // global prices into the header
  $('price').onchange=savePrice;$('eprice').onchange=saveEprice;
+ try{let s=await (await fetch('/api/status')).json();const hf=s.hist_fs;
+  if(hf&&hf.ok){const kb=n=>(n/1024).toFixed(0)+' KB';
+   $('fsstat').textContent='💾 '+t('fsRaw')+' '+kb(hf.total-hf.used)+'/'+kb(hf.total)+(hf.backend==='ota'?' (OTA)':'')+
+    ' · '+t('fsDaily')+' '+kb(hf.daily_total-hf.daily_used)+'/'+kb(hf.daily_total);
+   $('fsstat').title=t('fsFreeT');}
+ }catch(e){}
  try{let d=await (await fetch('/api/readers')).json();readers=Array.isArray(d)?d:(d.readers||[]);}catch(e){readers=[];}
  readers=readers.filter(r=>r.id);
  // readers with stored history but no live RAM slot (out of range since boot, or removed) -- still need to
@@ -2666,7 +2964,8 @@ static void startServices() {
   server.on("/api/github/auto", HTTP_POST, guard(handleGithubAuto));         // configure periodic auto-update
   server.on("/update", HTTP_GET, guard(handleUpdatePage));                   // ESP32 self-update page (still linked from /settings)
   server.on("/api/selfupdate", HTTP_POST, guard(handleSelfOtaDone), handleSelfOtaUpload);
-  server.on("/debug", HTTP_GET, guard(handleDebugPage));                     // flash hex editor
+  server.on("/debug", HTTP_GET, guard(handleDebugPage));                     // flash hex editor + flash map
+  server.on("/api/flash/map",   HTTP_GET,  guard(handleFlashMapJson));
   server.on("/api/flash/info",  HTTP_GET,  guard(handleFlashInfo));
   server.on("/api/flash/read",  HTTP_GET,  guard(handleFlashRead));
   server.on("/api/flash/patch", HTTP_POST, guard(handleFlashPatch));
@@ -3239,7 +3538,7 @@ static void webTask(void *) {
     g_apActive = true;
     Serial.printf("[web] no WiFi yet — dashboard on setup AP '%s' at http://192.168.4.1/\n", apSsid());
   }
-  g_fsOk = mountHistoryFS();         // mount a spare data partition (userdata/spiffs/…) for the history log
+  g_fsOk = bootHistoryFS();          // OTA-tail store where supported, else a spare data partition (userdata/…)
   if (!g_fsOk) Serial.println("[web] history: no usable data partition — logging disabled");
   startServices();                   // dashboard is ALWAYS up (connected STA or the setup AP)
 #ifdef OBI_HAS_EPD
@@ -3323,6 +3622,6 @@ void web_factory_reset() {
   { Preferences p; p.begin("obiuuid",   false); p.clear(); p.end(); }   // stored reader UUIDs
   { Preferences p; p.begin("obiassign", false); p.clear(); p.end(); }   // reader bindings (assigned/bound)
   { Preferences p; p.begin("obiival",   false); p.clear(); p.end(); }   // per-reader upload intervals
-  if (g_fsOk) LittleFS.format();       // wipe the per-reader energy history (LittleFS holds only history)
+  if (g_fsOk) { LittleFS.format(); if (g_usingOtaHist) otaHist_format(); }  // wipe daily (always userdata) + raw
   Serial.println("[web] factory reset: WiFi + MQTT + login + bound readers + history cleared");
 }
