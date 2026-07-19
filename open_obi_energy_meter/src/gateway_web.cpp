@@ -97,6 +97,7 @@ static String   g_mqttCa;            // optional PEM CA cert to verify the broke
 static char     g_tz[48] = "CET-1CEST,M3.5.0,M10.5.0/3";   // POSIX TZ for the history day-buckets (user-settable)
 static char     g_ntp[64] = "pool.ntp.org";                // NTP server for the wall clock (user-settable)
 static volatile bool g_nightMode = false;                    // disable normal-operation LED activity
+static bool g_hideUnbound = false;                           // dashboard: hide unbound (pending) reader cards (persisted, NVS "obigw"/"hideunb")
 static uint16_t g_pubEvery = 15;   // gateway-state publish cadence (s); reader telemetry is event-driven, not throttled by this
 
 // HTTP Basic Auth for the whole web dashboard/API. Blank username = auth disabled (open, backward compatible).
@@ -245,6 +246,7 @@ static String statusJson() {
     // timeValid()) never gets rendered as a plausible-looking date; callers only trust "time" when time_valid.
     j += ",\"tz\":" + jstr(g_tz) + ",\"ntp\":" + jstr(g_ntp) + ",\"time\":\"" + tb + "\",\"time_valid\":" + String(tv ? "true" : "false"); }
   j += ",\"night_mode\":" + String(g_nightMode ? "true" : "false");
+  j += ",\"hide_unbound\":" + String(g_hideUnbound ? "true" : "false");
   j += ",\"wifi\":" + String(g_wifiOk ? "true" : "false");
   j += ",\"ip\":\"" + (g_wifiOk ? WiFi.localIP().toString() : String("-")) + "\"";
   j += ",\"wifi_rssi\":" + String(g_wifiOk ? WiFi.RSSI() : 0);
@@ -314,6 +316,10 @@ h1{font-size:16px;margin:0;font-weight:650}.sub{color:var(--dim);font-size:12px}
 .card.pending{opacity:.62;filter:grayscale(.5)}
 .card.pending .mx,.card.pending .uuid{opacity:.8}
 .pairbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.hidetog{display:inline-flex;align-items:center;gap:6px;color:var(--dim);font-size:12px;cursor:pointer;margin-left:4px;user-select:none}
+.hidetog input{width:auto;margin:0;cursor:pointer}
+#hideunb_badge a{color:var(--accent);cursor:pointer;text-decoration:none}
+#hideunb_badge a:hover{text-decoration:underline}
 .meta{color:var(--dim);font-size:12px;font-family:var(--mono)}
 .del{margin-left:0;background:transparent;border:1px solid var(--line);color:var(--dim);border-radius:7px;padding:3px 9px;cursor:pointer;font-size:13px;line-height:1}
 .del:hover{border-color:var(--red);color:var(--red)}
@@ -427,7 +433,9 @@ footer b{font-family:var(--mono);color:var(--txt)}
 <div class="bar" id="bar"></div>
 </header>
 <div class="wrap">
- <div class="pairbar"><button class="b" id="pair_btn" onclick="pairAll()"></button><span class="meta" id="pair_st"></span></div>
+ <div class="pairbar"><button class="b" id="pair_btn" onclick="pairAll()"></button><span class="meta" id="pair_st"></span>
+  <label class="hidetog"><input type="checkbox" id="hideunb_cb" onchange="setHideUnbound()"><span id="hideunb_lbl"></span></label>
+  <span class="meta" id="hideunb_badge"></span></div>
  <div class="list" id="list"></div>
  <footer><span id="ft"></span> · <b id="gw"></b></footer>
 </div>
@@ -439,10 +447,12 @@ const T={
   offline:'offline',fw:'Firmware',batt:'Batterie',opt:'Sensor',active:'aktiv',nosig:'kein Signal',
   imp:'Bezug',exp:'Einspeisung',pow:'Leistung',seen:'Zuletzt',before:'vor',setiv:'Intervall setzen',sec:'Sek.',
   bedit:'Reihenfolge und Ansicht bearbeiten',bdone:'Bearbeiten beenden',breset:'Zurücksetzen',bhide:'ausblenden',bshow:'einblenden',bdrag:'ziehen zum Sortieren',
+  boxsaveerr:'Layout konnte nicht gespeichert werden (Gateway nicht erreichbar) — bitte erneut versuchen.',
   del:'Reader löschen',delq:'Reader %i löschen und Binding entfernen?\n\nEr taucht beim nächsten Empfang wieder auf — dann ausgegraut (nicht gebunden).',
   pending:'nicht gebunden',addrd:'🔗 An Gateway binden',unassign:'Lösen',
   pendhint:'Wird nur angezeigt — noch nicht an dieses Gateway gebunden.',
   pairall:'🔗 Alle für 3 Min binden',pairon:'Auto-Binding aktiv — %s s',pairoff:'Neue Reader bleiben ausgegraut, bis du sie bindest.',
+  hideUnb:'Ungebundene ausblenden',unbHidden:'ungebunden ausgeblendet',unbShow:'anzeigen',unbHideAgain:'wieder ausblenden',
   none:'Noch keine Reader',waiting:'Warte auf einen Reader — Reader-Taste ~10 s halten (echtes Gateway aus).',
   uuidwait:'UUID noch unbekannt — Reader per Taste neu verbinden',
   irhint:'Noch keine Messwerte — Reader-Taste einmal kurz drücken, um die Infrarot-Lesung zu starten.',
@@ -464,10 +474,12 @@ const T={
   offline:'offline',fw:'Firmware',batt:'Battery',opt:'Sensor',active:'active',nosig:'no signal',
   imp:'Import',exp:'Export',pow:'Power',seen:'Last seen',before:'',setiv:'Set interval',sec:'sec',
   bedit:'Edit boxes',bdone:'Finish editing',breset:'Reset',bhide:'hide',bshow:'show',bdrag:'drag to reorder',
+  boxsaveerr:'Could not save the layout (gateway unreachable) — please try again.',
   del:'Delete reader',delq:'Delete reader %i and remove its binding?\n\nIt reappears greyed (unbound) on the next reception.',
   pending:'not bound',addrd:'🔗 Bind to gateway',unassign:'Unbind',
   pendhint:'Shown only — not yet bound to this gateway.',
   pairall:'🔗 Bind all for 3 min',pairon:'Auto-binding active — %s s',pairoff:'New readers stay greyed until you bind them.',
+  hideUnb:'Hide unbound',unbHidden:'unbound hidden',unbShow:'show',unbHideAgain:'hide again',
   none:'No readers yet',waiting:'Waiting for a reader — hold its button ~10 s (real gateway off).',
   uuidwait:'UUID unknown yet — reconnect the reader with its button',
   irhint:'No readings yet — tap the reader button once to start its infrared readout.',
@@ -488,7 +500,7 @@ const T={
 let lang=localStorage.getItem('lang')||'de',L=T[lang];
 function setLang(x){lang=x;L=T[x];localStorage.setItem('lang',x);applyLang();tick();}
 function applyLang(){$('#lde').className=lang=='de'?'act':'';$('#len').className=lang=='en'?'act':'';
- $('#pair_btn').textContent=L.pairall;}
+ $('#pair_btn').textContent=L.pairall;$('#hideunb_lbl').textContent=L.hideUnb;}
 function rebootGw(){if(!confirm(lang=='de'?'Gateway jetzt neu starten?':'Restart the gateway now?'))return;
  fetch('/api/reboot',{method:'POST'}).catch(()=>{});}
 async function doLogout(){await fetch('/api/logout',{method:'POST'}).catch(()=>{});location.href='/login';}
@@ -537,11 +549,20 @@ async function tick(){try{
  ].concat(st.temp_c!=null?[['Temp',`<b>${st.temp_c} °C</b>`]]:[])
   .map(p=>`<div class="pill"><span class="k">${p[0]}</span>${p[1]}</div>`).join('');
  $('#pair_st').textContent=st.pair_remaining_s>0?L.pairon.replace('%s',st.pair_remaining_s):L.pairoff;
+ // hide-unbound view: reflect the persisted flag + pairing state, update the toggle + the "N hidden · show" badge
+ _hideUnbound=!!st.hide_unbound; _pairActive=st.pair_remaining_s>0;
+ { const cb=$('#hideunb_cb'); if(cb&&document.activeElement!==cb) cb.checked=_hideUnbound;   // don't fight an in-flight click
+   const nUnb=rs.filter(r=>!r.assigned).length; let badge='';
+   if(_hideUnbound&&nUnb>0&&!_pairActive)
+     badge=_revealTmp?`<a onclick="hideUnboundAgain();return false" href="#">${L.unbHideAgain}</a>`
+                     :`${nUnb} ${L.unbHidden} · <a onclick="revealUnbound();return false" href="#">${L.unbShow}</a>`;
+   $('#hideunb_badge').innerHTML=badge; }
  // don't blow away a reader card while its interval/file input is focused (you'd never finish typing);
  // renId keeps the inline rename field alive even if it loses focus (e.g. after tapping elsewhere on mobile)
  // a card in box-edit mode also freezes the redraw: drag/drop mutates _rs in place, so a 1-s tick must not rebuild over it
  const ae=document.activeElement, editing=editId!==null||renId!==null||(ae&&/^(iv_|fw_)/.test(ae.id||''));
- if(!editing && !uploading) $('#list').innerHTML=rs.length?rs.map(card).join(''):`<div class="card"><div class="hd"><span class="id">—</span></div><div class="uuid" style="border:0;background:0">${L.waiting}</div></div>`;
+ if(!editing && !uploading){const vis=visRs(rs);
+  $('#list').innerHTML=vis.length?vis.map(card).join(''):(rs.length?'':`<div class="card"><div class="hd"><span class="id">—</span></div><div class="uuid" style="border:0;background:0">${L.waiting}</div></div>`);}
  if(st.ota&&st.ota.active){const el=$('#op_'+st.ota.target);if(el){const p=st.ota.size?Math.min(100,Math.max(0,Math.round(st.ota.served/st.ota.size*100))):0;el.textContent=L.otarun+' '+p+'%';}}
 }catch(e){}}
 // ---- dashboard metric boxes: order + visibility, editable per reader, persisted server-side (NVS) ----
@@ -594,7 +615,16 @@ function boxVis(id,k){const r=_rs.find(x=>x.id===id);if(!r)return;
  const ord=boxOrder(r),b=ord.find(x=>x.key===k);if(b)b.vis=!b.vis;commitBox(r,ord);}
 function boxReset(id){const r=_rs.find(x=>x.id===id);if(!r)return;r.boxcfg='';saveBox(id,'');redraw();}
 function commitBox(r,ord){const cfg=ord.map(b=>(b.vis?'':'-')+b.key).join(',');r.boxcfg=cfg;saveBox(r.id,cfg);redraw();}
-async function saveBox(id,cfg){await fetch('/api/boxcfg?id='+id+'&cfg='+encodeURIComponent(cfg),{method:'POST'}).catch(()=>{});}
+// Persist a layout change. Retries a few times over ~1.5s (rides out a brief blip) and, if it still can't
+// reach the gateway (e.g. mid-reboot), warns the user instead of failing silently — otherwise the change
+// only lives in the browser until the next poll reverts it, which looks like "my layout got lost".
+async function saveBox(id,cfg){
+ for(let i=0;i<3;i++){
+  try{const r=await fetch('/api/boxcfg?id='+id+'&cfg='+encodeURIComponent(cfg),{method:'POST'});if(r.ok)return true;}catch(e){}
+  await new Promise(s=>setTimeout(s,500));
+ }
+ alert(L.boxsaveerr);return false;
+}
 function toggleEdit(id){editId=(editId===id?null:id);redraw();}   // per-reader box-edit toggle (card header ✎)
 function card(r){
  const nm=r.name?esc(r.name):'';
@@ -625,7 +655,16 @@ function card(r){
 }
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let _rs=[],renId=null;                       // renId = reader currently in inline-rename mode (tick pauses redraws)
-function redraw(){$('#list').innerHTML=_rs.map(card).join('');}
+// --- hide-unbound view state (persisted flag comes from /api/status; reveal/pairActive are live) ---
+let _hideUnbound=false,_revealTmp=false,_pairActive=false;
+// which reader cards to actually render: drop unbound ones when hiding is on — UNLESS temporarily revealed
+// or a pairing window is open (so you can always still bind a new reader)
+function visRs(list){return (_hideUnbound&&!_revealTmp&&!_pairActive)?list.filter(r=>r.assigned):list;}
+function redraw(){$('#list').innerHTML=visRs(_rs).map(card).join('');}
+async function setHideUnbound(){_revealTmp=false;const on=$('#hideunb_cb').checked;
+ await fetch('/api/hideunbound?on='+(on?1:0),{method:'POST'}).catch(()=>{});tick();}
+function revealUnbound(){_revealTmp=true;tick();}       // temporary — reset on reload or when hiding is re-toggled
+function hideUnboundAgain(){_revealTmp=false;tick();}
 function renameRd(id){renId=id;redraw();const el=$('#nm_'+id);if(el){el.focus();el.select();}}
 function nmCancel(){renId=null;redraw();}
 async function nmSave(id){const v=$('#nm_'+id).value.trim().slice(0,24);renId=null;
@@ -962,6 +1001,17 @@ static void handleNightMode() {
     Serial.printf("[settings] night mode %s\n", g_nightMode ? "on" : "off");
   }
   server.send(200, "application/json", String("{\"ok\":true,\"enabled\":") + (g_nightMode ? "true" : "false") + "}");
+}
+
+// Dashboard cosmetic: hide unbound (pending) reader cards. Global (not per-reader), persisted in NVS like
+// night mode. The web UI still auto-reveals pending readers during a pairing window, so binding never locks out.
+static void handleHideUnbound() {
+  if (server.hasArg("on")) {
+    g_hideUnbound = server.arg("on") == "1" || server.arg("on") == "true";
+    prefs.begin("obigw", false); prefs.putBool("hideunb", g_hideUnbound); prefs.end();
+    Serial.printf("[settings] hide unbound %s\n", g_hideUnbound ? "on" : "off");
+  }
+  server.send(200, "application/json", String("{\"ok\":true,\"on\":") + (g_hideUnbound ? "true" : "false") + "}");
 }
 
 // ---- reader firmware OTA upload (multipart, .bin) --------------------------
@@ -2528,6 +2578,7 @@ static void startServices() {
   server.on("/api/appass", HTTP_POST, guard(handleApPassword));  // set the setup-hotspot AP password
   server.on("/api/tz",   HTTP_POST, guard(handleTz));       // set the timezone (history day-buckets)
   server.on("/api/night_mode", HTTP_POST, guard(handleNightMode)); // disable normal-operation LED activity
+  server.on("/api/hideunbound", HTTP_POST, guard(handleHideUnbound)); // dashboard: hide unbound reader cards
   server.on("/api/wifi", HTTP_POST, guard(handleWifiPortal));        // open the on-demand WiFiManager portal (AP)
   server.on("/api/wifi/scan", HTTP_GET, guard(handleWifiScan));      // list nearby networks (dashboard panel)
   server.on("/api/wifi/connect", HTTP_POST, guard(handleWifiConnect)); // connect to a chosen network in-place
@@ -3083,6 +3134,7 @@ static void webTask(void *) {
   { String z = prefs.getString("tz", "CET-1CEST,M3.5.0,M10.5.0/3"); z.toCharArray(g_tz, sizeof g_tz); }
   { String n = prefs.getString("ntp", "pool.ntp.org"); n.toCharArray(g_ntp, sizeof g_ntp); }
   g_nightMode = prefs.getBool("nightmode", false);
+  g_hideUnbound = prefs.getBool("hideunb", false);
   g_priceCent = prefs.getFloat("pkwh", 31.0f);   // electricity price (€ ct/kWh) for the history cost columns
   g_exportCent = prefs.getFloat("ekwh", 0.0f);   // feed-in tariff (€ ct/kWh); default 0 = no pay for export
   prefs.end();
