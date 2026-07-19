@@ -332,6 +332,8 @@ h1{font-size:16px;margin:0;font-weight:650}.sub{color:var(--dim);font-size:12px}
 .meta{color:var(--dim);font-size:12px;font-family:var(--mono)}
 .del{margin-left:0;background:transparent;border:1px solid var(--line);color:var(--dim);border-radius:7px;padding:3px 9px;cursor:pointer;font-size:13px;line-height:1}
 .del:hover{border-color:var(--red);color:var(--red)}
+.del:disabled{opacity:.4;cursor:not-allowed}                 /* edit mode: delete stays visible but inert, so it can't be mistaken for a cancel */
+.del:disabled:hover{border-color:var(--line);color:var(--dim)}
 .ren{background:transparent;border:1px solid var(--line);color:var(--dim);border-radius:7px;padding:3px 8px;cursor:pointer;font-size:12px;line-height:1}
 .ren:hover{border-color:var(--accent);color:var(--accent)}
 /* per-reader "edit boxes" pencil — sits in the card header, right-aligned just left of the ✕ delete button */
@@ -562,20 +564,21 @@ async function tick(){try{
  _hideUnbound=!!st.hide_unbound; _pairActive=st.pair_remaining_s>0;
  { const cb=$('#hideunb_cb'); if(cb&&document.activeElement!==cb) cb.checked=_hideUnbound;   // don't fight an in-flight click
    const nUnb=rs.filter(r=>!r.assigned).length; let badge='';
+   const tog=$('.hidetog'); if(tog) tog.style.display=nUnb>0?'':'none';   // only show the toggle when there ARE unbound readers to hide
    if(_hideUnbound&&nUnb>0&&!_pairActive)
      badge=_revealTmp?`<a onclick="hideUnboundAgain();return false" href="#">${L.unbHideAgain}</a>`
                      :`${nUnb} ${L.unbHidden} · <a onclick="revealUnbound();return false" href="#">${L.unbShow}</a>`;
    $('#hideunb_badge').innerHTML=badge; }
  // don't blow away a reader card while its interval/file input is focused (you'd never finish typing);
- // renId keeps the inline rename field alive even if it loses focus (e.g. after tapping elsewhere on mobile)
- // a card in box-edit mode also freezes the redraw: drag/drop mutates _rs in place, so a 1-s tick must not rebuild over it
- const ae=document.activeElement, editing=editId!==null||renId!==null||(ae&&/^(iv_|fw_)/.test(ae.id||''));
+ // editId (unified edit mode) freezes the redraw too: the name input + box drag/drop mutate the DOM/_rs in place,
+ // so a 1-s tick must not rebuild over it
+ const ae=document.activeElement, editing=editId!==null||(ae&&/^(iv_|fw_)/.test(ae.id||''));
  if(!editing && !uploading){const vis=visRs(rs);
   $('#list').innerHTML=vis.length?vis.map(card).join(''):(rs.length?'':`<div class="card"><div class="hd"><span class="id">—</span></div><div class="uuid" style="border:0;background:0">${L.waiting}</div></div>`);}
  if(st.ota&&st.ota.active){const el=$('#op_'+st.ota.target);if(el){const p=st.ota.size?Math.min(100,Math.max(0,Math.round(st.ota.served/st.ota.size*100))):0;el.textContent=L.otarun+' '+p+'%';}}
 }catch(e){}}
 // ---- dashboard metric boxes: order + visibility, editable per reader, persisted server-side (NVS) ----
-let editId=null;                           // reader whose card is in box-edit mode (only one at a time, like renId)
+let editId=null;                           // reader whose card is in the unified edit mode (name + boxes); only one at a time
 const BOXES=['imp','exp','pow','batt','opt','seen'];   // canonical order + the only valid box keys
 function boxInner(k,r){                     // the label + value markup for one box (was inline in card())
  if(k=='imp') return `<div class="l">${L.imp}</div>${valE(r.import)}`;
@@ -634,21 +637,28 @@ async function saveBox(id,cfg){
  }
  alert(L.boxsaveerr);return false;
 }
-function toggleEdit(id){editId=(editId===id?null:id);redraw();}   // per-reader box-edit toggle (card header ✎)
+// One unified per-card edit mode (card header ✎): the name field becomes editable AND the boxes get their
+// drag/hide handles. Entering focuses the name; leaving (or Enter) saves the name only if it actually changed.
+function toggleEdit(id){
+ if(editId===id){saveNameIfChanged(id);editId=null;redraw();}       // leaving edit mode
+ else{editId=id;redraw();const el=$('#nm_'+id);if(el){el.focus();el.select();}}   // entering -> jump into the name field
+}
+function saveNameIfChanged(id){
+ const el=$('#nm_'+id);if(!el)return;
+ const v=el.value.trim().slice(0,24),r=_rs.find(x=>x.id===id);
+ if(r&&v!==(r.name||'')){r.name=v;fetch('/api/name?id='+id+'&name='+encodeURIComponent(v),{method:'POST'}).catch(()=>{});}
+}
 function card(r){
  const nm=r.name?esc(r.name):'';
  return `<div class="card${r.assigned?'':' pending'}">
-  <div class="hd">${renId===r.id
-   ?`<input class="nmi" id="nm_${r.id}" maxlength="24" value="${esc(r.name||'')}" placeholder="${r.id.toUpperCase()}" onkeydown="nmKey(event,'${r.id}')">
-   <button class="ren" onclick="nmSave('${r.id}')" title="${L.save}">✓</button>
-   <button class="ren" onclick="nmCancel()" title="${L.abort}">✕</button>`
-   :`<span class="id">${nm||r.id.toUpperCase()}</span>
-   <button class="ren" onclick="renameRd('${r.id}')" title="${L.ren}">✎</button>`}
+  <div class="hd">${editId===r.id
+   ?`<input class="nmi" id="nm_${r.id}" maxlength="24" value="${esc(r.name||'')}" placeholder="${r.id.toUpperCase()}" onkeydown="nmKey(event,'${r.id}')">`
+   :`<span class="id">${nm||r.id.toUpperCase()}</span>`}
    <span class="tag ${r.type}">${r.type}</span>
    ${r.assigned?'':`<span class="tag pend">${L.pending}</span>`}
    <span class="meta">${nm?r.id.toUpperCase()+' · ':''}FW ${r.softver} · HW ${r.hardver}${r.legacy?' · legacy':''} · ${r.rssi} dBm · ${r.snr} dB${r.paired?' · 🔒':''}</span>
    <button class="edb${editId===r.id?' act':''}" onclick="toggleEdit('${r.id}')" title="${editId===r.id?L.bdone:L.bedit}">✎</button>
-   <button class="del" onclick="delReader('${r.id}')" title="${L.del}">✕</button></div>
+   <button class="del" ${editId===r.id?'disabled':''} onclick="delReader('${r.id}')" title="${L.del}">✕</button></div>
   <div class="uuid">${r.uuid?('<b>UUID</b> '+r.uuid):L.uuidwait}</div>
   ${r.bootloader?`<div class="boot">⚙ ${L.boot}</div>`:''}
   <div class="mx">${mxHtml(r)}</div>
@@ -663,7 +673,7 @@ function card(r){
  </div>`;
 }
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let _rs=[],renId=null;                       // renId = reader currently in inline-rename mode (tick pauses redraws)
+let _rs=[];
 // --- hide-unbound view state (persisted flag comes from /api/status; reveal/pairActive are live) ---
 let _hideUnbound=false,_revealTmp=false,_pairActive=false;
 // which reader cards to actually render: drop unbound ones when hiding is on — UNLESS temporarily revealed
@@ -674,11 +684,7 @@ async function setHideUnbound(){_revealTmp=false;const on=$('#hideunb_cb').check
  await fetch('/api/hideunbound?on='+(on?1:0),{method:'POST'}).catch(()=>{});tick();}
 function revealUnbound(){_revealTmp=true;tick();}       // temporary — reset on reload or when hiding is re-toggled
 function hideUnboundAgain(){_revealTmp=false;tick();}
-function renameRd(id){renId=id;redraw();const el=$('#nm_'+id);if(el){el.focus();el.select();}}
-function nmCancel(){renId=null;redraw();}
-async function nmSave(id){const v=$('#nm_'+id).value.trim().slice(0,24);renId=null;
- await fetch('/api/name?id='+id+'&name='+encodeURIComponent(v),{method:'POST'});tick();}
-function nmKey(e,id){if(e.key==='Enter')nmSave(id);else if(e.key==='Escape')nmCancel();}
+function nmKey(e,id){if(e.key==='Enter')toggleEdit(id);else if(e.key==='Escape'){editId=null;redraw();}}  // Enter=save+leave, Esc=discard+leave
 async function setIvQ(id,secs){await fetch('/api/interval?id='+id+'&seconds='+secs,{method:'POST'});tick();}   // one-tap preset (Live/10/30/60/120/300)
 function setIv(id){const v=$('#iv_'+id).value;if(v)setIvQ(id,v);}     // custom value from the input field
 function ivChg(id){$('#setb_'+id).style.display='';}                 // reveal the green "set" button once a custom value is typed
