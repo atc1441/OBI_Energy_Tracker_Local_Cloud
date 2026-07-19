@@ -81,11 +81,11 @@ flowchart TD
     D --> T["Provision → permanent cert → telemetry/OTA over MQTTS"]
 ```
 
-1. **Generate your PKI** (CA, server cert for your LAN IP, claim cert, a *permanent/consistent* cert, and
+1. **Generate your PKI** (CA, server cert for your LAN IP of the machine that runs the python scripts for the firmware flashing, claim cert, a *permanent/consistent* cert, and
    a `ble_config.json`):
    ```bash
    cd tools
-   python gen_certs.py --host 192.168.1.50        # your broker's LAN IP
+   python gen_certs.py --host 192.168.1.50        # LAN IP adress of the machine where the temporary broker to flash the custom firmware runs (not the broker to send the meter readings later on)
    ```
 2. **Start your broker** (TLS on 8883, answers `$aws/certificates/create` and
    `$aws/provisioning-templates/…/provision`, logs every CONNECT/SUB/PUBLISH):
