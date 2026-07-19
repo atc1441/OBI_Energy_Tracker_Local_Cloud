@@ -186,6 +186,7 @@ static String readersJson() {
     uint32_t age = (millis() - r.lastSeenMs) / 1000;
     j += "{\"id\":\"" + hex(r.handle, 3) + "\"";
     j += ",\"name\":" + jstr(r.name);
+    j += ",\"boxcfg\":" + jstr(r.boxcfg);
     j += ",\"uuid\":" + (r.haveUuid ? "\"" + uuidStr(r.uuid) + "\"" : "null");
     j += ",\"type\":\"" + String(typeName(r.devType)) + "\"";
     j += ",\"paired\":" + String(r.haveKey ? "true" : "false");
@@ -314,10 +315,14 @@ h1{font-size:16px;margin:0;font-weight:650}.sub{color:var(--dim);font-size:12px}
 .card.pending .mx,.card.pending .uuid{opacity:.8}
 .pairbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
 .meta{color:var(--dim);font-size:12px;font-family:var(--mono)}
-.del{margin-left:auto;background:transparent;border:1px solid var(--line);color:var(--dim);border-radius:7px;padding:3px 9px;cursor:pointer;font-size:13px;line-height:1}
+.del{margin-left:0;background:transparent;border:1px solid var(--line);color:var(--dim);border-radius:7px;padding:3px 9px;cursor:pointer;font-size:13px;line-height:1}
 .del:hover{border-color:var(--red);color:var(--red)}
 .ren{background:transparent;border:1px solid var(--line);color:var(--dim);border-radius:7px;padding:3px 8px;cursor:pointer;font-size:12px;line-height:1}
 .ren:hover{border-color:var(--accent);color:var(--accent)}
+/* per-reader "edit boxes" pencil — sits in the card header, right-aligned just left of the ✕ delete button */
+.edb{margin-left:auto;background:transparent;border:1px solid var(--line);color:var(--dim);border-radius:7px;padding:3px 9px;cursor:pointer;font-size:13px;line-height:1}
+.edb:hover{border-color:var(--accent);color:var(--accent)}
+.edb.act{border-color:var(--accent);color:var(--accent);background:#12331f}
 .nmi{width:210px;max-width:55vw;font-size:16px;font-weight:600;padding:6px 9px}
 .uuid{font-family:var(--mono);font-size:11.5px;color:var(--dim);word-break:break-all;margin:7px 0 13px;
  padding:6px 9px;background:#0d131b;border-radius:8px;border:1px solid #1a222d}
@@ -331,6 +336,25 @@ h1{font-size:16px;margin:0;font-weight:650}.sub{color:var(--dim);font-size:12px}
 .v.na{color:#3d4a5a}
 .batt{height:5px;background:#0a0e14;border-radius:3px;overflow:hidden;margin-top:6px}
 .batt>i{display:block;height:100%;border-radius:3px;transition:.3s}
+/* dashboard box edit mode: drag to reorder, eye to show/hide (per reader, persisted server-side).
+   Both controls sit on their own high-contrast chip so they stay visible on the dark card; the eye chip
+   is additionally green-tinted when the box is shown and red-tinted when hidden, so state reads at a glance
+   even though the emoji glyph itself ignores `color`. */
+.mc.edit{position:relative;cursor:grab;user-select:none;padding:32px 11px 9px}
+.mc.edit:active{cursor:grabbing}
+.mc.edit.hid{opacity:.7}
+.mc .bh{position:absolute;top:6px;left:6px;display:inline-flex;align-items:center;justify-content:center;
+ width:26px;height:24px;color:#dfe7f1;font-size:15px;letter-spacing:-2px;cursor:grab;pointer-events:none;
+ background:#222c39;border:1px solid #3a4a60;border-radius:7px}
+.mc .be{position:absolute;top:6px;right:6px;display:inline-flex;align-items:center;justify-content:center;
+ min-width:30px;height:24px;padding:0 6px;cursor:pointer;font-size:13px;line-height:1;border-radius:7px;
+ background:#222c39;border:1px solid #3a4a60}
+.mc.edit:not(.hid) .be{border-color:#2f7a4d;background:#12331f}   /* shown  -> green chip */
+.mc.edit.hid .be{border-color:#8a3a3a;background:#3a1717}         /* hidden -> red chip  */
+.mc .be:hover{filter:brightness(1.35)}
+.mc.dragover{outline:2px dashed var(--accent);outline-offset:-2px}
+.ebar{display:flex;justify-content:flex-end;margin-top:9px}
+.icon.act{border-color:var(--accent);color:var(--accent)}
 .ctrl{display:flex;gap:8px;margin-top:12px;align-items:center;flex-wrap:wrap}
 .ivrow button.g{white-space:nowrap}                   /* interval pill + file + flash share one row; flash label never wraps */
 input{background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:8px 10px;font-family:var(--mono);font-size:13px}
@@ -414,6 +438,7 @@ const T={
  de:{sub:'869,5 MHz · SF7 · liest deine Zähler direkt',wifi:'WLAN',mqtt:'MQTT',radio:'Funk',readers:'Reader',
   offline:'offline',fw:'Firmware',batt:'Batterie',opt:'Sensor',active:'aktiv',nosig:'kein Signal',
   imp:'Bezug',exp:'Einspeisung',pow:'Leistung',seen:'Zuletzt',before:'vor',setiv:'Intervall setzen',sec:'Sek.',
+  bedit:'Reihenfolge und Ansicht bearbeiten',bdone:'Bearbeiten beenden',breset:'Zurücksetzen',bhide:'ausblenden',bshow:'einblenden',bdrag:'ziehen zum Sortieren',
   del:'Reader löschen',delq:'Reader %i löschen und Binding entfernen?\n\nEr taucht beim nächsten Empfang wieder auf — dann ausgegraut (nicht gebunden).',
   pending:'nicht gebunden',addrd:'🔗 An Gateway binden',unassign:'Lösen',
   pendhint:'Wird nur angezeigt — noch nicht an dieses Gateway gebunden.',
@@ -438,6 +463,7 @@ const T={
  en:{sub:'869.5 MHz · SF7 · reading your meters directly',wifi:'WiFi',mqtt:'MQTT',radio:'Radio',readers:'Readers',
   offline:'offline',fw:'Firmware',batt:'Battery',opt:'Sensor',active:'active',nosig:'no signal',
   imp:'Import',exp:'Export',pow:'Power',seen:'Last seen',before:'',setiv:'Set interval',sec:'sec',
+  bedit:'Edit boxes',bdone:'Finish editing',breset:'Reset',bhide:'hide',bshow:'show',bdrag:'drag to reorder',
   del:'Delete reader',delq:'Delete reader %i and remove its binding?\n\nIt reappears greyed (unbound) on the next reception.',
   pending:'not bound',addrd:'🔗 Bind to gateway',unassign:'Unbind',
   pendhint:'Shown only — not yet bound to this gateway.',
@@ -513,13 +539,64 @@ async function tick(){try{
  $('#pair_st').textContent=st.pair_remaining_s>0?L.pairon.replace('%s',st.pair_remaining_s):L.pairoff;
  // don't blow away a reader card while its interval/file input is focused (you'd never finish typing);
  // renId keeps the inline rename field alive even if it loses focus (e.g. after tapping elsewhere on mobile)
- const ae=document.activeElement, editing=renId!==null||(ae&&/^(iv_|fw_)/.test(ae.id||''));
+ // a card in box-edit mode also freezes the redraw: drag/drop mutates _rs in place, so a 1-s tick must not rebuild over it
+ const ae=document.activeElement, editing=editId!==null||renId!==null||(ae&&/^(iv_|fw_)/.test(ae.id||''));
  if(!editing && !uploading) $('#list').innerHTML=rs.length?rs.map(card).join(''):`<div class="card"><div class="hd"><span class="id">—</span></div><div class="uuid" style="border:0;background:0">${L.waiting}</div></div>`;
  if(st.ota&&st.ota.active){const el=$('#op_'+st.ota.target);if(el){const p=st.ota.size?Math.min(100,Math.max(0,Math.round(st.ota.served/st.ota.size*100))):0;el.textContent=L.otarun+' '+p+'%';}}
 }catch(e){}}
+// ---- dashboard metric boxes: order + visibility, editable per reader, persisted server-side (NVS) ----
+let editId=null;                           // reader whose card is in box-edit mode (only one at a time, like renId)
+const BOXES=['imp','exp','pow','batt','opt','seen'];   // canonical order + the only valid box keys
+function boxInner(k,r){                     // the label + value markup for one box (was inline in card())
+ if(k=='imp') return `<div class="l">${L.imp}</div>${valE(r.import)}`;
+ if(k=='exp') return `<div class="l">${L.exp}</div>${valE(r.export)}`;
+ if(k=='pow') return `<div class="l">${L.pow}</div>${val(r.power,'W')}`;
+ if(k=='batt'){const p=Math.max(0,Math.min(100,Math.round((r.battery_mV-2400)/8)));
+  return `<div class="l">${L.batt}</div><span class="v">${(r.battery_mV/1000).toFixed(2)} <small>V</small></span><div class="batt"><i style="width:${p}%;background:${bcol(p)}"></i></div>`;}
+ if(k=='opt'){const sens=r.infrared?`<span class="dot on"></span>${L.active}`:`<span class="dot idle"></span>${L.nosig}`;
+  return `<div class="l">${L.opt}</div><span class="v" style="font-size:13px">${sens}</span>`;}
+ if(k=='seen') return `<div class="l">${L.seen}</div><span class="v">${L.before} ${r.age_s}s</span>`;
+ return '';
+}
+// Parse r.boxcfg ("imp,-exp,pow,…") -> [{key,vis}]. Unknown/dup keys dropped; any missing box appended visible
+// (so a partial/legacy config still shows every box). Empty cfg = default order, all visible.
+function boxOrder(r){
+ const seen={},out=[];
+ (r.boxcfg||'').split(',').forEach(t=>{t=t.trim();if(!t)return;
+  const vis=t[0]!=='-',key=vis?t:t.slice(1);
+  if(BOXES.includes(key)&&!seen[key]){seen[key]=1;out.push({key,vis});}});
+ BOXES.forEach(key=>{if(!seen[key])out.push({key,vis:true});});
+ return out;
+}
+function mxHtml(r){
+ const ord=boxOrder(r);
+ if(editId!==r.id) return ord.filter(b=>b.vis).map(b=>`<div class="mc">${boxInner(b.key,r)}</div>`).join('');
+ return ord.map(b=>`<div class="mc edit${b.vis?'':' hid'}" draggable="true"
+   ondragstart="boxDrag(event,'${r.id}','${b.key}')" ondragover="boxOver(event)" ondragleave="boxLeave(event)" ondrop="boxDrop(event,'${r.id}','${b.key}')" ondragend="boxEnd(event)">
+   <span class="bh" title="${L.bdrag}">⋮⋮</span>
+   <button class="be" title="${b.vis?L.bhide:L.bshow}" onclick="boxVis('${r.id}','${b.key}')">${b.vis?'👁':'🚫'}</button>
+   ${boxInner(b.key,r)}</div>`).join('');
+}
+let dragKey=null,dragId=null;
+function boxDrag(e,id,k){dragKey=k;dragId=id;e.dataTransfer.effectAllowed='move';try{e.dataTransfer.setData('text/plain',k);}catch(_){}}
+function boxOver(e){e.preventDefault();e.dataTransfer.dropEffect='move';e.currentTarget.classList.add('dragover');}
+function boxLeave(e){e.currentTarget.classList.remove('dragover');}
+function boxEnd(){dragKey=null;dragId=null;}
+function boxDrop(e,id,k){e.preventDefault();e.currentTarget.classList.remove('dragover');
+ if(dragId!==id||dragKey===null||dragKey===k)return;     // only reorder within the same reader card
+ const r=_rs.find(x=>x.id===id);if(!r)return;
+ const ord=boxOrder(r),from=ord.findIndex(b=>b.key===dragKey),to=ord.findIndex(b=>b.key===k);
+ if(from<0||to<0)return;
+ const [m]=ord.splice(from,1);ord.splice(to,0,m);
+ commitBox(r,ord);
+}
+function boxVis(id,k){const r=_rs.find(x=>x.id===id);if(!r)return;
+ const ord=boxOrder(r),b=ord.find(x=>x.key===k);if(b)b.vis=!b.vis;commitBox(r,ord);}
+function boxReset(id){const r=_rs.find(x=>x.id===id);if(!r)return;r.boxcfg='';saveBox(id,'');redraw();}
+function commitBox(r,ord){const cfg=ord.map(b=>(b.vis?'':'-')+b.key).join(',');r.boxcfg=cfg;saveBox(r.id,cfg);redraw();}
+async function saveBox(id,cfg){await fetch('/api/boxcfg?id='+id+'&cfg='+encodeURIComponent(cfg),{method:'POST'}).catch(()=>{});}
+function toggleEdit(id){editId=(editId===id?null:id);redraw();}   // per-reader box-edit toggle (card header ✎)
 function card(r){
- const p=Math.max(0,Math.min(100,Math.round((r.battery_mV-2400)/8)));
- const sens=r.infrared?`<span class="dot on"></span>${L.active}`:`<span class="dot idle"></span>${L.nosig}`;
  const nm=r.name?esc(r.name):'';
  return `<div class="card${r.assigned?'':' pending'}">
   <div class="hd">${renId===r.id
@@ -531,18 +608,12 @@ function card(r){
    <span class="tag ${r.type}">${r.type}</span>
    ${r.assigned?'':`<span class="tag pend">${L.pending}</span>`}
    <span class="meta">${nm?r.id.toUpperCase()+' · ':''}FW ${r.softver} · HW ${r.hardver}${r.legacy?' · legacy':''} · ${r.rssi} dBm · ${r.snr} dB${r.paired?' · 🔒':''}</span>
+   <button class="edb${editId===r.id?' act':''}" onclick="toggleEdit('${r.id}')" title="${editId===r.id?L.bdone:L.bedit}">✎</button>
    <button class="del" onclick="delReader('${r.id}')" title="${L.del}">✕</button></div>
   <div class="uuid">${r.uuid?('<b>UUID</b> '+r.uuid):L.uuidwait}</div>
   ${r.bootloader?`<div class="boot">⚙ ${L.boot}</div>`:''}
-  <div class="mx">
-   <div class="mc"><div class="l">${L.imp}</div>${valE(r.import)}</div>
-   <div class="mc"><div class="l">${L.exp}</div>${valE(r.export)}</div>
-   <div class="mc"><div class="l">${L.pow}</div>${val(r.power,'W')}</div>
-   <div class="mc"><div class="l">${L.batt}</div><span class="v">${(r.battery_mV/1000).toFixed(2)} <small>V</small></span>
-    <div class="batt"><i style="width:${p}%;background:${bcol(p)}"></i></div></div>
-   <div class="mc"><div class="l">${L.opt}</div><span class="v" style="font-size:13px">${sens}</span></div>
-   <div class="mc"><div class="l">${L.seen}</div><span class="v">${L.before} ${r.age_s}s</span></div>
-  </div>
+  <div class="mx">${mxHtml(r)}</div>
+  ${editId===r.id?`<div class="ebar"><button class="ren" onclick="boxReset('${r.id}')" title="${L.breset}">↺ ${L.breset}</button></div>`:''}
   ${r.assigned?`<div class="ctrl ivrow"><div class="ivseg">${[['Live',1],['10s',10],['30s',30],['60s',60],['120s',120],['300s',300]].map(q=>`<button class="${r.interval==q[1]?'act':''}" onclick="setIvQ('${r.id}',${q[1]})">${q[0]}</button>`).join('')}<input type="number" id="iv_${r.id}" placeholder="${L.sec}" min="1" max="9999" value="${r.interval||''}" oninput="ivChg('${r.id}')" onkeydown="if(event.key==='Enter')setIv('${r.id}')"><button class="set" id="setb_${r.id}" style="display:none" onclick="setIv('${r.id}')">${L.setiv}</button></div>
    <input type="file" id="fw_${r.id}" accept=".bin" onchange="fwCheck('${r.id}')" style="flex:1 1 200px;min-width:170px;padding:6px 8px;font-size:12px">
    <button class="g" onclick="doOta('${r.id}',${r.softver||0})">${L.flash}</button>
@@ -770,6 +841,17 @@ static void handleName() {
       }
     server.send(200, "application/json", "{\"ok\":true}");
   } else server.send(400, "application/json", "{\"ok\":false}");
+}
+
+// Set (or clear, empty cfg) a reader's dashboard box layout. Cosmetic web-UI state only; no MQTT side effects.
+static void handleBoxCfg() {
+  String id = server.arg("id");
+  if (id.length() != 6) { server.send(400, "application/json", "{\"ok\":false}"); return; }
+  uint8_t h[3];
+  for (int i = 0; i < 3; i++) h[i] = (uint8_t)strtol(id.substring(i * 2, i * 2 + 2).c_str(), nullptr, 16);
+  if (gw_set_reader_boxcfg(h, server.arg("cfg").c_str()))
+    server.send(200, "application/json", "{\"ok\":true}");
+  else server.send(400, "application/json", "{\"ok\":false}");
 }
 
 static void handleMqttCfg() {
@@ -2469,6 +2551,7 @@ static void startServices() {
   server.on("/api/factory_reset", HTTP_POST, guard(handleFactoryReset));  // wipe all settings + reboot to setup portal
   server.on("/api/assign",      HTTP_POST, guard(handleAssign));   // accept/drop a reader onto this gateway
   server.on("/api/name",        HTTP_POST, guard(handleName));    // set/clear a reader's friendly name
+  server.on("/api/boxcfg",      HTTP_POST, guard(handleBoxCfg));  // set/clear a reader's dashboard box layout
   server.on("/api/pairall",     HTTP_POST, guard(handlePairAll));  // open the 3-min auto-accept window
   server.on("/radio",           HTTP_GET,  guard(handleRadioPage));  // live radio message view
   server.on("/api/radio",       HTTP_GET,  guard(handleRadioApi));

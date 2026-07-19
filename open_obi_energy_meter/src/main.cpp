@@ -135,6 +135,22 @@ static void loadName(const uint8_t h[3], char *out, size_t outsz) {
   p.end();
 }
 
+// Per-reader dashboard box layout (order + visibility), persisted like the name so it survives reboot AND
+// re-pair. Purely a web-UI cosmetic; the string is validated/built on the browser side (see gateway_web).
+static void saveBoxCfg(const uint8_t h[3], const char *cfg) {
+  char k[8]; uuidKey(h, k);
+  Preferences p; p.begin("obibox", false);
+  if (cfg && cfg[0]) p.putString(k, cfg); else p.remove(k);
+  p.end();
+}
+static void loadBoxCfg(const uint8_t h[3], char *out, size_t outsz) {
+  char k[8]; uuidKey(h, k);
+  Preferences p; p.begin("obibox", true);
+  out[0] = 0;
+  p.getString(k, out, outsz);
+  p.end();
+}
+
 // Auto-pair window: while active, every reader that announces is accepted automatically.
 static uint32_t g_pairUntil = 0;
 static bool pairWindowActive() { return g_pairUntil && (int32_t)(millis() - g_pairUntil) < 0; }
@@ -150,6 +166,7 @@ static Reader *addReader(const uint8_t h[3]) {
     uint16_t iv = loadInterval(h);                  // persisted upload interval (0 = never configured)
     x.setInterval = iv ? iv : OBI_DEFAULT_INTERVAL; // new/unconfigured reader -> default, so it's shown in UI/MQTT AND pushed in the ACK
     loadName(h, x.name, sizeof x.name);             // restore the friendly name (empty = none set)
+    loadBoxCfg(h, x.boxcfg, sizeof x.boxcfg);        // restore the dashboard box layout (empty = default)
     return &x;
   }
   return nullptr;
@@ -337,6 +354,24 @@ bool gw_set_reader_name(const uint8_t handle[3], const char *name) {
       saveName(handle, buf);
       strlcpy(r.name, buf, sizeof r.name);
       r.mqttDiscovered = false;   // re-announce HA discovery so the device shows the new name
+      return true;
+    }
+  return false;
+}
+// Set (or clear, with "") a reader's dashboard box layout. Purely cosmetic web-UI state; the browser builds
+// the string, but we keep only the allowed characters (box keys are [a-z], plus ',' and '-') and drop control
+// chars so a malformed value can never break the hand-built JSON. NO MQTT re-publish — this touches nothing
+// outside the web dashboard.
+bool gw_set_reader_boxcfg(const uint8_t handle[3], const char *cfg) {
+  char buf[sizeof(((Reader*)0)->boxcfg)];
+  size_t j = 0;
+  for (const char *c = cfg ? cfg : ""; *c && j + 1 < sizeof buf; c++)
+    if ((*c >= 'a' && *c <= 'z') || *c == ',' || *c == '-') buf[j++] = *c;
+  buf[j] = 0;
+  for (auto &r : readers)
+    if (r.used && !memcmp(r.handle, handle, 3)) {
+      saveBoxCfg(handle, buf);
+      strlcpy(r.boxcfg, buf, sizeof r.boxcfg);
       return true;
     }
   return false;
