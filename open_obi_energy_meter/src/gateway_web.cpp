@@ -110,6 +110,13 @@ static char     g_authPass[64] = "";
 // validated in handleApPassword() before it's ever handed to softAP()/WiFiManager.
 static char     g_apPass[64] = "";
 
+// Periodic GitHub firmware auto-update: OFF by default, points at GH_DEFAULT_REPO (see below) unless the
+// user sets their own (e.g. a fork), checks every g_ghIntervalH hours. Persisted under NVS "obigw"
+// ("ghauto"/"ghrepo"/"ghivl"); configured via /api/github/auto.
+static bool     g_ghAuto      = false;
+static char     g_ghRepo[80]  = "";     // blank = GH_DEFAULT_REPO
+static uint32_t g_ghIntervalH = 24;     // hours between auto-checks (UI offers hours or days, stored as hours)
+
 // Point PubSubClient at the plain or TLS socket per g_mqttTls, then (re)set the broker address.
 // With a CA cert we verify the broker; without one we only encrypt (setInsecure) — fine for a self-signed
 // broker on the LAN (e.g. the project's own mqtts_server.py). Call after any host/port/TLS change.
@@ -251,6 +258,8 @@ static String statusJson() {
   j += ",\"ip\":\"" + (g_wifiOk ? WiFi.localIP().toString() : String("-")) + "\"";
   j += ",\"wifi_rssi\":" + String(g_wifiOk ? WiFi.RSSI() : 0);
   j += ",\"ap\":{\"ssid\":" + jstr(apSsid()) + ",\"pass_set\":" + String(g_apPass[0] ? "true" : "false") + "}";
+  j += ",\"gh_auto\":{\"enabled\":" + String(g_ghAuto ? "true" : "false") + ",\"repo\":" + jstr(g_ghRepo) +
+       ",\"interval_h\":" + String(g_ghIntervalH) + "}";
   j += ",\"freq_mhz\":869.5,\"bw_khz\":500,\"sf\":7";
   j += ",\"mqtt\":{\"host\":" + jstr(g_mqttHost) + ",\"port\":" + String(g_mqttPort);
   j += ",\"user\":" + jstr(g_mqttUser) + ",\"topic\":" + jstr(g_mqttTopic);
@@ -1111,7 +1120,19 @@ static void handleUpdatePage() { server.send_P(200, "text/html", UPDATE_HTML); }
 // ---- GitHub release check + self-update from GitHub -------------------------------------------------
 // The gateway can pull its own newest release .bin straight from GitHub (built by .github/workflows/build.yml,
 // asset named "<board-target>-<tag>.bin"). HTTPS via WiFiClientSecure(setInsecure) — no cert bundle needed.
-#define GH_LATEST_URL "https://api.github.com/repos/atc1441/OBI_Energy_Tracker_Local_Cloud/releases/latest"
+#define GH_DEFAULT_REPO "atc1441/OBI_Energy_Tracker_Local_Cloud"
+
+// Accepts "owner/repo" as-is, or strips a full GitHub URL ("https://github.com/owner/repo(.git)") down to it.
+static String ghRepoNorm() {
+  String r = g_ghRepo[0] ? String(g_ghRepo) : String(GH_DEFAULT_REPO);
+  r.trim();
+  int i = r.indexOf("github.com/");
+  if (i >= 0) r = r.substring(i + 11);
+  while (r.length() && r[r.length() - 1] == '/') r.remove(r.length() - 1);
+  if (r.endsWith(".git")) r = r.substring(0, r.length() - 4);
+  return r;
+}
+static String ghApiUrl() { return "https://api.github.com/repos/" + ghRepoNorm() + "/releases/latest"; }
 
 // compare dotted numeric versions (leading 'v' tolerated); true if a > b.
 static bool verNewer(const char *a, const char *b) {
@@ -1160,7 +1181,7 @@ static bool githubLatest(String &tag, String &url, int *codeOut = nullptr) {
   HTTPClient http; http.setUserAgent("OBI-Gateway");
   http.setConnectTimeout(9000); http.setTimeout(12000);
   http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
-  if (!http.begin(cli, GH_LATEST_URL)) return false;
+  if (!http.begin(cli, ghApiUrl())) return false;
   http.addHeader("Accept", "application/vnd.github+json");
   int code = http.GET();
   if (codeOut) *codeOut = code;
@@ -1272,6 +1293,30 @@ static void handleGithubProgress() {
   int pct = tt ? (int)((uint64_t)d * 100 / tt) : 0;
   server.send(200, "application/json",
               String("{\"state\":") + g_ghState + ",\"done\":" + d + ",\"total\":" + tt + ",\"pct\":" + pct + "}");
+}
+
+// ---- /api/github/auto — configure periodic auto-update (default: disabled) ------------------------------
+static void handleGithubAuto() {
+  if (server.hasArg("repo")) {
+    String r = server.arg("repo"); r.trim();
+    strlcpy(g_ghRepo, r.c_str(), sizeof g_ghRepo);
+  }
+  if (server.hasArg("enabled")) g_ghAuto = server.arg("enabled") == "1" || server.arg("enabled") == "true";
+  if (server.hasArg("interval_h")) {
+    long h = server.arg("interval_h").toInt();
+    // clamp to 1 hour .. 30 days: also keeps `hours * 3600000` (below, the millis() interval check) safely
+    // inside uint32_t -- millis() itself wraps at ~49.7 days, so a longer interval couldn't be measured
+    // reliably here anyway.
+    if (h < 1) h = 1; else if (h > 720) h = 720;
+
+    g_ghIntervalH = (uint32_t)h;
+  }
+  prefs.begin("obigw", false);
+  prefs.putBool("ghauto", g_ghAuto);
+  prefs.putString("ghrepo", g_ghRepo);
+  prefs.putUInt("ghivl", g_ghIntervalH);
+  prefs.end();
+  server.send(200, "application/json", "{\"ok\":true}");
 }
 
 // ---- /settings — WiFi, MQTT and Firmware in one tidy place ------------------------------------------
@@ -1386,6 +1431,17 @@ button:disabled{opacity:.5;cursor:default}
   <div class=row style="margin-top:2px"><button class=g id=ghbtn onclick=ghCheck()>Auf Updates prüfen</button><button class=g id=ghdl onclick=ghUpdate()>Neueste neu laden</button></div>
   <div id=ghbox class=msg>GitHub wird geprüft…</div>
   <hr>
+  <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+   <input type=checkbox id=ghauto style="width:auto;margin:0"><span id=lghauto>Automatisches Update (Standard: aus)</span></label>
+  <div class=grid>
+   <div><label id=lghrepo>Git-Repo (owner/repo oder GitHub-URL)</label><input id=ghrepo placeholder="atc1441/OBI_Energy_Tracker_Local_Cloud"></div>
+   <div><label id=lghivl>Prüfintervall</label>
+    <div style="display:flex;gap:6px"><input id=ghivln type=number min=1 value=24 style="flex:1">
+     <select id=ghivlu style="flex:1"><option value=1 id=oghH>Stunden</option><option value=24 selected id=oghD>Tage</option></select></div></div>
+  </div>
+  <div class=msg id=ghautonote style="margin:8px 0 0"></div>
+  <div class=row><button onclick=saveGhAuto()><span id=bghauto>Speichern</span></button><span class=msg id=ghautomsg></span></div>
+  <hr>
   <label id=lman2>Manuell flashen (.bin dieses Boards)</label>
   <input type=file id=file accept=.bin>
   <div class=bar id=bar><div class=fill id=fill></div></div>
@@ -1418,10 +1474,12 @@ $('lman2').textContent=t('Manuell flashen (.bin dieses Boards)','Manual flash (.
 $('lfr').textContent=t('Werkseinstellungen','Factory reset');$('bfr').textContent=t('Auf Werkseinstellungen zurücksetzen','Reset to factory settings');
 $('frnote').textContent=t('Löscht WLAN, MQTT, Login, gebundene Reader und den Verlauf — dann Neustart ins Setup-Portal.','Erases WiFi, MQTT, login, bound readers and history — then reboots into the setup portal.');
 $('ghbtn').textContent=t('Auf Updates prüfen','Check for updates');$('ghdl').textContent=t('Neueste neu laden','Redownload latest');
+$('lghauto').textContent=t('Automatisches Update (Standard: aus)','Automatic update (default: off)');$('lghrepo').textContent=t('Git-Repo (owner/repo oder GitHub-URL)','Git repo (owner/repo or GitHub URL)');
+$('lghivl').textContent=t('Prüfintervall','Check interval');$('oghH').textContent=t('Stunden','hours');$('oghD').textContent=t('Tage','days');$('bghauto').textContent=t('Speichern','Save');
 $('htime').textContent=t('Zeit','Time');$('ltz').textContent=t('Zeitzone','Timezone');$('lntp').textContent=t('NTP-Server','NTP server');$('btz').textContent=t('Speichern','Save');
 $('hmisc').textContent=t('Sonstiges','Misc');$('lnight').textContent=t('Nachtmodus (normale LED-Aktivität aus)','Night mode (mute normal LED activity)');
 $('bnsave').textContent=t('Speichern','Save');
-let cfg=false,tzc=false;
+let cfg=false,tzc=false,ghc=false;
 async function load(){try{
   const s=await(await fetch('/api/status')).json();
   $('wfstat').innerHTML=s.wifi?`<span class="dot on"></span>${t('Verbunden','Connected')} · ${s.ip} · ${s.wifi_rssi} dBm`:`<span class="dot off"></span>${t('nicht verbunden','offline')}`;
@@ -1434,6 +1492,10 @@ async function load(){try{
    $('au').value=(s.auth&&s.auth.user)||'';$('night').checked=!!s.night_mode;}
   $('austat').innerHTML=(s.auth&&s.auth.enabled)?`<span class="dot on"></span>${t('geschützt als','protected as')} <code>${s.auth.user}</code>`:`<span class="dot idle"></span>${t('offen — kein Passwort','open — no password')}`;
   $('fwcur').innerHTML=`${t('Aktuell','Current')}: <code>${s.fw?s.fw.version:'?'}</code> (${s.fw?s.fw.target:''})`;
+  if(s.gh_auto&&!ghc){ghc=true;$('ghauto').checked=!!s.gh_auto.enabled;$('ghrepo').value=s.gh_auto.repo||'';
+   let h=s.gh_auto.interval_h||24;
+   if(h>=24&&h%24===0){$('ghivlu').value=24;$('ghivln').value=h/24;}else{$('ghivlu').value=1;$('ghivln').value=h;}}
+  if(s.gh_auto)$('ghautonote').textContent=s.gh_auto.enabled?t('aktiv — prüft alle ','on — checking every ')+s.gh_auto.interval_h+t(' Std. auf ',' h against ')+(s.gh_auto.repo||'atc1441/OBI_Energy_Tracker_Local_Cloud'):t('deaktiviert — Firmware ändert sich nur manuell','off — firmware only changes manually');
   $('tzstat').innerHTML=(s.time_valid?'<span class="dot on"></span>':'<span class="dot idle"></span>')+`${t('Gerätezeit','Device time')}: <code>${s.time||'?'}</code>`+(s.time_valid?'':` · ${t('noch nicht per NTP synchronisiert','not NTP-synced yet')}`);
   if(!tzc){tzc=true;$('tztext').value=s.tz||'';$('ntptext').value=s.ntp||'';$('tzsel').value=s.tz||'';if($('tzsel').value!==(s.tz||''))$('tzsel').value='';}
 }catch(e){}}
@@ -1497,6 +1559,11 @@ async function ghPoll(){try{const p=await(await fetch('/api/github/progress')).j
   if(p.state==3){$('ghbox').className='msg';$('ghbox').textContent=t('Update fehlgeschlagen — aktuelle Firmware bleibt.','update failed — current firmware kept.');return;}
   setTimeout(ghPoll,700);
  }catch(e){setTimeout(()=>location.href='/',10000);}}  // a failing poll usually means it's rebooting
+async function saveGhAuto(){const en=$('ghauto').checked;
+ const mult=parseInt($('ghivlu').value)||1,n=Math.max(1,parseInt($('ghivln').value)||24),hours=n*mult;
+ const b=new URLSearchParams();b.set('enabled',en?'1':'0');b.set('repo',$('ghrepo').value.trim());b.set('interval_h',hours);
+ $('ghautomsg').textContent='…';await fetch('/api/github/auto',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b});
+ $('ghautomsg').textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>$('ghautomsg').textContent='',3000);ghc=false;load();}
 function upload(){let f=$('file').files[0];if(!f){$('upmsg').textContent=t('erst eine .bin wählen','pick a .bin first');return;}
  $('upbtn').disabled=true;$('bar').classList.add('on');$('upmsg').textContent=t('lade hoch','uploading')+' '+f.name+'…';
  let fd=new FormData();fd.append('firmware',f);let x=new XMLHttpRequest();x.open('POST','/api/selfupdate');
@@ -2590,6 +2657,7 @@ static void startServices() {
   server.on("/api/github/latest", HTTP_GET,  guard(handleGithubLatest));     // check GitHub for the newest release
   server.on("/api/github/update", HTTP_POST, guard(handleGithubUpdate));     // pull + flash the newest release .bin
   server.on("/api/github/progress", HTTP_GET, guard(handleGithubProgress));  // live download/flash % for the UI
+  server.on("/api/github/auto", HTTP_POST, guard(handleGithubAuto));         // configure periodic auto-update
   server.on("/update", HTTP_GET, guard(handleUpdatePage));                   // ESP32 self-update page (still linked from /settings)
   server.on("/api/selfupdate", HTTP_POST, guard(handleSelfOtaDone), handleSelfOtaUpload);
   server.on("/debug", HTTP_GET, guard(handleDebugPage));                     // flash hex editor
@@ -3131,6 +3199,9 @@ static void webTask(void *) {
   prefs.getString("au", "").toCharArray(g_authUser, sizeof g_authUser);   // web Basic Auth user (blank = open)
   prefs.getString("ap", "").toCharArray(g_authPass, sizeof g_authPass);
   prefs.getString("appw", "").toCharArray(g_apPass, sizeof g_apPass);     // setup-hotspot AP password (blank = open)
+  g_ghAuto = prefs.getBool("ghauto", false);                              // periodic GitHub auto-update (default off)
+  prefs.getString("ghrepo", "").toCharArray(g_ghRepo, sizeof g_ghRepo);
+  g_ghIntervalH = prefs.getUInt("ghivl", 24);
   { String z = prefs.getString("tz", "CET-1CEST,M3.5.0,M10.5.0/3"); z.toCharArray(g_tz, sizeof g_tz); }
   { String n = prefs.getString("ntp", "pool.ntp.org"); n.toCharArray(g_ntp, sizeof g_ntp); }
   g_nightMode = prefs.getBool("nightmode", false);
@@ -3210,6 +3281,20 @@ static void webTask(void *) {
         // it on its own, leaving the clock stuck "not synced" indefinitely. Keep retrying here until it
         // actually lands, instead of requiring the user to notice and manually re-save the NTP settings.
         if (conn && !timeValid()) syncNtp(); } }
+    if (g_ghAuto && conn && g_ghState == 0) {   // periodic GitHub auto-update -- default OFF, see /api/github/auto
+      static uint32_t lastGhCheckMs = 0xFFFFFFFF;   // sentinel: seed on first pass so the first check lands one
+      uint32_t nowMs = millis();                     // full interval after boot, not immediately -- an unplanned
+      if (lastGhCheckMs == 0xFFFFFFFF) lastGhCheckMs = nowMs;   // reboot right at power-up would be surprising.
+      if (nowMs - lastGhCheckMs >= g_ghIntervalH * 3600000UL) {
+        lastGhCheckMs = nowMs;
+        String tag, url;
+        if (githubLatest(tag, url) && url.length() && verNewer(tag.c_str(), FW_VERSION)) {
+          Serial.printf("[gh] auto-update: %s -> %s (%s)\n", FW_VERSION, tag.c_str(), ghRepoNorm().c_str());
+          g_ghState = 1; g_ghDone = 0; g_ghTotal = 0;
+          xTaskCreate(ghOtaTask, "ghota", 10240, nullptr, 4, nullptr);
+        } else Serial.println("[gh] auto-update: no newer release");
+      }
+    }
     g_mqttUp = conn && mqtt.connected();                      // cache for the e-paper task (owns PubSubClient here)
     vTaskDelay(pdMS_TO_TICKS(2));
   }
