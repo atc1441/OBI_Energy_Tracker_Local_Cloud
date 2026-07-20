@@ -2676,6 +2676,7 @@ td.mono{font-family:var(--mono)}
 <header><b>📈 OBI · History</b>
 <select id=rsel><option>…</option></select>
 <button id=rf>↻</button>
+<span id=rangebox class=pricebox>⏱<select id=rrange><option value=1>1 h</option><option value=6>6 h</option><option value=24>24 h</option></select></span>
 <span id=dllabel class=dllabel></span>
 <button id=dldaily>⬇ 📅</button>
 <button id=dlraw>⬇ raw</button>
@@ -2690,8 +2691,14 @@ td.mono{font-family:var(--mono)}
 <div class=wrap id=main><div class=empty>lädt…</div></div>
 <script>
 const $=id=>document.getElementById(id);
-const main=$('main'),sel=$('rsel');
+const main=$('main'),sel=$('rsel'),rrangeSel=$('rrange');
 let readers=[],cur=null;
+// shared time window for every raw-sample-based view (Import/Export/Power charts + the Watt table) --
+// capped at 24h, default 1h. Time-based rather than a row/point count so it means the same thing
+// regardless of how often a reader reports, and one setting for all of them keeps the page predictable
+// instead of each chart picking its own amount to show. The full sample array is already fetched in one
+// /api/history call either way; this only limits what's rendered. Persisted per-browser.
+let rawHours=localStorage.getItem('obiRawHours')||'1';
 const C={imp:'#31d07a',exp:'#5aa9ff',day:'#e3b341',pow:'#f0616d',calc:'#3ddbd9'};
 let lang=localStorage.getItem('obilang');if(lang!=='en'&&lang!=='de')lang=(navigator.language||'de').slice(0,2)==='de'?'de':'en';
 const T={
@@ -2714,6 +2721,7 @@ const T={
   thDay:'Tag',thCons:'Verbrauch kWh',thCost:'Kosten €',thExp:'Export kWh',thEarn:'Erlös €',
   cHour:'Stundenwerte',capHour:'Verbrauch und Einspeisung je Stunde — die kWh-Menge in der jeweiligen Stunde aus den Zählerstand-Änderungen.',thHour:'Stunde',
   cWatt:'Messwerte (Watt-Tabelle)',capWatt:'Rohwerte je Messpunkt. „Leistung W" kommt direkt vom Zähler und fehlt manchmal oder ist bei manchen Zählern im negativen Bereich fehlerhaft; „Ø Leistung W (berechnet)" ist stattdessen aus der Änderung von Import/Export zwischen zwei Messpunkten berechnet und damit zuverlässiger.',
+  rangeTip:'Zeitraum für Diagramme & Watt-Tabelle (max. 24 Std.)',
   thTime:'Zeit',thPow:'Leistung W',thPowCalc:'Ø Leistung W (berechnet)',thImpK:'Import kWh',thDelta:'Δ Import kWh',thExpK:'Export kWh',thDeltaExp:'Δ Export kWh',
   fewPts:'zu wenige Messpunkte für einen Verlauf',noDay:'noch keine Tageswerte — bitte etwas Zeit sammeln',
   clearC:r=>'Gespeicherte Historie für '+r+' löschen?'},
@@ -2736,6 +2744,7 @@ const T={
   thDay:'Day',thCons:'Consumption kWh',thCost:'Cost €',thExp:'Export kWh',thEarn:'Earnings €',
   cHour:'Hourly values',capHour:'Consumption and feed-in per hour — the kWh amount within each hour from the meter-counter changes.',thHour:'Hour',
   cWatt:'Measurements (Watt table)',capWatt:'Raw values per sample. "Power W" comes directly from the meter and is sometimes missing or wrong in the negative range on some meters; "Avg power W (calc)" is instead computed from the import/export change between two samples and is therefore more reliable.',
+  rangeTip:'Time range for charts & Watt table (max 24 h)',
   thTime:'Time',thPow:'Power W',thPowCalc:'Avg power W (calc)',thImpK:'Import kWh',thDelta:'Δ import kWh',thExpK:'Export kWh',thDeltaExp:'Δ export kWh',
   fewPts:'too few samples for a trend',noDay:'no daily values yet — please let it collect data',
   clearC:r=>'Delete stored history for '+r+'?'}
@@ -2751,6 +2760,7 @@ const dmy=ep=>{const d=D(ep);return lang==='de'?p2(d.getDate())+'.'+p2(d.getMont
 const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 function applyLang(){document.documentElement.lang=lang;
  $('rf').title=t('reload');$('dllabel').textContent=t('dlLabel');$('dlraw').title=t('dlRawT');$('dldaily').title=t('dlDailyT');$('clr').title=t('clearT');$('pbox').title=t('priceT');$('ebox').title=t('priceTexp');
+ $('rangebox').title=t('rangeTip');
  document.querySelectorAll('.langtog button').forEach(b=>b.classList.toggle('on',b.dataset.l===lang));}
 document.querySelectorAll('.langtog button').forEach(b=>b.onclick=()=>{lang=b.dataset.l;localStorage.setItem('obilang',lang);applyLang();if(cur)load();});
 
@@ -2853,6 +2863,8 @@ async function saveEprice(){let v=parseFloat($('eprice').value);if(isNaN(v)||v<0
  if(cur)load();}                                    // refresh the earnings columns for the current reader
 sel.onchange=()=>{cur=sel.value;localStorage.setItem('obihist',cur);load();};
 $('rf').onclick=()=>load();
+rrangeSel.value=rawHours;
+rrangeSel.onchange=()=>{rawHours=rrangeSel.value;localStorage.setItem('obiRawHours',rawHours);if(cur)load();};
 $('dlraw').onclick=()=>{if(cur)location.href='/api/history/csv?id='+cur+'&kind=raw';};
 $('dldaily').onclick=()=>{if(cur)location.href='/api/history/csv?id='+cur+'&kind=daily';};
 $('clr').onclick=async()=>{if(!cur||!confirm(t('clearC')(cur)))return;
@@ -2865,6 +2877,13 @@ async function load(silent){
  if(!silent)main.innerHTML='<div class=empty>'+t('loading')+'</div>';
  let h;try{h=await (await fetch('/api/history?id='+cur)).json();}catch(e){if(!silent)main.innerHTML='<div class=card><div class=empty>'+t('loadErr')+'</div></div>';return;}
  const S=h.samples||[],days=(h.daily||[]).map(d=>({ep:d[0],imp:d[1],exp:d[2]}));
+ // shared time window (header select, default 1h, capped at 24h) for every raw-sample view below --
+ // Import/Export/Power charts and the Watt table all use the SAME cutoff, so the page stays predictable
+ // instead of each one picking its own amount to show. KPIs further down intentionally keep using the
+ // full S (latest reading, today's total, ...), not this windowed subset.
+ const rHrs=Math.min(24,parseInt(rawHours)||1);
+ const rNowEp=h.tvalid&&h.now?h.now:(S.length?S[S.length-1][0]:Math.floor(Date.now()/1000));
+ const rCutoff=rNowEp-rHrs*3600;
  const price=(h.price!=null?h.price:31),eur=price/100;      // ct/kWh and €/kWh (global, shown in the header)
  const eprice=(h.eprice!=null?h.eprice:0),eeur=eprice/100;  // feed-in tariff ct/kWh and €/kWh (export earnings)
  // per-day consumption from the kWh-counter deltas (import can only rise)
@@ -2912,28 +2931,30 @@ async function load(silent){
   html+='<div class=card><h2>'+t('cDayExp')+'</h2><p class=cap>'+t('capDayExp')+'</p>'+barChart(barsE,'kWh',C.exp)+'</div>';}
  // cumulative kWh — two separate charts, each with its own scale (export is far smaller than import,
  // so a shared axis would flatten it to the baseline). Import = grid draw (main value), Export = solar feed-in.
- let sImp={name:'Import',color:C.imp,pts:S.map(s=>[s[0],s[1]/1000])};
+ let sImp={name:'Import',color:C.imp,pts:S.filter(s=>s[0]>=rCutoff).map(s=>[s[0],s[1]/1000])};
  html+='<div class=card><h2>'+t('cImp')+'</h2><p class=cap>'+t('capImp')+'</p>'+lineChart([sImp],'kWh')+
   '<div class=legend><span><i style="background:'+C.imp+'"></i>Import kWh</span></div></div>';
  if(anyExp){
-  let sExp={name:'Export',color:C.exp,pts:S.map(s=>[s[0],s[2]/1000])};
+  let sExp={name:'Export',color:C.exp,pts:S.filter(s=>s[0]>=rCutoff).map(s=>[s[0],s[2]/1000])};
   html+='<div class=card><h2>'+t('cExp')+'</h2><p class=cap>'+t('capExp')+'</p>'+lineChart([sExp],'kWh')+
    '<div class=legend><span><i style="background:'+C.exp+'"></i>Export kWh</span></div></div>';
  }
  // instantaneous power — its own chart, NOT cumulative, and unlike import/export it legitimately goes
  // negative on feed-in. lineChart() already lets the y-axis dip below zero (it only clamps to 0 when
  // every value in the series is already >=0), so a feed-in dip just renders correctly with no extra work.
- let powPts=S.filter(s=>s[3]!=null).map(s=>[s[0],s[3]]);
+ let powPts=S.filter(s=>s[3]!=null&&s[0]>=rCutoff).map(s=>[s[0],s[3]]);
  // calculated power: average W between two consecutive samples, derived purely from the import/export
  // kWh-counter deltas (Wh*3600/seconds). Some meters (e.g. certain DWSB20-2TH units) don't sign-extend
  // the 24-bit power field correctly on feed-in, so the meter's own Watt reading can be garbage while the
  // counters — which just accumulate — stay correct. calcArr[i] is null for i==0 or a non-positive gap.
+ // Computed against the FULL S (not the windowed cutoff) so the delta at the window's left edge is still
+ // correct -- only the resulting points get filtered to the display window, below and in the Watt table.
  let calcArr=S.map((s,i)=>{
   if(i===0)return null;
   let dt=s[0]-S[i-1][0];if(dt<=0)return null;
   return ((s[1]-S[i-1][1])-(s[2]-S[i-1][2]))*3600/dt;
  });
- let calcPts=calcArr.map((v,i)=>v==null?null:[S[i][0],v]).filter(p=>p);
+ let calcPts=calcArr.map((v,i)=>v==null?null:[S[i][0],v]).filter(p=>p&&p[0]>=rCutoff);
  if(powPts.length>=2||calcPts.length>=2){
   let series=[];
   if(calcPts.length>=2)series.push({name:'CalcPower',color:C.calc,pts:calcPts,dash:'6,4'});
@@ -2968,10 +2989,12 @@ async function load(silent){
  if(S.length){
   const fmtD=d=>d==null?'<span class=na>—</span>':(d>0?'<span class=pos>+'+nf(d,3)+'</span>':(d<0?'<span class=neg>'+nf(d,3)+'</span>':'<span class=na>0</span>'));
   const fmtW=w=>w==null?'<span class=na>—</span>':(w<0?'<span class=neg>'+nf(w,0)+'</span>':nf(w,0));
-  let rows=S.map((s,i)=>({s,di:i>0?(s[1]-S[i-1][1])/1000:null,de:i>0?(s[2]-S[i-1][2])/1000:null,cw:calcArr[i]})).slice(-60).reverse().map(o=>{
+  let all=S.map((s,i)=>({s,di:i>0?(s[1]-S[i-1][1])/1000:null,de:i>0?(s[2]-S[i-1][2])/1000:null,cw:calcArr[i]}));
+  let shown=all.filter(o=>o.s[0]>=rCutoff);   // same shared window as the charts above (header ⏱ select)
+  let rows=shown.reverse().map(o=>{
    let s=o.s,pw=s[3]==null?'<span class=na>—</span>':nf(s[3],0);
    return `<tr><td>${dmy(s[0])} ${hm(s[0])}</td><td class="mono">${pw}</td><td class="mono">${fmtW(o.cw)}</td><td class="mono">${nf(s[1]/1000,3)}</td><td class="mono">${fmtD(o.di)}</td><td class="mono">${nf(s[2]/1000,3)}</td><td class="mono">${fmtD(o.de)}</td></tr>`;}).join('');
-  html+='<div class=card><h2>'+t('cWatt')+'</h2><p class=cap>'+t('capWatt')+'</p><div class=twrap><table><thead><tr><th>'+t('thTime')+'</th><th>'+t('thPow')+'</th><th>'+t('thPowCalc')+'</th><th>'+t('thImpK')+'</th><th>'+t('thDelta')+'</th><th>'+t('thExpK')+'</th><th>'+t('thDeltaExp')+'</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+  html+='<div class=card><h2>'+t('cWatt')+'</h2><p class=cap>'+t('capWatt')+' ('+shown.length+'/'+all.length+')</p><div class=twrap><table><thead><tr><th>'+t('thTime')+'</th><th>'+t('thPow')+'</th><th>'+t('thPowCalc')+'</th><th>'+t('thImpK')+'</th><th>'+t('thDelta')+'</th><th>'+t('thExpK')+'</th><th>'+t('thDeltaExp')+'</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
  }
  main.innerHTML=html;
 }
