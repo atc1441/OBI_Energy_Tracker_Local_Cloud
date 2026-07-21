@@ -372,6 +372,77 @@ statischer Analyse), mit Referenzsignalen, die selbst vom Bug nicht
 betroffen sind, statt zu versuchen, einen Wert weiter unten in einer
 nicht vollständig kartierten Pipeline abzufangen oder zu überschreiben.
 
+## LoRa-SF9-Option (2026-07-21) — mehr Reichweite, kürzere Akkulaufzeit des Readers, opt-in und ohne Support
+
+Tauscht Übertragungsrate/Sendezeit gegen Reichweite, indem die LoRa-Verbindung vom Standard SF7 auf SF9
+umgestellt wird. Beide Seiten müssen übereinstimmen — ein Reader auf SF9 hört kein SF7-Beacon und
+umgekehrt, daher ist das immer eine gepaarte Änderung (erst den Reader neu flashen, dann das Gateway
+umstellen). Funktioniert und ist live Ende-zu-Ende verifiziert (Taster/Binding, vollständiger
+ECDH-Handshake, laufendes Energy-Reporting, Reader-OTA in beide Richtungen) auf echter Hardware
+(DWSB20.2TH-Reader `e1c6c5`) — ein früherer Versuch blieb beim Handshake hängen und wurde zurückgerollt;
+die Ursache war einer der folgenden vier Patches (#2), keine grundsätzliche Grenze.
+
+**Vier Patches, alle über `splice.py --sf9` / `splice_DWSB20_2TH.py --sf9` zusätzlich zu den normalen
+Zähler-Fix-Hooks angewendet** — Release-Builds enthalten jetzt 4 Dateien insgesamt (plain/DWSB20.2TH ×
+SF7/SF9), byte-diff-geprüft sauber gegen die jeweilige SF7-Basis (nur die beabsichtigten Bytes ändern sich):
+
+1. **`radio_init_config`-Datarate-Immediates für TX/RX** — `radio_init_config` (beginnt bei `0xB69C`) ruft
+   zweimal die Vendor-SX126x-HAL auf (`RadioSetTxConfig`/`RadioSetRxConfig`), jeweils mit dem
+   Spreading-Factor als einfachem Ein-Byte-Immediate: `0xB6D8` (`movs r0,#7`→`#9`) für TX, `0xB700`
+   (`movs r2,#7`→`#9`) für RX. Gegen jedes andere Stack-/Register-Argument an diesen beiden Aufrufstellen
+   gegengeprüft mit der bereits reversten Radio-Tabelle in
+   [`../03-reverse-engineering/lora-protocol.md`](../03-reverse-engineering/lora-protocol.md) (Bandbreite
+   Index 2, Coderate 1, Preamble 12, TX-Leistung 22 dBm liegen alle genau dort, wo erwartet).
+2. **ECDH-Antwort-Timeout verbreitert** (`0x66DA`, 300 ms → 500 ms). Die eigentliche Blockade beim ersten
+   Versuch: Die ECDH-Antwortwartezeit des Readers in `ecdh_keyexchange_sm` ist fest auf 300 ms codiert, die
+   reale SF9-Rundlaufzeit liegt aber bei ≈360 ms (≈255 ms Gateway-Turnaround + ≈107 ms Sendezeit für die
+   68-Byte-Antwort, gegenüber ≈32 ms bei SF7) — der Reader brach also nach 5 Versuchen ab und lief in einer
+   Schleife scan→bind→ECDH→ECDH→ECDH, ohne je `key_ready` zu erreichen. Die Verbreiterung auf 500 ms
+   (weiterhin ein Ein-Byte-Patch, `adds r3,#45`→`#245`) gibt ≈140 ms Marge über der gemessenen
+   SF9-Rundlaufzeit und behob das Livelock.
+3. **Ein dritter, unabhängiger SF7-Hardcode** bei `0x6C78` (`movs r1,#7`→`#9`), in einem von IDA nicht
+   erkannten TX-Config-Helfer (`0x6C64`-`0x6C92`), erreicht von `sub_D370` aus dem
+   Taster-Announce/Bind-Pfad — *nicht* über `radio_init_config`s Aufrufer aus Patch 1 abgedeckt. Ohne diesen
+   Patch sendete ein Druck auf den physischen Reader-Taster (erneutes Binding) weiterhin auf SF7, selbst
+   nachdem alles andere umgeschaltet war, und wurde damit für ein auf SF9 konfiguriertes Gateway taub.
+   Gefunden durch Hand-Disassemblierung vorwärts ab einer bekannt korrekten Funktionsgrenze, nachdem IDA
+   diesen Helfer stillschweigend mit seinen Nachbarn verschmolzen hatte.
+4. **Gateway-seitige Dual-SF-Behandlung**: Der Bootloader des Readers spricht ausschließlich SF7 (er wurde —
+   wie am Anfang dieses Dokuments festgehalten — nie gepatcht, nur die App-Firmware wird verändert), daher
+   muss ein auf SF9 konfiguriertes Gateway für die Dauer eines Reader-OTA-Uploads trotzdem auf SF7
+   herunterschalten und danach zu SF9 zurückkehren. Siehe `g_liveSF`/`applyLiveSF()`/`gw_ota_arm()`/
+   `OTA_SF9_GRACE_MS` in `open_obi_energy_meter/src/main.cpp`. Der Settings-Umschalter selbst
+   (`/api/lora/sf`) speichert nur die *gewünschte* Boot-SF im NVS — das Anwenden erfordert immer einen
+   Neustart, bewusst niemals ein Live-Hot-Swap, da beide Seiten schon übereinstimmen müssen, bevor eine von
+   beiden die Änderung anwendet.
+
+**Gemessener Tradeoff** (derselbe Reader, derselbe Standort, zwei aufeinanderfolgende ~3-Minuten-Fenster):
+Der RSSI ist praktisch gleich, wie erwartet — der Spreading Factor ändert nicht die empfangene
+Signalstärke, nur die Demodulator-Empfindlichkeitsmarge (SF7 Ø -71,2 dBm vs. SF9 Ø -68,8 dBm, innerhalb
+normaler HF-Schwankungen). SNR: SF7 Ø 12,1 dB vs. SF9 Ø 9,2 dB. Bei der tatsächlichen Entfernung dieses
+Readers ist keiner der beiden nahe an seiner Rauschgrenze, daher zeigt sich der eigentliche Vorteil von SF9
+(≈2,5 dB zusätzliche Empfängerempfindlichkeit pro SF-Stufe) hier nicht als *bessere* Empfangsqualität — er
+würde bei einem deutlich weiter entfernten oder stärker verdeckten Reader zum Tragen kommen, was der
+eigentliche Grund ist, SF9 statt des SF7-Standards zu wählen, keine allgemeine Empfangs-Verbesserung.
+
+**Akku-Kosten — der eigentliche Tradeoff, nicht die Empfangsqualität**: Die LoRa-Sendezeit (Time-on-Air)
+skaliert bei fester Bandbreite grob mit 2^SF. Bei BW500 wächst die Sendezeit der ≈68-Byte-Frames des
+Readers von ≈32 ms (SF7) auf ≈107 ms (SF9) — etwa das 3,4-fache an Funk-Einschaltzeit pro Übertragung, für
+jeden Announce/Energy-Report/ACK-Austausch, den der Reader macht. Der LoRa-Sender ist einer der größten
+Einzelverbraucher im Energiebudget des Readers pro Aufwachzyklus, daher bedeutet das beim gleichen
+Report-Intervall eine spürbar kürzere Akkulaufzeit, grob proportional zu diesem Faktor 3,4 (ein längeres
+Report-Intervall tauscht das wieder gegen veraltetere Werte ein — ein separater Tradeoff). Das wurde
+**nicht** gegen einen echten mehrwöchigen Akku-Entladetest gemessen — den Faktor 3,4 der Sendezeit als
+obere Abschätzung für den tatsächlichen Akku-Effekt verstehen, nicht als gemessenen mAh-Wert.
+
+**Nutzung auf eigenes Risiko.** SF9 ist eine nicht unterstützte, zweckentfremdete Konfiguration: Sie
+erforderte das Patchen von drei unabhängigen, fest codierten SF7-Annahmen in der Closed-Source-Vendor-
+Firmware, die nie für einen anderen Spreading Factor als SF7 ausgelegt war, verifiziert an genau einem
+physischen Reader-Modell (DWSB20.2TH) an einem Gateway. Es gibt dafür keinen OBI-/Hersteller-Support, und
+die kürzere Akkulaufzeit sowie jede dadurch verursachte Zuverlässigkeitseinbuße liegt vollständig bei
+demjenigen, der es aktiviert. Die Settings-Oberfläche des Gateways zeigt beide Punkte direkt neben dem
+Umschalter an (siehe `gateway_web.cpp`).
+
 ## Warum ein Glue-Stub statt direktem BL in die C-Funktion?
 
 Die Vendor-Firmware benutzt an Patch-Stellen oft KEINE AAPCS-Konvention

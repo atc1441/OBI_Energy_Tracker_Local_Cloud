@@ -54,6 +54,16 @@ struct Reader {
 extern Reader readers[];
 extern const int MAX_READERS;
 extern const uint8_t GWID[6];
+// LoRa spreading factor actually applied at the last boot (7 or 9) -- loaded from NVS ("obigw"/"lora_sf")
+// before radio.begin(), default 7. Read-only from gateway_web.cpp's perspective; changing it is a
+// save-to-NVS-then-reboot operation (see /api/lora/sf in gateway_web.cpp) since the reader has to be
+// re-flashed to match FIRST and both sides must never disagree in the meantime -- not something to hot-swap
+// on a running radio. Both gateway and every affected reader must use the SAME SF or the link goes deaf.
+extern uint8_t g_loraSF;
+// What the radio is ACTUALLY configured to right now -- normally equal to g_loraSF, but can briefly differ
+// during a reader-OTA (forced to SF7 for the bootloader, see gw_ota_arm() in main.cpp). This is the one to
+// show on the dashboard/overview as "currently active SF" -- g_loraSF only reflects what boots next.
+extern uint8_t g_liveSF;
 
 // LoRa-side actions the web UI triggers (defined in main.cpp)
 void gw_request_interval(const uint8_t handle[3], uint16_t seconds);  // set the reader's upload interval

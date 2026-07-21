@@ -269,6 +269,7 @@ static String statusJson() {
     j += ",\"tz\":" + jstr(g_tz) + ",\"ntp\":" + jstr(g_ntp) + ",\"time\":\"" + tb + "\",\"time_valid\":" + String(tv ? "true" : "false"); }
   j += ",\"night_mode\":" + String(g_nightMode ? "true" : "false");
   j += ",\"hide_unbound\":" + String(g_hideUnbound ? "true" : "false");
+  j += ",\"lora_sf\":" + String(g_loraSF);   // SF actually running since boot -- see /api/lora/sf
   j += ",\"wifi\":" + String(g_wifiOk ? "true" : "false");
   j += ",\"ip\":\"" + (g_wifiOk ? WiFi.localIP().toString() : String("-")) + "\"";
   j += ",\"wifi_rssi\":" + String(g_wifiOk ? WiFi.RSSI() : 0);
@@ -289,7 +290,7 @@ static String statusJson() {
          ",\"backend\":" + jstr(g_usingOtaHist ? "ota" : "userdata") +
          ",\"total\":" + String((uint32_t)ht) + ",\"used\":" + String((uint32_t)hu) +
          ",\"daily_total\":" + String((uint32_t)dt) + ",\"daily_used\":" + String((uint32_t)du) + "}"; }
-  j += ",\"freq_mhz\":869.5,\"bw_khz\":500,\"sf\":7";
+  j += ",\"freq_mhz\":869.5,\"bw_khz\":500,\"sf\":" + String(g_liveSF);   // actually-active SF, not the boot-time default
   j += ",\"mqtt\":{\"host\":" + jstr(g_mqttHost) + ",\"port\":" + String(g_mqttPort);
   j += ",\"user\":" + jstr(g_mqttUser) + ",\"topic\":" + jstr(g_mqttTopic);
   j += ",\"tls\":" + String(g_mqttTls ? "true" : "false");
@@ -1060,6 +1061,23 @@ static void handleHideUnbound() {
   server.send(200, "application/json", String("{\"ok\":true,\"on\":") + (g_hideUnbound ? "true" : "false") + "}");
 }
 
+// LoRa spreading factor (7 or 9) -- only PERSISTS the choice to NVS; g_loraSF itself (what the radio is
+// actually running right now) only changes on the next boot, since radio.begin() is a setup()-only call
+// (see main.cpp) -- deliberately NOT a live hot-swap. This is a "reboot required" setting on purpose: the
+// paired reader(s) must already be reflashed to the SAME SF first (see ../reader_firmware_mod), or this
+// gateway goes deaf to them the moment it reboots into the new value -- the caller/UI is responsible for
+// getting that sequencing right, not this handler.
+static void handleLoraSF() {
+  if (server.hasArg("sf")) {
+    int sf = server.arg("sf").toInt();
+    if (sf == 7 || sf == 9) {
+      prefs.begin("obigw", false); prefs.putUChar("lora_sf", (uint8_t)sf); prefs.end();
+      Serial.printf("[settings] lora_sf saved as %d (applies after reboot; currently running SF%d)\n", sf, g_loraSF);
+    } else { server.send(400, "application/json", "{\"ok\":false,\"err\":\"sf\"}"); return; }
+  }
+  server.send(200, "application/json", String("{\"ok\":true,\"active\":") + g_loraSF + "}");
+}
+
 // ---- reader firmware OTA upload (multipart, .bin) --------------------------
 static bool s_otaOk = false;
 static void handleOtaUpload() {
@@ -1477,6 +1495,16 @@ button:disabled{opacity:.5;cursor:default}
  </div>
 
  <div class=card>
+  <h3>📡 <span id=hlora>LoRa-Reichweite</span></h3>
+  <div class=stat id=lorastat>…</div>
+  <label id=llorasf>Spreizfaktor (Spreading Factor)</label>
+  <select id=lorasf onchange=loraSfChanged()><option value=7>SF7 (Standard)</option><option value=9>SF9 (mehr Reichweite, langsamer)</option></select>
+  <p class=cap id=lorawarn style="color:var(--amber)"></p>
+  <p class=cap id=lorawarn9 style="color:var(--red);display:none"></p>
+  <div class=row><button type=button onclick=saveLoraSf()><span id=blorasave>Speichern</span></button><span class=msg id=lorasfmsg></span></div>
+ </div>
+
+ <div class=card>
   <h3>⬆ Firmware</h3>
   <div class=stat id=fwcur>…</div>
   <div class=row style="margin-top:2px"><button class=g id=ghbtn onclick=ghCheck()>Auf Updates prüfen</button><button class=g id=ghdl onclick=ghUpdate()>Neueste neu laden</button></div>
@@ -1534,7 +1562,13 @@ $('lghivl').textContent=t('Prüfintervall','Check interval');$('oghH').textConte
 $('htime').textContent=t('Zeit','Time');$('ltz').textContent=t('Zeitzone','Timezone');$('lntp').textContent=t('NTP-Server','NTP server');$('btz').textContent=t('Speichern','Save');
 $('hmisc').textContent=t('Sonstiges','Misc');$('lnight').textContent=t('Nachtmodus (normale LED-Aktivität aus)','Night mode (mute normal LED activity)');
 $('bnsave').textContent=t('Speichern','Save');
-let cfg=false,tzc=false,ghc=false;
+$('hlora').textContent=t('LoRa-Reichweite','LoRa range');$('llorasf').textContent=t('Spreizfaktor (Spreading Factor)','Spreading factor');
+$('lorasf').options[0].textContent=t('SF7 (Standard)','SF7 (default)');$('lorasf').options[1].textContent=t('SF9 (mehr Reichweite, langsamer)','SF9 (more range, slower)');
+$('lorawarn').textContent=t('Nur ändern, wenn ALLE Reader bereits mit der passenden SF-Firmware geflasht sind — sonst verlieren sie sofort nach dem Neustart die Verbindung. Änderung wirkt erst nach einem Neustart des Gateways.','Only change this once ALL readers are already flashed with matching-SF firmware — otherwise they lose the connection the moment this reboots. Takes effect after a gateway reboot.');
+$('lorawarn9').textContent=t('⚠️ SF9 kostet deutlich mehr Sendezeit pro Übertragung (grob das 3,4-Fache) und damit spürbar mehr Akku beim Reader als SF7 — nur für Reader mit schwachem Empfang sinnvoll. Inoffizielle, ungetestete Anpassung der Reader-Firmware: Nutzung auf eigenes Risiko.','⚠️ SF9 costs noticeably more airtime per transmission (roughly 3.4×) and therefore meaningfully more reader battery than SF7 — only worth it for readers with a weak signal. An unofficial, off-label reader firmware patch: use at your own risk.');
+$('blorasave').textContent=t('Speichern','Save');
+let cfg=false,tzc=false,ghc=false,loraSfc=false;
+function loraSfChanged(){$('lorawarn9').style.display=$('lorasf').value==='9'?'':'none';}
 async function load(){try{
   const s=await(await fetch('/api/status')).json();
   $('wfstat').innerHTML=s.wifi?`<span class="dot on"></span>${t('Verbunden','Connected')} · ${s.ip} · ${s.wifi_rssi} dBm`:`<span class="dot off"></span>${t('nicht verbunden','offline')}`;
@@ -1547,6 +1581,8 @@ async function load(){try{
    $('au').value=(s.auth&&s.auth.user)||'';$('night').checked=!!s.night_mode;}
   $('austat').innerHTML=(s.auth&&s.auth.enabled)?`<span class="dot on"></span>${t('geschützt als','protected as')} <code>${s.auth.user}</code>`:`<span class="dot idle"></span>${t('offen — kein Passwort','open — no password')}`;
   $('fwcur').innerHTML=`${t('Aktuell','Current')}: <code>${s.fw?s.fw.version:'?'}</code> (${s.fw?s.fw.target:''})`;
+  if(s.lora_sf&&!loraSfc){loraSfc=true;$('lorasf').value=s.lora_sf;loraSfChanged();}
+  if(s.lora_sf)$('lorastat').innerHTML=`${t('Aktiv seit letztem Neustart','Active since last reboot')}: <code>SF${s.lora_sf}</code>`;
   if(s.gh_auto&&!ghc){ghc=true;$('ghauto').checked=!!s.gh_auto.enabled;$('ghrepo').value=s.gh_auto.repo||'';
    let h=s.gh_auto.interval_h||24;
    if(h>=24&&h%24===0){$('ghivlu').value=24;$('ghivln').value=h/24;}else{$('ghivlu').value=1;$('ghivln').value=h;}}
@@ -1556,6 +1592,13 @@ async function load(){try{
 }catch(e){}}
 function tzPick(){const v=$('tzsel').value;if(v)$('tztext').value=v;}
 async function saveNightMode(){const m=$('nmsg');m.textContent='…';try{const r=await(await fetch('/api/night_mode',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'enabled='+($('night').checked?'1':'0')})).json();if(!r.ok)throw Error();m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);}catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
+async function saveLoraSf(){const sf=$('lorasf').value;
+ const risk9=sf==='9'?t(' SF9 verbraucht außerdem spürbar mehr Akku pro Reader (grob das 3,4-Fache an Sendezeit) und ist eine inoffizielle, ungetestete Anpassung — Nutzung auf eigenes Risiko.',' SF9 also uses meaningfully more reader battery (roughly 3.4× the airtime) and is an unofficial, off-label patch — use at your own risk.'):'';
+ if(!confirm(t('SF'+sf+' speichern? Erst NACH dem manuellen Neustart aktiv. Alle Reader müssen dann bereits auf SF'+sf+' geflasht sein, sonst sind sie nach dem Neustart nicht mehr erreichbar.','Save SF'+sf+'? Only takes effect after a manual reboot. Every reader must already be flashed to SF'+sf+' by then, or it becomes unreachable the moment this reboots.')+risk9))return;
+ const m=$('lorasfmsg');m.textContent='…';
+ try{const r=await(await fetch('/api/lora/sf',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'sf='+sf})).json();if(!r.ok)throw Error();
+  m.textContent=t('gespeichert — wirkt erst nach Neustart (Firmware-Bereich oben)','saved — takes effect after a reboot (Firmware section above)');}
+ catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
 async function saveTz(){const z=$('tztext').value.trim();if(!z){$('tzmsg').textContent=t('TZ eingeben','enter a TZ');return;}
  const n=$('ntptext').value.trim();if(!n){$('tzmsg').textContent=t('NTP-Server eingeben','enter an NTP server');return;}
  $('tzmsg').textContent='…';try{await fetch('/api/tz',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'tz='+encodeURIComponent(z)+'&ntp='+encodeURIComponent(n)});}catch(e){}
@@ -3039,6 +3082,7 @@ static void startServices() {
   server.on("/api/tz",   HTTP_POST, guard(handleTz));       // set the timezone (history day-buckets)
   server.on("/api/night_mode", HTTP_POST, guard(handleNightMode)); // disable normal-operation LED activity
   server.on("/api/hideunbound", HTTP_POST, guard(handleHideUnbound)); // dashboard: hide unbound reader cards
+  server.on("/api/lora/sf", HTTP_POST, guard(handleLoraSF));          // LoRa spreading factor (7/9) -- reboot required
   server.on("/api/wifi", HTTP_POST, guard(handleWifiPortal));        // open the on-demand WiFiManager portal (AP)
   server.on("/api/wifi/scan", HTTP_GET, guard(handleWifiScan));      // list nearby networks (dashboard panel)
   server.on("/api/wifi/connect", HTTP_POST, guard(handleWifiConnect)); // connect to a chosen network in-place

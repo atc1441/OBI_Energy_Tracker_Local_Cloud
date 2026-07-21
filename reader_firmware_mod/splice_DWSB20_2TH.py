@@ -1,3 +1,4 @@
+import argparse
 import re
 import struct
 from pathlib import Path
@@ -5,9 +6,24 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SRC = HERE / "reader_stock_v57.bin"
 DST = HERE / "reader_modded_89mock_v90_DWSB20_2TH.bin"
+DST_SF9 = HERE / "reader_modded_89mock_v90_DWSB20_2TH_sf9.bin"
 HOOKS_BIN = HERE / "build" / "hooks_DWSB20_2TH.bin"
 HOOKS_SYM = HERE / "build" / "hooks_DWSB20_2TH.sym"
 BASE = 0x4000
+
+# --sf9: LoRa spreading factor SF7 -> SF9 (2026-07-21) -- see the matching comment in splice.py for the full
+# writeup of how these two addresses were found and verified, plus the ECDH-reply timeout widen (300ms ->
+# 500ms at 0x66DA) needed to actually make SF9 work -- the SF patch alone left the reader stuck in a
+# handshake livelock, live-confirmed and root-caused via a separately reversed reader_v1.2.1.elf that shares
+# identical code+addresses for this state machine. Must be paired with the gateway's own SF setting
+# (Settings page): flash this to the reader FIRST while the gateway is still on SF7 (the OTA transfer itself
+# needs a working same-SF link), THEN switch the gateway to SF9.
+#
+# THIRD SF7 hardcode (2026-07-21, live-confirmed via the case button): a separate, IDA-unrecognized TX-config
+# helper at 0x6C64-0x6C92, reached from `sub_D370` (BL @ 0xD3D4) off the energy-report/announce transmit path
+# -- not through radio_init_config at all. See the matching comment in splice.py for the full writeup.
+# `movs r1,#7` at 0x6C78 (`07 21`) -> `movs r1,#9` (`09 21`), one byte.
+SF9_PATCHES = [(0xB6D8, 0x07, 0x09), (0xB700, 0x07, 0x09), (0x66DA, 0x2D, 0xF5), (0x6C78, 0x07, 0x09)]
 
 # DWSB20.2TH-specific variant. Build with `./build.sh DWSB20_2TH` first
 # (adds -DFIX_NEGATIVE_POWER for both hooks.c and entry.S).
@@ -89,6 +105,12 @@ def load_symbols(path):
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--sf9", action="store_true",
+                     help="also patch the LoRa spreading factor SF7->SF9 (must match the gateway's own SF setting)")
+    args = ap.parse_args()
+    dst = DST_SF9 if args.sf9 else DST
+
     with open(SRC, "rb") as f:
         data = bytearray(f.read())
     orig_len = len(data)
@@ -111,6 +133,13 @@ def main():
         print(f"patch @{hex(addr)}: BL -> {sym}@{hex(target)}  bytes={patch.hex(' ')}")
         data[off:off + len(patch)] = patch
 
+    if args.sf9:
+        for addr, old, new in SF9_PATCHES:
+            off = addr - BASE
+            assert data[off] == old, f"@{hex(addr)}: expected {old:#04x}, found {data[off]:#04x} -- already patched or wrong base file?"
+            data[off] = new
+            print(f"patch @{hex(addr)}: SF7->SF9 ({old:#04x} -> {new:#04x})")
+
     data += hooks_bin
 
     # softver 57 -> 89 -- deliberately does NOT match the "v90" release
@@ -130,10 +159,10 @@ def main():
         assert data[off] == 0x39 and data[off + 1] == 0x20, f"unexpected bytes at {hex(off)}: {data[off:off+2].hex()}"
         data[off] = 0x59  # 0x59 = 89 decimal (see comment above -- intentionally != the v90 in DST's filename)
 
-    with open(DST, "wb") as f:
+    with open(dst, "wb") as f:
         f.write(data)
     print("orig_len", orig_len, "hooks_bin_len", len(hooks_bin), "new_len", len(data))
-    print("written:", DST)
+    print("written:", dst)
 
 
 if __name__ == "__main__":

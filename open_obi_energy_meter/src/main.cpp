@@ -33,11 +33,21 @@
 // ---- reversed OBI radio configuration --------------------------------------
 #define OBI_FREQ_MHZ   869.5f
 #define OBI_BW_KHZ     500.0f
-#define OBI_SF         7
+#define OBI_SF_DEFAULT 7
 #define OBI_CR         5
 #define OBI_SYNCWORD   0x12          // RadioLib private -> SX126x 0x1424
 #define OBI_TXPWR_DBM  22
 #define OBI_PREAMBLE   12
+
+// Spreading factor actually used -- normally SF7 (the reader's stock/default setting), user-selectable to
+// SF9 for extra range via Settings (see reader.h for the full explanation). Loaded from NVS in setup()
+// before radio.begin(); a user-initiated change there still requires a reboot to apply. g_liveSF (below) is
+// separate: it's what the RADIO is ACTUALLY configured to RIGHT NOW, which can differ from g_loraSF for the
+// DURATION of a reader-OTA -- the reader's bootloader only ever speaks SF7 (a separate flash region, never
+// touched by the SF9 patch in reader_firmware_mod), regardless of what SF its app firmware runs at. See
+// applyLiveSF()/gw_ota_arm() below.
+uint8_t g_loraSF = OBI_SF_DEFAULT;
+uint8_t g_liveSF = OBI_SF_DEFAULT;   // what the radio is ACTUALLY running right now (set in setup(), see above)
 
 // ---- our gateway identity (any 6 bytes; the reader stores it on bind) -------
 const uint8_t GWID[6] = { 'O', 'B', 'I', 'E', 'S', 'P' };
@@ -469,6 +479,22 @@ static uint8_t  g_otaTarget[3] = {0};
 static uint8_t  g_otaVersion = 1;
 static bool     g_otaActive = false;
 static bool     g_otaPulled = false;   // target actually requested a block (entered its bootloader for THIS OTA)
+static uint32_t g_otaSfHoldMs = 0;     // keep the radio on SF7 this long past OTA completion (stray retries)
+static uint32_t g_otaArmedMs = 0;      // millis() gw_ota_arm() was called -- see the SF7-switch grace period below
+
+// Live-reconfigure the SX1262's spreading factor -- a plain SPI SetModulationParams write (RadioLib
+// SX126x::setSpreadingFactor), NOT a reboot. standby() first because the datasheet only allows changing
+// modulation params outside RX/TX; startReceive() resumes the normal listen loop right after. Used to jump
+// to SF7 for the duration of a reader-OTA (see gw_ota_arm() below) and back to g_loraSF once it's done --
+// separate from g_loraSF itself, which only changes what setup() applies on the NEXT boot.
+static void applyLiveSF(uint8_t sf) {
+  if (sf == g_liveSF) return;
+  radio.standby();
+  int st = radio.setSpreadingFactor(sf);
+  radio.startReceive();
+  if (st == RADIOLIB_ERR_NONE) { g_liveSF = sf; Serial.printf("[lora] live SF -> SF%d\n", sf); }
+  else Serial.printf("[lora] setSpreadingFactor(%d) failed: %d\n", sf, st);
+}
 
 bool gw_ota_begin(const uint8_t handle[3], uint32_t total, uint8_t version) {
   if (g_ota) { free(g_ota); g_ota = nullptr; }
@@ -483,13 +509,34 @@ bool gw_ota_begin(const uint8_t handle[3], uint32_t total, uint8_t version) {
 void gw_ota_write(const uint8_t *data, uint32_t len) {
   if (g_ota && g_otaGot + len <= g_otaSize) { memcpy(g_ota + g_otaGot, data, len); g_otaGot += len; }
 }
+// How long to let the target's CURRENT app firmware keep running at its current SF after arming, before
+// giving up and jumping the gateway to SF7 for the bootloader. The normal trigger (3 ACKs advertising a
+// mismatched version) only reaches the reader over ITS current SF -- switching to SF7 immediately, before
+// that has any chance to land, means an SF9-app reader never even sees the nudge to reset. Sized generously
+// (45s) to cover a full announce->bind->ECDH handshake from scratch (e.g. right after a gateway reboot, ~
+// 10-15s live-observed) PLUS a few report cycles for the mismatch nudge on a short upload_interval -- a
+// tighter 15s was live-confirmed too short when the reader also had to re-pair from zero. A reader
+// configured with a long interval (tens of seconds to minutes) may still need this OTA re-armed once it's
+// actually had a chance to report and notice the mismatch -- this is a pragmatic default, not a guarantee
+// for every interval.
+static const uint32_t OTA_SF9_GRACE_MS = 45000;
+
 bool gw_ota_arm() {
   if (!g_ota || g_otaGot != g_otaSize) { Serial.printf("[ota] arm fail %u/%u\n", g_otaGot, g_otaSize); return false; }
   g_otaActive = true;
+  g_otaArmedMs = millis();
+  g_otaSfHoldMs = 0;
+  // Deliberately does NOT force SF7 here (see OTA_SF9_GRACE_MS above) -- stays on whatever SF is currently
+  // live so the target's app firmware (if that's where it currently is) can receive the mismatched-version
+  // ACK and reset into its bootloader on its own. The loraTask() loop below switches to SF7 once either the
+  // grace period elapses or the target is confirmed already pulling (both handled there uniformly).
   Serial.println("[ota] armed — advertising new version in the ACK; reader will reset & pull");
   return true;
 }
-void gw_ota_cancel() { g_otaActive = false; g_otaPulled = false; if (g_ota) { free(g_ota); g_ota = nullptr; } g_otaSize = 0; }
+void gw_ota_cancel() {
+  g_otaActive = false; g_otaPulled = false; if (g_ota) { free(g_ota); g_ota = nullptr; } g_otaSize = 0;
+  g_otaSfHoldMs = millis() + 3000;   // give a few seconds for any in-flight retry before reverting SF
+}
 bool gw_ota_active() { return g_otaActive; }
 uint32_t gw_ota_size() { return g_otaSize; }
 uint32_t gw_ota_progress() { return g_otaServed > g_otaSize ? g_otaSize : g_otaServed; }
@@ -523,6 +570,7 @@ static void serveOtaRequest(const uint8_t handle[3], const uint8_t *req, size_t 
     if (pos < g_otaSize) { uint32_t s = pos + 64 > g_otaSize ? g_otaSize : pos + 64; if (s > g_otaServed) g_otaServed = s; }
     if (g_otaServed >= g_otaSize) {                   // whole image served -> stop advertising the version
       g_otaActive = false;
+      g_otaSfHoldMs = millis() + 3000;   // give the reader a few seconds to re-request a block if its own CRC check fails
       Serial.println("[ota] full image served — disarmed (reader will validate & flash)");
     }
   }
@@ -1041,6 +1089,20 @@ static void loraTask(void *) {
     if (!ota)                                         // re-pair safety net for assigned, not-yet-keyed readers
       for (auto &r : readers)
         if (r.used && r.assigned && !r.haveKey && now - r.lastBind >= 3000) sendPairAcks(&r, r.lastRssi);
+    // OTA armed but the target hasn't started pulling yet: give its current app firmware OTA_SF9_GRACE_MS
+    // to notice the mismatched-version ACK (over whatever SF it's currently running) and reset into its
+    // bootloader on its own, THEN jump to SF7 -- the bootloader's only SF -- to actually catch that pull.
+    // If the target was already sitting in its bootloader (SF7 already), this fires immediately (elapsed
+    // time since arming is already past the grace window in that case... no -- see gw_ota_arm(): it simply
+    // doesn't force SF7 anymore, so an already-in-bootloader target is instead caught by this same check
+    // once the grace period elapses, same as a fresh reset).
+    if (ota && !g_otaPulled && g_liveSF != 7 && (now - g_otaArmedMs >= OTA_SF9_GRACE_MS))
+      applyLiveSF(7);
+    // an OTA forced the radio to SF7 for the reader's bootloader -- once it's fully finished (not just
+    // served -- g_otaSfHoldMs also covers a few seconds for a stray retry) and the desired steady-state SF
+    // differs, switch back.
+    if (!ota && g_liveSF != g_loraSF && (g_otaSfHoldMs == 0 || (int32_t)(now - g_otaSfHoldMs) >= 0))
+      applyLiveSF(g_loraSF);
   }
 }
 
@@ -1052,14 +1114,22 @@ void setup() {
   delay(200);
   flash_dbg_force_dio();   // OBI board: switch esp_flash to DIO before anything reads flash/NVS/OTA
   led_setup(); led_set(LED_BOOT);   // status LED (boards with PIN_STATUS_LED, e.g. OBI gateway GPIO0)
+
+  // LoRa spreading factor: NVS-persisted, default SF7 (stock). Read directly here (own short-lived
+  // Preferences handle) rather than waiting for gateway_web's own -- this runs well before the web/WiFi
+  // task starts, and radio.begin() right below is the only place this value gets applied.
+  { Preferences p; p.begin("obigw", true); g_loraSF = p.getUChar("lora_sf", OBI_SF_DEFAULT); p.end(); }
+  if (g_loraSF != 7 && g_loraSF != 9) g_loraSF = OBI_SF_DEFAULT;   // sanitize a corrupt/unexpected NVS value
+
   Serial.println("\n=== OBI LoRa mini-gateway ===");
   Serial.printf("gwid: %.6s   radio: %.1f MHz BW%.0f SF%d CR4/%d +%ddBm\n",
-                (const char *)GWID, OBI_FREQ_MHZ, OBI_BW_KHZ, OBI_SF, OBI_CR, OBI_TXPWR_DBM);
+                (const char *)GWID, OBI_FREQ_MHZ, OBI_BW_KHZ, g_loraSF, OBI_CR, OBI_TXPWR_DBM);
 
   SPI.begin(PIN_LORA_SCK, PIN_LORA_MISO, PIN_LORA_MOSI, PIN_LORA_NSS);
-  int st = radio.begin(OBI_FREQ_MHZ, OBI_BW_KHZ, OBI_SF, OBI_CR,
+  int st = radio.begin(OBI_FREQ_MHZ, OBI_BW_KHZ, g_loraSF, OBI_CR,
                        OBI_SYNCWORD, OBI_TXPWR_DBM, OBI_PREAMBLE, LORA_TCXO_V, false);
   if (st != RADIOLIB_ERR_NONE) { Serial.printf("radio.begin FAILED %d — halt\n", st); while (1) delay(1000); }
+  g_liveSF = g_loraSF;   // matches what begin() just applied; see applyLiveSF()/gw_ota_arm() for later changes
 #if LORA_DIO2_RFSW
   radio.setDio2AsRfSwitch(true);
 #endif
