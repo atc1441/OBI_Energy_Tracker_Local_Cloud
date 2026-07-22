@@ -99,8 +99,10 @@ flowchart TD
        --pair-sensor --ssid <your-wifi> --password <your-wifi-pw>
    ```
    (Or use the web tool [../06-tools/obi_gateway_ble.html](../06-tools/obi_gateway_ble.html) and paste the
-   `SetTMPCertificate` fields from `ble_config.json`. On Linux, Web Bluetooth is behind a flag there —
-   enable `chrome://flags/#enable-experimental-web-platform-features` and relaunch the browser first.)
+   `SetTMPCertificate` fields from `ble_config.json`. Note that you must unescape or replace the escaped 
+   line breaks (`\n`) in the JSON to use the values. 
+   On Linux, Web Bluetooth is behind a flag there —  enable 
+   `chrome://flags/#enable-experimental-web-platform-features` and relaunch the browser first.)
 
    > ⚠️ **Stock firmware 1.0.1 caveat:** the WiFi password is only handled correctly up to **32 bytes** on
    > the device side — a longer one is silently truncated/rejected and the bridge fails to join. Keep it
