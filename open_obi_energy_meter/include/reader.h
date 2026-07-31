@@ -37,6 +37,14 @@ struct Reader {
   uint32_t lastEnergyMs = 0;     // last successfully decoded ENERGY frame specifically — calcPower's dt base;
                                   // must NOT reuse lastSeenMs, which other frame types also bump and would
                                   // otherwise make the delta window collapse to a few ms, not the real report interval
+  // "new baseline" confirmation for the energy plausibility filter (see plausibleEnergyStep() in main.cpp):
+  // a single implausible jump is rejected outright, but a reader physically moved to a different meter (or
+  // a meter that got replaced) produces a LEGITIMATE large, permanent jump -- distinguished from a one-off
+  // glitch by seeing the SAME new value repeat a few times in a row instead of just once.
+  bool     havePendingJump = false;
+  uint32_t pendingImport = 0, pendingExport = 0;   // most recent implausible (vs. import_/export_) candidate
+  uint32_t pendingMs = 0;        // millis() the candidate above was seen
+  uint8_t  pendingStreak = 0;    // consecutive readings landing close to the candidate above
   // config
   uint16_t setInterval = 0;      // last upload-interval requested (shown in UI)
   uint8_t  intervalTx  = 0;      // remaining cmd-14 retransmits to send

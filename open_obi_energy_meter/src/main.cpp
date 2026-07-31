@@ -727,6 +727,31 @@ static bool legacyValid(const uint8_t *pl, size_t n) {
   uint16_t mv = 20 * pl[2];
   return pl[1] < 50 && mv >= 1500 && mv <= 4500;
 }
+
+// ---- energy VALUE sanity filter (see GitHub issue #51: multi-billion-W spikes in Import/Export/Power) ----
+// Neither validity check above looks at the actual import/export/power bytes: energyValid() only proves the
+// 1.2.x layout's own CRC16 matches (~1/65536 false-accept, good), but legacyValid() only checks hardver+
+// battery (~11% false-accept on random bytes) and never touches the energy fields at all. A frame can pass
+// either check while still carrying garbage import/export/power -- confirmed NOT a radio-level bit error
+// (the SX1262's own hardware CRC, radio.setCRC(2), already rejects a corrupted-in-the-air packet before it
+// ever reaches here -- see handleRx()'s `if (st != RADIOLIB_ERR_NONE ...) return;`). The two remaining
+// candidates are a reader that computed a bad value before encrypting it (the same bug class already fixed
+// for DWSB20.2TH, see reader_firmware_mod/README.md, just on a different/older reader generation) or a
+// hardware-CRC-clean frame TEA-decrypted with a momentarily stale key (e.g. a reader-side re-bind racing the
+// gateway's own key update) -- either way the fields downstream are untrustworthy and neither existing check
+// catches it. No real residential/small-commercial installation draws anywhere near this many watts
+// continuously, so bound both the reported power and the implied average power from the Wh-counter deltas.
+static const uint32_t OBI_MAX_PLAUSIBLE_W = 50000;
+
+// True if going from oldWh (the reader's last ACCEPTED reading) to newWh over dtMs implies an average power
+// within OBI_MAX_PLAUSIBLE_W in either direction. The counters are cumulative and should only crawl, never
+// leap -- this catches a wild jump regardless of which of the two causes above produced it.
+static bool plausibleEnergyStep(uint32_t oldWh, uint32_t newWh, uint32_t dtMs) {
+  if (dtMs < 1000) dtMs = 1000;   // floor -- avoid dividing by a near-zero interval on a fast retry
+  int64_t deltaWh = (int64_t)newWh - (int64_t)oldWh;
+  int64_t avgW = deltaWh * 3600000LL / (int64_t)dtMs;
+  return avgW >= -(int64_t)OBI_MAX_PLAUSIBLE_W && avgW <= (int64_t)OBI_MAX_PLAUSIBLE_W;
+}
 // legacy 3x.x / 1.0.x layout (gateway sub_4200BCFC): softver[0] hardver[1] battery[2]
 // flags[3] (b0 ir, b1 lowpower, b2 timesync) pos[4:8]BE neg[8:12]BE power[12:16]BE. No leading crc.
 static bool printEnergyOld(const uint8_t *pl, size_t n) {
@@ -958,11 +983,68 @@ static void handleRx() {
           }
           // store telemetry for the dashboard / MQTT
           uint32_t nowMs = millis();
-          r->haveData = true; r->legacy = legacy; r->lastSeenMs = nowMs; r->lastEnergyMs = nowMs; r->lastRssi = rssi; r->lastSnr = snr;
-          if (legacy) { r->softver = p[0]; r->hardver = p[1]; r->battery_mV = 20 * p[2]; r->flags = p[3];
-                        r->import_ = rd_be32(p + 4); r->export_ = rd_be32(p + 8); r->power = rd_be32(p + 12); }
-          else        { r->softver = p[2]; r->hardver = p[3]; r->battery_mV = 20 * p[4]; r->flags = p[5];
-                        r->import_ = rd_be32(p + 6); r->export_ = rd_be32(p + 10); r->power = rd_be32(p + 14); }
+          uint8_t  nSoftver, nHardver, nFlags; uint16_t nBattery_mV; uint32_t nImport, nExport, nPower;
+          if (legacy) { nSoftver = p[0]; nHardver = p[1]; nBattery_mV = 20 * p[2]; nFlags = p[3];
+                        nImport = rd_be32(p + 4); nExport = rd_be32(p + 8); nPower = rd_be32(p + 12); }
+          else        { nSoftver = p[2]; nHardver = p[3]; nBattery_mV = 20 * p[4]; nFlags = p[5];
+                        nImport = rd_be32(p + 6); nExport = rd_be32(p + 10); nPower = rd_be32(p + 14); }
+          // Power: instantaneous, not cumulative -- a wild reading (e.g. the DWSB20.2TH 24-bit sign bug)
+          // gets clamped to n/a rather than gating the whole frame on it; negative is perfectly normal
+          // (feed-in) and is NOT what this bound is about.
+          int32_t nPowerS = (int32_t)nPower;
+          bool powerSane = obi_na(nPower) ||
+                           (nPowerS >= -(int32_t)OBI_MAX_PLAUSIBLE_W && nPowerS <= (int32_t)OBI_MAX_PLAUSIBLE_W);
+          if (!powerSane) Serial.printf("  [energy] %02X%02X%02X: implausible power=%ld, showing n/a\n",
+                                        r->handle[0], r->handle[1], r->handle[2], (long)nPowerS);
+          // Import/export: cumulative counters, should only crawl. Reject a single wild jump outright (see
+          // plausibleEnergyStep() above) -- keeps showing the last known-good reading instead of a spike.
+          // Only checked once a real baseline exists (haveData) and both old/new counters are real readings,
+          // not the n/a sentinel -- a first-ever reading, or the first one after an n/a gap, has nothing
+          // sane to compare against.
+          bool plausible = true;
+          if (r->haveData && r->lastEnergyMs && !obi_na(r->import_) && !obi_na(nImport) &&
+              !obi_na(r->export_) && !obi_na(nExport)) {
+            uint32_t dtMs = nowMs - r->lastEnergyMs;
+            plausible = plausibleEnergyStep(r->import_, nImport, dtMs) &&
+                        plausibleEnergyStep(r->export_, nExport, dtMs);
+          }
+          // A single implausible jump is rejected above, but a reader moved to a different meter (or a
+          // meter that got replaced) produces a LEGITIMATE, permanent jump -- distinguished from a one-off
+          // corrupted/mis-keyed frame by seeing the SAME new value repeat CONFIRM_STREAK times in a row,
+          // each one plausible relative to the PREVIOUS candidate (not the old, now-obsolete baseline).
+          bool newBaseline = false;
+          if (!plausible && !obi_na(nImport) && !obi_na(nExport)) {
+            static const uint8_t CONFIRM_STREAK = 3;
+            bool matchesPending = r->havePendingJump &&
+                plausibleEnergyStep(r->pendingImport, nImport, nowMs - r->pendingMs) &&
+                plausibleEnergyStep(r->pendingExport, nExport, nowMs - r->pendingMs);
+            r->pendingStreak = matchesPending ? r->pendingStreak + 1 : 1;
+            r->havePendingJump = true;
+            r->pendingImport = nImport; r->pendingExport = nExport; r->pendingMs = nowMs;
+            if (r->pendingStreak >= CONFIRM_STREAK) {
+              Serial.printf("  [energy] %02X%02X%02X: jump confirmed after %u matching readings -- adopting as new baseline (meter swap?)\n",
+                            r->handle[0], r->handle[1], r->handle[2], r->pendingStreak);
+              newBaseline = true;
+              r->havePendingJump = false; r->pendingStreak = 0;
+            } else {
+              Serial.printf("  [energy] implausible jump from %02X%02X%02X -- imp %lu->%lu exp %lu->%lu (streak %u/%u) -- rejecting, keeping last known values\n",
+                            r->handle[0], r->handle[1], r->handle[2],
+                            (unsigned long)r->import_, (unsigned long)nImport,
+                            (unsigned long)r->export_, (unsigned long)nExport, r->pendingStreak, CONFIRM_STREAK);
+            }
+          } else if (plausible) {
+            r->havePendingJump = false; r->pendingStreak = 0;   // healthy reading -- drop any stale candidate
+          }
+          r->haveData = true; r->legacy = legacy; r->lastSeenMs = nowMs; r->lastRssi = rssi; r->lastSnr = snr;
+          if (plausible || newBaseline) {
+            r->lastEnergyMs = nowMs;
+            r->softver = nSoftver; r->hardver = nHardver; r->battery_mV = nBattery_mV; r->flags = nFlags;
+            r->import_ = nImport; r->export_ = nExport; r->power = powerSane ? nPower : 0x7FFFFFFF;
+            if (newBaseline) {   // don't let calcPower average across the jump -- restart its window here
+              r->calcAnchorImport = nImport; r->calcAnchorExport = nExport;
+              r->calcAnchorMs = nowMs; r->haveCalcAnchor = true;
+            }
+          }
           // calculated power: average W from the Wh-counter deltas alone — stays correct even when the
           // meter's own power reading is garbage (e.g. the broken 24-bit sign extension on feed-in some
           // DWSB20-2TH units hit, see reader_firmware_mod/README.md). Same idea the history page's
