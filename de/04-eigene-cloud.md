@@ -94,9 +94,11 @@ flowchart TD
        --ssid <dein-wlan> --password <dein-wlan-pw>
    ```
    (Oder das Web‑Tool [../06-tools/obi_gateway_ble.html](../06-tools/obi_gateway_ble.html) und die
-   `SetTMPCertificate`‑Felder aus `ble_config.json` einfügen. Unter Linux steckt Web Bluetooth dort hinter
-   einem Flag — vorher `chrome://flags/#enable-experimental-web-platform-features` aktivieren und den
-   Browser neu starten.)
+   `SetTMPCertificate`‑Felder aus `ble_config.json` einfügen.
+   Hierbei ist es wichtig, die im JSON escapten Zeilenumbrüche (`\n`) durch normale Zeilenumbrüche zu 
+   ersetzen bzw. zu unescapen, um die Werte verwenden zu können.
+   Unter Linux steckt Web Bluetooth dort hinter einem Flag — vorher 
+   `chrome://flags/#enable-experimental-web-platform-features` aktivieren und den Browser neu starten.)
 
    > ⚠️ **Stolperstein Stock‑Firmware 1.0.1:** Das WLAN‑Passwort wird geräteseitig nur bis **32 Byte**
    > korrekt verarbeitet — ein längeres wird stillschweigend abgeschnitten bzw. abgelehnt, und die Bridge
