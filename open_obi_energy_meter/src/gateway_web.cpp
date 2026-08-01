@@ -147,6 +147,7 @@ static uint32_t g_ftpLastRunMs = 0xFFFFFFFF;   // same 0xFFFFFFFF "not seeded" c
 static volatile bool g_ftpBusy = false;        // an upload is in flight -- don't start a second one
 static uint8_t  g_ftpLastResult = 0;           // 0 never run, 1 last run ok, 2 last run failed (Settings page)
 static uint32_t g_ftpLastRunS = 0;             // unix time of the last attempt, 0 = never (Settings page)
+static String   g_ftpLastError;                // short human-readable reason for the last failure (Settings page)
 
 // History storage state (see ota_hist.h + the "energy history" section below for the rest) -- declared
 // this early only because statusJson() needs them and is defined well above that section.
@@ -324,7 +325,7 @@ static String statusJson() {
          ",\"port\":" + String(g_ftpPort) + ",\"user\":" + jstr(g_ftpUser) + ",\"path\":" + jstr(g_ftpPath) +
          ",\"interval_min\":" + String(g_ftpIntervalMin) + ",\"next_check_s\":" + String(nextS) +
          ",\"busy\":" + String(g_ftpBusy ? "true" : "false") + ",\"last_result\":" + String(g_ftpLastResult) +
-         ",\"last_run_s\":" + String(g_ftpLastRunS) + "}";
+         ",\"last_run_s\":" + String(g_ftpLastRunS) + ",\"last_err\":" + jstr(g_ftpLastError.c_str()) + "}";
   }
   { size_t ht = 0, hu = 0; historySpace(ht, hu);
     size_t dt = 0, du = 0; dailySpace(dt, du);
@@ -1699,6 +1700,7 @@ const $=i=>document.getElementById(i);
 const _f=window.fetch;window.fetch=(...a)=>_f(...a).then(r=>{if(r.status==401)location.href='/login';return r;});  // session lost -> login
 const de=(localStorage.getItem('lang')||'de')=='de';
 const t=(d,e)=>de?d:e;
+const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 function setL(x){localStorage.setItem('lang',x);location.reload();}   // switch language + re-render
 $('l'+(de?'de':'en')).className='act';                                // mark the active language button
 // h:mm:ss (or m:ss under an hour) countdown text -- re-derived from the server's next_check_s on every
@@ -1765,9 +1767,10 @@ async function load(){try{
    if(m>=60&&m%60===0){$('ftpivlu').value=60;$('ftpivln').value=m/60;}else{$('ftpivlu').value=1;$('ftpivln').value=m;}}
   if(s.ftp){const f=s.ftp;
    const lastTxt=f.last_run_s?(f.last_result===1?t('letzter Upload ok','last upload ok'):t('letzter Upload fehlgeschlagen','last upload failed')):t('noch nie ausgeführt','never run yet');
+   const errTxt=(f.last_result===2&&f.last_err)?' — '+f.last_err:'';
    $('ftpstat').innerHTML=!f.enabled?`<span class="dot idle"></span>${t('deaktiviert','disabled')}`
     :f.busy?`<span class="dot on"></span>${t('Upload läuft…','uploading…')}`
-    :`<span class="${f.last_result===2?'dot off':'dot on'}"></span>${lastTxt}`+(f.enabled?' · '+t('nächster Upload in ','next upload in ')+fmtDur(f.next_check_s):'');}
+    :`<span class="${f.last_result===2?'dot off':'dot on'}"></span>${lastTxt}${esc(errTxt)}`+(f.enabled?' · '+t('nächster Upload in ','next upload in ')+fmtDur(f.next_check_s):'');}
   $('tzstat').innerHTML=(s.time_valid?'<span class="dot on"></span>':'<span class="dot idle"></span>')+`${t('Gerätezeit','Device time')}: <code>${s.time||'?'}</code>`+(s.time_valid?'':` · ${t('noch nicht per NTP synchronisiert','not NTP-synced yet')}`);
   if(!tzc){tzc=true;$('tztext').value=s.tz||'';$('ntptext').value=s.ntp||'';$('tzsel').value=s.tz||'';if($('tzsel').value!==(s.tz||''))$('tzsel').value='';}
 }catch(e){}}
@@ -2875,10 +2878,17 @@ static int listDailyReaderIds(String out[], int maxN) {
 }
 
 // ---- plain FTP client (RFC 959, passive mode only) -- just enough to log in, cd, and STOR a buffer -------
+// Every step logs to Serial (tagged "[ftp]") since real-world FTP servers vary a lot (vsftpd, ProFTPD,
+// FileZilla Server, shared-hosting FTPd, NAS boxes, ...) and the failure modes below were found by testing
+// against exactly one of them (pyftpdlib) -- when a user hits a server this hasn't been exercised against,
+// this trace is the only way to tell which single step broke without physical serial access to their device.
+// (g_ftpLastError itself is declared up with the rest of the g_ftp* state, near the top of the file.)
+
 // Read one control-connection reply line (e.g. "230 Login successful"); returns its 3-digit status code, or
 // 0 on timeout/EOF. Every reply this client cares about is single-line, so a multi-line ("150-...") reply
-// parser isn't needed.
-static int ftpReadReply(WiFiClient &c, String *line = nullptr, uint32_t toMs = 8000) {
+// parser isn't needed. toMs default raised from a first cut of 8s to 10s -- some shared-hosting FTPd have
+// been observed to pause noticeably longer than a LAN server before replying to USER/PASS.
+static int ftpReadReply(WiFiClient &c, String *line = nullptr, uint32_t toMs = 10000) {
   uint32_t t0 = millis();
   String l;
   while (millis() - t0 < toMs) {
@@ -2893,8 +2903,14 @@ static int ftpReadReply(WiFiClient &c, String *line = nullptr, uint32_t toMs = 8
   return 0;
 }
 static bool ftpCmd(WiFiClient &c, const String &cmd, int expect, String *line = nullptr) {
+  Serial.printf("[ftp] -> %s\n", cmd.c_str());
   c.print(cmd); c.print("\r\n");
-  return ftpReadReply(c, line) == expect;
+  String l; int code = ftpReadReply(c, &l);
+  Serial.printf(code == 0 ? "[ftp] <- (timeout waiting for reply)\n" : "[ftp] <- %d %s\n", code, l.c_str());
+  if (line) *line = l;
+  if (code != expect) g_ftpLastError = cmd + ": expected " + String(expect) + ", got " +
+                                        (code == 0 ? String("timeout") : String(code) + " " + l);
+  return code == expect;
 }
 // Upload one in-memory buffer as a file over a fresh PASV data connection. Control connection must already
 // be logged in and CWD'd into the target directory.
@@ -2904,68 +2920,121 @@ static bool ftpStor(WiFiClient &ctrl, const String &filename, const String &cont
   if (!ftpCmd(ctrl, "PASV", 227, &reply)) return false;
   // "227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)." -- data IP/port encoded as 6 comma-separated bytes.
   int a = reply.indexOf('('), b = reply.indexOf(')', a);
-  if (a < 0 || b < 0) return false;
+  if (a < 0 || b < 0) { g_ftpLastError = "PASV: couldn't parse reply " + reply; Serial.println("[ftp] " + g_ftpLastError); return false; }
   String inner = reply.substring(a + 1, b);
   int p[6] = {0}, idx = 0, start = 0;
   for (int i = 0; i <= (int)inner.length() && idx < 6; i++) {
     if (i == (int)inner.length() || inner[i] == ',') { p[idx++] = inner.substring(start, i).toInt(); start = i + 1; }
   }
-  if (idx != 6) return false;
+  if (idx != 6) { g_ftpLastError = "PASV: expected 6 numbers, got " + String(idx) + " in " + reply; Serial.println("[ftp] " + g_ftpLastError); return false; }
+  // Deliberately IGNORE the IP PASV reported and connect back to whatever host the control connection is
+  // already talking to instead -- only the port comes from PASV. A very common real-world FTP setup (a
+  // server behind NAT/port-forwarding, e.g. a home NAS or a router-forwarded box) advertises its own LAN-
+  // side IP in the PASV reply, which the client can't reach even though the control connection worked fine
+  // (it was given the real, externally-reachable address directly). Every mainstream FTP client (curl,
+  // FileZilla, lftp, ...) has an "ignore PASV IP" option for exactly this reason; here it's just always on,
+  // since connecting back to the control host's own address is correct for a normal single-homed FTP server
+  // too -- the only setup this could ever be wrong for is a deliberately multi-homed server routing data
+  // connections through a different host than its control port, which is rare to the point of not existing
+  // in practice for a small self-hosted history backup target.
+  IPAddress dataIp = ctrl.remoteIP();
+  uint16_t dataPort = (uint16_t)(p[4] * 256 + p[5]);
+  Serial.printf("[ftp] PASV reported %d.%d.%d.%d:%u -- connecting to control host %s:%u instead\n",
+                p[0], p[1], p[2], p[3], dataPort, dataIp.toString().c_str(), dataPort);
   WiFiClient dataConn;
-  if (!dataConn.connect(IPAddress(p[0], p[1], p[2], p[3]), (uint16_t)(p[4] * 256 + p[5]), 8000)) return false;
+  if (!dataConn.connect(dataIp, dataPort, 10000)) {
+    g_ftpLastError = "data connection to " + dataIp.toString() + ":" + String(dataPort) + " failed";
+    Serial.println("[ftp] " + g_ftpLastError);
+    return false;
+  }
   // Opening the data connection before sending STOR (done above) is the standard client order, but it means
   // the server may reply either 150 ("about to open a data connection") or 125 ("data connection already
   // open, transfer starting") -- RFC 959 defines both for exactly this case, and live-testing against
   // pyftpdlib confirmed it sends 125 here specifically because the data socket was already connected.
-  int storCode = 0;
-  { ctrl.print("STOR " + filename); ctrl.print("\r\n"); storCode = ftpReadReply(ctrl); }
-  if (storCode != 150 && storCode != 125) { dataConn.stop(); return false; }
+  { String storLine; String cmd = "STOR " + filename;
+    Serial.printf("[ftp] -> %s\n", cmd.c_str());
+    ctrl.print(cmd); ctrl.print("\r\n");
+    int storCode = ftpReadReply(ctrl, &storLine);
+    Serial.printf(storCode == 0 ? "[ftp] <- (timeout waiting for reply)\n" : "[ftp] <- %d %s\n", storCode, storLine.c_str());
+    if (storCode != 150 && storCode != 125) {
+      g_ftpLastError = cmd + ": expected 150 or 125, got " + (storCode == 0 ? String("timeout") : String(storCode) + " " + storLine);
+      dataConn.stop();
+      return false;
+    }
+  }
   size_t written = dataConn.write((const uint8_t *)content.c_str(), content.length());
+  Serial.printf("[ftp] wrote %u/%u bytes to the data connection\n", (unsigned)written, (unsigned)content.length());
   dataConn.stop();
+  if (written != content.length()) {
+    g_ftpLastError = "only wrote " + String((unsigned)written) + "/" + String((unsigned)content.length()) + " bytes";
+    return false;
+  }
   int code = ftpReadReply(ctrl, nullptr, 15000);   // "226 Transfer complete" -- can take a while on a slow link
-  return written == content.length() && (code == 226 || code == 250);
+  Serial.printf(code == 0 ? "[ftp] <- (timeout waiting for 226)\n" : "[ftp] <- %d (transfer-complete reply)\n", code);
+  if (code != 226 && code != 250) { g_ftpLastError = "transfer-complete reply was " + (code == 0 ? String("a timeout") : String(code)); return false; }
+  return true;
 }
 // One background upload pass: log in, cd into g_ftpPath (creating any missing segment via MKD), then STOR a
 // fresh "<id>_daily_<unixtime>.csv" for every reader with a stored daily log. The timestamp in every
 // filename is what keeps consecutive runs from ever overwriting each other on the server.
 static void ftpUploadTask(void *) {
   bool ok = false;
+  g_ftpLastError = "";
+  Serial.printf("[ftp] connecting to %s:%u ...\n", g_ftpHost, g_ftpPort);
   WiFiClient ctrl;
-  if (ctrl.connect(g_ftpHost, g_ftpPort, 8000)) {
-    if (ftpReadReply(ctrl) == 220 &&
+  if (ctrl.connect(g_ftpHost, g_ftpPort, 10000)) {
+    String banner;
+    int bannerCode = ftpReadReply(ctrl, &banner);
+    Serial.printf(bannerCode == 0 ? "[ftp] <- (timeout waiting for banner)\n" : "[ftp] <- %d %s\n", bannerCode, banner.c_str());
+    if (bannerCode == 220 &&
         ftpCmd(ctrl, "USER " + String(g_ftpUser), 331) &&
         ftpCmd(ctrl, "PASS " + String(g_ftpPass), 230)) {
       ok = true;
+      Serial.println("[ftp] logged in");
       String path = g_ftpPath;
       int start = 0;
       while (ok && start <= (int)path.length()) {
         int slash = path.indexOf('/', start);
         String seg = path.substring(start, slash < 0 ? path.length() : slash);
         if (seg.length()) {
-          ftpCmd(ctrl, "MKD " + seg, 257);      // ignore the result -- "already exists" (550) is fine too,
-          ok = ftpCmd(ctrl, "CWD " + seg, 250);  // the following CWD is the real pass/fail signal
+          String mkdLine;
+          ftpCmd(ctrl, "MKD " + seg, 257, &mkdLine);   // don't gate on this -- "already exists" (550) is
+                                                        // completely normal on every run after the first;
+                                                        // logged above regardless via ftpCmd()'s own trace
+          ok = ftpCmd(ctrl, "CWD " + seg, 250);         // the following CWD is the real pass/fail signal
         }
         if (slash < 0) break;
         start = slash + 1;
       }
+      if (!ok) Serial.println("[ftp] could not enter the configured target folder -- check the path and the account's permissions");
       if (ok) {
         uint32_t ts = timeValid() ? (uint32_t)time(nullptr) : (uint32_t)(millis() / 1000);
         String ids[HIST_SLOTS]; int nIds = listDailyReaderIds(ids, HIST_SLOTS);
+        Serial.printf("[ftp] %d reader(s) with stored daily history to upload\n", nIds);
         int uploaded = 0;
         for (int i = 0; i < nIds && ok; i++) {
           String csv = buildDailyCsv(ids[i]);
-          if (!csv.length()) continue;   // nothing recorded for this reader yet -- nothing to send
+          if (!csv.length()) { Serial.printf("[ftp] %s: nothing recorded yet, skipping\n", ids[i].c_str()); continue; }
           String fname = ids[i] + "_daily_" + String(ts) + ".csv";
-          if (ftpStor(ctrl, fname, csv)) uploaded++;
-          else { ok = false; Serial.printf("[ftp] STOR %s failed\n", fname.c_str()); }
+          Serial.printf("[ftp] uploading %s (%u B)\n", fname.c_str(), (unsigned)csv.length());
+          if (ftpStor(ctrl, fname, csv)) { uploaded++; Serial.printf("[ftp] %s ok\n", fname.c_str()); }
+          else { ok = false; Serial.printf("[ftp] %s failed: %s\n", fname.c_str(), g_ftpLastError.c_str()); }
         }
         Serial.printf("[ftp] uploaded %d/%d reader file(s)\n", uploaded, nIds);
         ok = ok && uploaded > 0;
+        if (uploaded == 0 && nIds == 0) g_ftpLastError = "no reader has any stored daily history yet";
       }
-    } else Serial.println("[ftp] login failed");
+    } else {
+      Serial.println("[ftp] login failed");
+      if (g_ftpLastError.length() == 0) g_ftpLastError = "login failed";
+    }
     ftpCmd(ctrl, "QUIT", 221);
     ctrl.stop();
-  } else Serial.printf("[ftp] connect to %s:%u failed\n", g_ftpHost, g_ftpPort);
+  } else {
+    g_ftpLastError = String("couldn't connect to ") + g_ftpHost + ":" + String(g_ftpPort);
+    Serial.println("[ftp] " + g_ftpLastError);
+  }
+  Serial.printf("[ftp] %s%s\n", ok ? "done, ok" : "done, FAILED", ok ? "" : (": " + g_ftpLastError).c_str());
   g_ftpLastResult = ok ? 1 : 2;
   g_ftpLastRunS = timeValid() ? (uint32_t)time(nullptr) : 0;
   g_ftpBusy = false;
