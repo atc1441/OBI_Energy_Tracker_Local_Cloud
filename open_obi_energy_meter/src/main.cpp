@@ -161,6 +161,34 @@ static void loadBoxCfg(const uint8_t h[3], char *out, size_t outsz) {
   p.end();
 }
 
+// Per-reader price override + day/night tariff, packed as one CSV string (like boxcfg) so the whole set
+// stays atomic: "priceCent,exportCent,nightOn,nightStart,nightEnd,nightPriceCent". Survives reboot AND
+// re-pair, same as name/boxcfg.
+static void savePriceCfg(const uint8_t h[3], const Reader &r) {
+  char k[8]; uuidKey(h, k);
+  char buf[64];
+  snprintf(buf, sizeof buf, "%.2f,%.2f,%d,%u,%u,%.2f",
+           r.priceCentOverride, r.exportCentOverride, r.nightTariffOn ? 1 : 0,
+           r.nightStartHour, r.nightEndHour, r.nightPriceCent);
+  Preferences p; p.begin("obiprice", false); p.putString(k, buf); p.end();
+}
+static void loadPriceCfg(const uint8_t h[3], Reader &r) {
+  char k[8]; uuidKey(h, k);
+  Preferences p; p.begin("obiprice", true);
+  char buf[64]; buf[0] = 0;
+  p.getString(k, buf, sizeof buf);
+  p.end();
+  r.priceCentOverride = -1; r.exportCentOverride = -1; r.nightTariffOn = false;
+  r.nightStartHour = 22; r.nightEndHour = 6; r.nightPriceCent = -1;
+  if (!buf[0]) return;
+  float pc = -1, ec = -1, np = -1; int on = 0, sh = 22, eh = 6;
+  if (sscanf(buf, "%f,%f,%d,%d,%d,%f", &pc, &ec, &on, &sh, &eh, &np) < 2) return;
+  r.priceCentOverride = pc; r.exportCentOverride = ec; r.nightTariffOn = on != 0;
+  if (sh >= 0 && sh <= 23) r.nightStartHour = (uint8_t)sh;
+  if (eh >= 0 && eh <= 23) r.nightEndHour = (uint8_t)eh;
+  r.nightPriceCent = np;
+}
+
 // Auto-pair window: while active, every reader that announces is accepted automatically.
 static uint32_t g_pairUntil = 0;
 static bool pairWindowActive() { return g_pairUntil && (int32_t)(millis() - g_pairUntil) < 0; }
@@ -177,6 +205,7 @@ static Reader *addReader(const uint8_t h[3]) {
     x.setInterval = iv ? iv : OBI_DEFAULT_INTERVAL; // new/unconfigured reader -> default, so it's shown in UI/MQTT AND pushed in the ACK
     loadName(h, x.name, sizeof x.name);             // restore the friendly name (empty = none set)
     loadBoxCfg(h, x.boxcfg, sizeof x.boxcfg);        // restore the dashboard box layout (empty = default)
+    loadPriceCfg(h, x);                              // restore the price override / day-night tariff (if any)
     return &x;
   }
   return nullptr;
@@ -382,6 +411,21 @@ bool gw_set_reader_boxcfg(const uint8_t handle[3], const char *cfg) {
     if (r.used && !memcmp(r.handle, handle, 3)) {
       saveBoxCfg(handle, buf);
       strlcpy(r.boxcfg, buf, sizeof r.boxcfg);
+      return true;
+    }
+  return false;
+}
+// Set (or clear, with a negative price) a reader's price override / day-night tariff. Persisted like name/
+// boxcfg. The caller always sends the full set together (see /api/reader/price in gateway_web.cpp), so
+// there's no risk of ending up with a partially-updated, inconsistent combination.
+bool gw_set_reader_price(const uint8_t handle[3], float priceCent, float exportCent,
+                          bool nightOn, uint8_t nightStart, uint8_t nightEnd, float nightPriceCent) {
+  for (auto &r : readers)
+    if (r.used && !memcmp(r.handle, handle, 3)) {
+      r.priceCentOverride = priceCent; r.exportCentOverride = exportCent;
+      r.nightTariffOn = nightOn; r.nightStartHour = (uint8_t)(nightStart % 24); r.nightEndHour = (uint8_t)(nightEnd % 24);
+      r.nightPriceCent = nightPriceCent;
+      savePriceCfg(handle, r);
       return true;
     }
   return false;

@@ -249,6 +249,11 @@ static String readersJson() {
     j += ",\"bootloader\":" + String(r.inBootloader ? "true" : "false");
     j += ",\"age_s\":" + String(age);
     j += ",\"interval\":" + String(r.setInterval);
+    j += ",\"price_cent\":" + (r.priceCentOverride >= 0 ? String(r.priceCentOverride, 2) : String("null"));
+    j += ",\"export_cent\":" + (r.exportCentOverride >= 0 ? String(r.exportCentOverride, 2) : String("null"));
+    j += ",\"night_on\":" + String(r.nightTariffOn ? "true" : "false");
+    j += ",\"night_start\":" + String(r.nightStartHour) + ",\"night_end\":" + String(r.nightEndHour);
+    j += ",\"night_price_cent\":" + (r.nightPriceCent >= 0 ? String(r.nightPriceCent, 2) : String("null"));
     j += "}";
   }
   return j + "]";
@@ -978,6 +983,40 @@ static void handleBoxCfg() {
   uint8_t h[3];
   for (int i = 0; i < 3; i++) h[i] = (uint8_t)strtol(id.substring(i * 2, i * 2 + 2).c_str(), nullptr, 16);
   if (gw_set_reader_boxcfg(h, server.arg("cfg").c_str()))
+    server.send(200, "application/json", "{\"ok\":true}");
+  else server.send(400, "application/json", "{\"ok\":false}");
+}
+
+// Set part or all of a reader's price / day-night tariff. Partial: only the fields actually present in the
+// request change (starts from the reader's CURRENT saved values, see resolveReaderPrice()'s sibling scan
+// below) -- e.g. the header's price box saves just cent/ecent without touching the separate night-tariff
+// card's settings, and vice versa. No global fallback exists any more: every reader always has its own
+// price, seeded from DEFAULT_PRICE_CENT/DEFAULT_EXPORT_CENT the first time it's ever saved.
+static void handleReaderPrice() {
+  String id = server.arg("id");
+  if (id.length() != 6) { server.send(400, "application/json", "{\"ok\":false}"); return; }
+  uint8_t h[3];
+  for (int i = 0; i < 3; i++) h[i] = (uint8_t)strtol(id.substring(i * 2, i * 2 + 2).c_str(), nullptr, 16);
+  float cent = -1, ecent = -1, nprice = -1; bool night = false; int nstart = 22, nend = 6;
+  for (int i = 0; i < MAX_READERS; i++)
+    if (readers[i].used && !memcmp(readers[i].handle, h, 3)) {
+      Reader &r = readers[i];
+      cent = r.priceCentOverride; ecent = r.exportCentOverride;
+      night = r.nightTariffOn; nstart = r.nightStartHour; nend = r.nightEndHour; nprice = r.nightPriceCent;
+      break;
+    }
+  if (server.hasArg("cent")) cent = server.arg("cent").toFloat();
+  if (server.hasArg("ecent")) ecent = server.arg("ecent").toFloat();
+  if (server.hasArg("night")) night = server.arg("night") == "1" || server.arg("night") == "true";
+  if (server.hasArg("nstart")) nstart = server.arg("nstart").toInt();
+  if (server.hasArg("nend")) nend = server.arg("nend").toInt();
+  if (server.hasArg("nprice")) nprice = server.arg("nprice").toFloat();
+  if (cent < 0) cent = -1; else if (cent > 1000) cent = 1000;
+  if (ecent < 0) ecent = -1; else if (ecent > 1000) ecent = 1000;
+  if (nprice < 0) nprice = -1; else if (nprice > 1000) nprice = 1000;
+  if (nstart < 0 || nstart > 23) nstart = 22;
+  if (nend < 0 || nend > 23) nend = 6;
+  if (gw_set_reader_price(h, cent, ecent, night, (uint8_t)nstart, (uint8_t)nend, nprice))
     server.send(200, "application/json", "{\"ok\":true}");
   else server.send(400, "application/json", "{\"ok\":false}");
 }
@@ -2336,13 +2375,17 @@ static void handleDebugPage() { server.send_P(200, "text/html", DEBUG_HTML); }
 // All file I/O runs on the web task (core 0), never on the LoRa loop.
 #define HIST_SLOTS 64                   // must stay >= MAX_READERS (defined in main.cpp; it's an extern const,
                                         // so it can't size a static array here)
-static float    g_priceCent = 31.0f;    // GLOBAL electricity price in € cent per kWh (one device-wide setting,
-                                        // not per reader; user-set, persisted to NVS namespace "obigw" key "pkwh")
-static float    g_exportCent = 0.0f;    // GLOBAL feed-in tariff in € cent per kWh for exported energy; default 0
-                                        // (most users get nothing for feed-in). Persisted to NVS key "ekwh".
+// No global price setting: every reader has its own (Reader.priceCentOverride/exportCentOverride in
+// reader.h), editable from the History page's header once that reader is selected. These two literals are
+// only the bootstrap default shown/used for a reader that has never had its own price saved yet -- see
+// resolveReaderPrice() below.
+static const float DEFAULT_PRICE_CENT = 31.0f, DEFAULT_EXPORT_CENT = 0.0f;
 static uint32_t hImp[HIST_SLOTS];       // last-logged import per reader slot
 static uint32_t hLastMs[HIST_SLOTS];    // millis() of last sample append (0 = nothing logged yet)
-struct DailyState { uint32_t day = 0, imp = 0, exp = 0; };
+struct DailyState { uint32_t day = 0, imp = 0, exp = 0;
+  uint32_t dayWh = 0, nightWh = 0;   // this day's import-delta so far, split live by time-of-day (see
+                                      // isNightNow()/historyService() below) -- reset to 0 at each day rollover
+};
 static DailyState hDaily[HIST_SLOTS];   // current day and its latest observed counters
 
 // Daily summaries ("/d<id>") always live in the 128 KB "userdata" partition, on every board -- they're
@@ -2508,9 +2551,11 @@ static size_t dailyCapBytes() {
 // RAM-only row to API responses. `capBytes` is this reader's current fair share (see dailyCapBytes());
 // trimming is byte-based (like appendLineCapped()'s raw-sample cap) rather than a fixed row count so it
 // grows and shrinks smoothly as the reader count changes instead of jumping between fixed slot sizes.
-static String withDailyRow(String all, uint32_t dayStart, uint32_t imp, uint32_t exp, size_t capBytes) {
-  char row[56];
-  snprintf(row, sizeof row, "%lu,%lu,%lu", (unsigned long)dayStart, (unsigned long)imp, (unsigned long)exp);
+static String withDailyRow(String all, uint32_t dayStart, uint32_t imp, uint32_t exp,
+                            uint32_t dayWh, uint32_t nightWh, size_t capBytes) {
+  char row[80];
+  snprintf(row, sizeof row, "%lu,%lu,%lu,%lu,%lu", (unsigned long)dayStart, (unsigned long)imp,
+           (unsigned long)exp, (unsigned long)dayWh, (unsigned long)nightWh);
   String content;
   if (all.length() == 0) {
     content = String(row) + "\n";
@@ -2535,9 +2580,10 @@ static String withDailyRow(String all, uint32_t dayStart, uint32_t imp, uint32_t
   return content;
 }
 
-static void persistDaily(const String &id, uint32_t dayStart, uint32_t imp, uint32_t exp) {
+static void persistDaily(const String &id, uint32_t dayStart, uint32_t imp, uint32_t exp,
+                          uint32_t dayWh, uint32_t nightWh) {
   String path = fpD(id);
-  fsWrite(path, withDailyRow(fsRead(path), dayStart, imp, exp, dailyCapBytes()));
+  fsWrite(path, withDailyRow(fsRead(path), dayStart, imp, exp, dayWh, nightWh, dailyCapBytes()));
 }
 
 static uint32_t localDayStart(time_t ep) {
@@ -2569,15 +2615,33 @@ static void beginDay(int slot, const String &id, uint32_t dayStart) {
     uint32_t oldEp, oldImp, oldExp;
     if (lastSample(id, oldEp, oldImp, oldExp)) {
       uint32_t oldDay = localDayStart((time_t)oldEp);
-      if (oldDay != dayStart) persistDaily(id, oldDay, oldImp, oldExp);
+      // no day/night split recoverable across a reboot gap -- the live accumulator that would have tracked
+      // it started fresh this boot, same as every other in-RAM-only state
+      if (oldDay != dayStart) persistDaily(id, oldDay, oldImp, oldExp, 0, 0);
     }
   } else {
-    persistDaily(id, d.day, d.imp, d.exp);
+    persistDaily(id, d.day, d.imp, d.exp, d.dayWh, d.nightWh);
   }
   d.day = dayStart;
+  d.dayWh = 0; d.nightWh = 0;   // start the new day's live day/night split fresh
+}
+
+// Is `now` inside reader `r`'s configured night window? Off (always "day") unless nightTariffOn -- and for
+// a degenerate window (start == end) too, since that's not a real range. start/end wrap past midnight when
+// start >= end (e.g. 22..6 means "22:00 through 05:59").
+static bool isNightNow(const Reader &r, time_t now) {
+  if (!r.nightTariffOn) return false;
+  uint8_t s = r.nightStartHour, e = r.nightEndHour;
+  if (s == e) return false;
+  struct tm lt; localtime_r(&now, &lt);
+  int h = lt.tm_hour;
+  return s < e ? (h >= s && h < e) : (h >= s || h < e);
 }
 
 // Poll readers and log a sample when the counter moves or every 5 min (heartbeat). Throttled internally.
+// Also accumulates each reader's day/night energy split live, hour-by-hour, as the ONLY point in the
+// pipeline that ever sees consumption tagged with a real time-of-day -- the raw sample log this could
+// otherwise be reconstructed from is short-retention, so this can't be done retroactively later.
 static void historyService() {
   if (!g_fsOk || !timeValid() || otaHist_writesPaused()) return;   // paused around a firmware flash --
                                                                      // see otaHist_prepareForFlash()
@@ -2594,7 +2658,13 @@ static void historyService() {
     uint32_t exp = obi_na(r.export_) ? 0 : r.export_;
     if (hDaily[i].day != dayStart) {
       id = hex(r.handle, 3);
-      beginDay(i, id, dayStart);
+      beginDay(i, id, dayStart);   // also resets dayWh/nightWh for the new day
+    } else if (hDaily[i].imp) {    // not the first-ever observation this boot -- imp already a real baseline
+      long delta = (long)r.import_ - (long)hDaily[i].imp;   // Wh since the last poll; counters only rise
+      if (delta > 0) {
+        if (isNightNow(r, tnow)) hDaily[i].nightWh += (uint32_t)delta;
+        else                     hDaily[i].dayWh   += (uint32_t)delta;
+      }
     }
     hDaily[i].imp = r.import_;
     hDaily[i].exp = exp;
@@ -2687,6 +2757,24 @@ static void handleHistoryReaders() {
   server.send(200, "application/json", j);
 }
 
+// Resolve the effective price for reader `id`: its own saved value, else the bootstrap default (no global
+// setting exists -- every reader's price is independent). Also resolves the day-night tariff fields (off,
+// with sane defaults, if the reader isn't known or has it off).
+static void resolveReaderPrice(const String &id, float &priceCent, float &exportCent,
+                                bool &nightOn, uint8_t &nightStart, uint8_t &nightEnd, float &nightPriceCent) {
+  priceCent = DEFAULT_PRICE_CENT; exportCent = DEFAULT_EXPORT_CENT;
+  nightOn = false; nightStart = 22; nightEnd = 6; nightPriceCent = DEFAULT_PRICE_CENT;
+  for (int i = 0; i < MAX_READERS; i++)
+    if (readers[i].used && hex(readers[i].handle, 3) == id) {
+      Reader &r = readers[i];
+      if (r.priceCentOverride >= 0) priceCent = r.priceCentOverride;
+      if (r.exportCentOverride >= 0) exportCent = r.exportCentOverride;
+      nightOn = r.nightTariffOn; nightStart = r.nightStartHour; nightEnd = r.nightEndHour;
+      nightPriceCent = r.nightPriceCent >= 0 ? r.nightPriceCent : priceCent;
+      break;
+    }
+}
+
 static void handleHistoryApi() {
   String id = server.arg("id");
   bool okid = id.length() == 6;
@@ -2701,18 +2789,23 @@ static void handleHistoryApi() {
   server.send(200, "application/json", "");
   bool tv = timeValid();   // gate "now" itself too — the client uses it for day-bucketing ("today" match);
                             // an out-of-range clock (see timeValid()) must never leak into that as if real.
+  float priceCent, exportCent, nightPriceCent; bool nightOn; uint8_t nightStart, nightEnd;
+  resolveReaderPrice(id, priceCent, exportCent, nightOn, nightStart, nightEnd, nightPriceCent);
   server.sendContent(String("{\"id\":\"") + id + "\",\"now\":" + String(tv ? (uint32_t)time(nullptr) : 0) +
                      ",\"tvalid\":" + (tv ? "true" : "false") +
                      ",\"fs\":" + (g_fsOk ? "true" : "false") +
-                     ",\"price\":" + String(g_priceCent, 2) +
-                     ",\"eprice\":" + String(g_exportCent, 2) + ",\"samples\":[");
+                     ",\"price\":" + String(priceCent, 2) +
+                     ",\"eprice\":" + String(exportCent, 2) +
+                     ",\"night_on\":" + (nightOn ? "true" : "false") +
+                     ",\"night_start\":" + String(nightStart) + ",\"night_end\":" + String(nightEnd) +
+                     ",\"night_price\":" + String(nightPriceCent, 2) + ",\"samples\":[");
   { String s = g_fsOk ? fsRead(fpS(id)) : String(); streamRows(s); }
   server.sendContent("],\"daily\":[");
   {
     String d = g_fsOk ? fsRead(fpD(id)) : String();
     for (int i = 0; i < MAX_READERS; i++)
       if (hDaily[i].day && readers[i].used && hex(readers[i].handle, 3) == id) {
-        d = withDailyRow(d, hDaily[i].day, hDaily[i].imp, hDaily[i].exp, dailyCapBytes());
+        d = withDailyRow(d, hDaily[i].day, hDaily[i].imp, hDaily[i].exp, hDaily[i].dayWh, hDaily[i].nightWh, dailyCapBytes());
         break;
       }
     streamRows(d);
@@ -2736,10 +2829,10 @@ static String buildDailyCsv(const String &id) {
   String d = fsRead(fpD(id));
   for (int i = 0; i < MAX_READERS; i++)
     if (hDaily[i].day && readers[i].used && hex(readers[i].handle, 3) == id) {
-      d = withDailyRow(d, hDaily[i].day, hDaily[i].imp, hDaily[i].exp, dailyCapBytes());
+      d = withDailyRow(d, hDaily[i].day, hDaily[i].imp, hDaily[i].exp, hDaily[i].dayWh, hDaily[i].nightWh, dailyCapBytes());
       break;
     }
-  String out = "date,day_start_epoch,import_wh,export_wh\n";
+  String out = "date,day_start_epoch,import_wh,export_wh,day_wh,night_wh\n";
   int i = 0, n = (int)d.length();
   while (i < n) {
     int nl = d.indexOf('\n', i); if (nl < 0) nl = n;
@@ -2921,10 +3014,10 @@ static void handleHistoryCsv() {
       String d = fsRead(fpD(id));
       for (int i = 0; i < MAX_READERS; i++)
         if (hDaily[i].day && readers[i].used && hex(readers[i].handle, 3) == id) {
-          d = withDailyRow(d, hDaily[i].day, hDaily[i].imp, hDaily[i].exp, dailyCapBytes());
+          d = withDailyRow(d, hDaily[i].day, hDaily[i].imp, hDaily[i].exp, hDaily[i].dayWh, hDaily[i].nightWh, dailyCapBytes());
           break;
         }
-      sendCsvRows(d, "date,day_start_epoch,import_wh,export_wh");
+      sendCsvRows(d, "date,day_start_epoch,import_wh,export_wh,day_wh,night_wh");
     } else {
       sendCsvRows(fsRead(fpS(id)), "date,epoch,import_wh,export_wh,power_w");
     }
@@ -2946,25 +3039,6 @@ static void handleHistoryClear() {
       }
   }
   server.send(200, "application/json", "{\"ok\":true}");
-}
-
-// GET/POST the electricity price (€ cent per kWh). POST ?cent=<n> sets the import price, ?ecent=<n> the
-// export feed-in tariff; either or both may be given. Both persist to NVS.
-static void handlePrice() {
-  if (server.hasArg("cent")) {
-    float c = server.arg("cent").toFloat();
-    if (c < 0) c = 0; else if (c > 1000) c = 1000;
-    g_priceCent = c;
-    prefs.begin("obigw", false); prefs.putFloat("pkwh", c); prefs.end();
-  }
-  if (server.hasArg("ecent")) {
-    float c = server.arg("ecent").toFloat();
-    if (c < 0) c = 0; else if (c > 1000) c = 1000;
-    g_exportCent = c;
-    prefs.begin("obigw", false); prefs.putFloat("ekwh", c); prefs.end();
-  }
-  server.send(200, "application/json", String("{\"cent\":") + String(g_priceCent, 2) +
-              ",\"ecent\":" + String(g_exportCent, 2) + "}");
 }
 
 // served via send_P() straight from flash — server.send(code, type, const char*) copies the WHOLE literal
@@ -3014,6 +3088,11 @@ td.mono{font-family:var(--mono)}
 .pos{color:var(--accent)}.neg{color:var(--blue)}.na{color:var(--dim)}
 .empty{color:var(--dim);padding:26px 6px;text-align:center}
 .warn{background:#2a1e12;border:1px solid #4a3418;color:var(--amber);border-radius:11px;padding:10px 13px;font-size:12.5px;margin-bottom:16px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px}
+.msg{font-size:12.5px;color:var(--dim)}
+label{display:block;font-size:12px;color:var(--dim);margin:10px 0 4px}
+input[type=number]{font-size:14px;background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:9px;padding:8px 11px;width:100%}
 @media (max-width:760px){
  header{position:static;flex-wrap:wrap;gap:9px;padding:11px 13px}
  .sp{display:none}
@@ -3058,7 +3137,7 @@ let lang=localStorage.getItem('obilang');if(lang!=='en'&&lang!=='de')lang=(navig
 // (a global gateway setting from the Settings page, not a per-page localStorage choice).
 let numFmt=0;
 const T={
- de:{reload:'neu laden',dlLabel:'Export:',dlRawT:'Rohdaten (Messpunkte) als CSV herunterladen',dlDailyT:'Tageswerte als CSV herunterladen',clearT:'Historie dieses Readers löschen',fsFreeT:'Freier Speicher für die Verlaufsdaten aller Reader (siehe /debug für Details)',fsRaw:'Rohdaten',fsDaily:'Tageswerte',priceT:'Strompreis – gilt global für alle Reader',priceTexp:'Einspeisevergütung – gilt global für alle Reader',
+ de:{reload:'neu laden',dlLabel:'Export:',dlRawT:'Rohdaten (Messpunkte) als CSV herunterladen',dlDailyT:'Tageswerte als CSV herunterladen',clearT:'Historie dieses Readers löschen',fsFreeT:'Freier Speicher für die Verlaufsdaten aller Reader (siehe /debug für Details)',fsRaw:'Rohdaten',fsDaily:'Tageswerte',priceT:'Strompreis – gilt nur für den gerade gewählten Reader',priceTexp:'Einspeisevergütung – gilt nur für den gerade gewählten Reader',
   loading:'lädt…',loadErr:'Fehler beim Laden.',
   noReaders:'Noch keine Reader bekannt.<br>Sobald ein Zähler empfangen wird, erscheint hier seine Historie.',
   offlineTag:'nicht in Reichweite',
@@ -3067,6 +3146,9 @@ const T={
   kImp:'Import · Bezug gesamt (kWh)',kExp:'Export · Einspeisung gesamt (kWh)',kToday:'Verbrauch heute – bisher (kWh)',
   kCost:p=>'Kosten heute ('+p+' ct/kWh)',kTodayExp:'Einspeisung heute – bisher (kWh)',
   kEarn:p=>'Erlös heute ('+p+' ct/kWh)',
+  cNight:'Tag-/Nacht-Tarif für diesen Reader',
+  lNightOn:'Tag-/Nacht-Tarif aktiv',capNight:'Wenn aktiv, wird der Verbrauch ab jetzt live nach Uhrzeit in Tag- und Nachtanteil aufgeteilt und getrennt bepreist (Tagpreis: Feld oben rechts). Gilt nur für neu erfasste Werte, nicht rückwirkend.',
+  lNightStart:'Nacht ab (Std.)',lNightEnd:'Nacht bis (Std.)',lNightPrice:'Nachtpreis (ct/kWh)',bSavePrice:'Speichern',
   cDay:'Verbrauch pro Tag',capDay:'kWh/Tag aus den Änderungen des Zählerstands (zuverlässig, unabhängig vom Watt-Wert).',
   cDayExp:'Einspeisung pro Tag',capDayExp:'kWh/Tag per Solar ins Netz eingespeist — aus den Änderungen des Export-Zählerstands.',
   cMonth:'Verbrauch pro Monat',capMonth:'kWh/Monat aus den Änderungen des Zählerstands — Summe der Tageswerte je Kalendermonat.',
@@ -3086,7 +3168,7 @@ const T={
   thTime:'Zeit',thPow:'Leistung W',thPowCalc:'Ø Leistung W (berechnet)',thImpK:'Import kWh',thDelta:'Δ Import kWh',thExpK:'Export kWh',thDeltaExp:'Δ Export kWh',
   fewPts:'zu wenige Messpunkte für einen Verlauf',noDay:'noch keine Tageswerte — bitte etwas Zeit sammeln',
   clearC:r=>'Gespeicherte Historie für '+r+' löschen?'},
- en:{reload:'reload',dlLabel:'Export:',dlRawT:'Download raw samples as CSV',dlDailyT:'Download daily values as CSV',clearT:"clear this reader's history",fsFreeT:'Free space for all readers\' history data (see /debug for details)',fsRaw:'raw data',fsDaily:'daily values',priceT:'Electricity price – global for all readers',priceTexp:'Feed-in tariff – global for all readers',
+ en:{reload:'reload',dlLabel:'Export:',dlRawT:'Download raw samples as CSV',dlDailyT:'Download daily values as CSV',clearT:"clear this reader's history",fsFreeT:'Free space for all readers\' history data (see /debug for details)',fsRaw:'raw data',fsDaily:'daily values',priceT:'Electricity price – applies only to the currently selected reader',priceTexp:'Feed-in tariff – applies only to the currently selected reader',
   loading:'loading…',loadErr:'Failed to load.',
   noReaders:'No readers known yet.<br>As soon as a meter is received, its history appears here.',
   offlineTag:'out of range',
@@ -3095,6 +3177,9 @@ const T={
   kImp:'Import · consumed total (kWh)',kExp:'Export · fed-in total (kWh)',kToday:'Consumption today – so far (kWh)',
   kCost:p=>'Cost today ('+p+' ct/kWh)',kTodayExp:'Feed-in today – so far (kWh)',
   kEarn:p=>'Earnings today ('+p+' ct/kWh)',
+  cNight:'Day/night tariff for this reader',
+  lNightOn:'Day/night tariff active',capNight:'When on, consumption is split live by time of day into a day and a night share from now on, each billed at its own rate (day price: field top right). Applies only to newly recorded values, not retroactively.',
+  lNightStart:'Night from (h)',lNightEnd:'Night until (h)',lNightPrice:'Night price (ct/kWh)',bSavePrice:'Save',
   cDay:'Consumption per day',capDay:'kWh/day from the meter-counter changes (reliable, independent of the Watt value).',
   cDayExp:'Feed-in per day',capDayExp:'kWh/day fed into the grid (solar) — from the export-counter changes.',
   cMonth:'Consumption per month',capMonth:'kWh/month from the meter-counter changes — sum of the daily values per calendar month.',
@@ -3194,7 +3279,7 @@ function barChart(bars,unit,color){
 
 async function boot(){
  applyLang();main.innerHTML='<div class=empty>'+t('loading')+'</div>';
- try{let p=await (await fetch('/api/price')).json();$('price').value=p.cent;$('eprice').value=p.ecent;}catch(e){}   // global prices into the header
+ // no global price fetch -- the header boxes are per-reader now, filled in by load() once a reader is picked
  $('price').onchange=savePrice;$('eprice').onchange=saveEprice;
  try{let s=await (await fetch('/api/status')).json();numFmt=s.num_fmt||0;const hf=s.hist_fs;
   if(hf&&hf.ok){const kb=n=>(n/1024).toFixed(0)+' KB';
@@ -3217,16 +3302,32 @@ async function boot(){
  sel.value=cur;
  load();
 }
-async function savePrice(){let v=parseFloat($('price').value);if(isNaN(v)||v<0)return;
+async function savePrice(){if(!cur)return;let v=parseFloat($('price').value);if(isNaN(v)||v<0)return;
  $('psaved').textContent='…';
- try{await fetch('/api/price?cent='+v,{method:'POST'});}catch(e){}
+ try{await fetch('/api/reader/price?id='+cur+'&cent='+v,{method:'POST'});}catch(e){}
  $('psaved').textContent='✓';setTimeout(()=>{$('psaved').textContent='';},1500);
- if(cur)load();}                                    // refresh the cost columns for the current reader
-async function saveEprice(){let v=parseFloat($('eprice').value);if(isNaN(v)||v<0)return;
+ load();}                                    // refresh the cost columns for the current reader
+async function saveEprice(){if(!cur)return;let v=parseFloat($('eprice').value);if(isNaN(v)||v<0)return;
  $('esaved').textContent='…';
- try{await fetch('/api/price?ecent='+v,{method:'POST'});}catch(e){}
+ try{await fetch('/api/reader/price?id='+cur+'&ecent='+v,{method:'POST'});}catch(e){}
  $('esaved').textContent='✓';setTimeout(()=>{$('esaved').textContent='';},1500);
- if(cur)load();}                                    // refresh the earnings columns for the current reader
+ load();}                                    // refresh the earnings columns for the current reader
+async function saveReaderPrice(){
+ // just the night-tariff fields -- the base/export price lives in the header boxes and saves separately
+ // (savePrice()/saveEprice()), thanks to /api/reader/price's partial-update semantics
+ if(!cur)return;
+ const b=new URLSearchParams();
+ b.set('id',cur);
+ b.set('night',$('rnight').checked?'1':'0');
+ b.set('nstart',$('rnstart').value||22);
+ b.set('nend',$('rnend').value||6);
+ if($('rnprice').value)b.set('nprice',$('rnprice').value);
+ $('rpricemsg').textContent='…';
+ try{await fetch('/api/reader/price',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b});}catch(e){}
+ try{let d=await(await fetch('/api/readers')).json();readers=Array.isArray(d)?d:(d.readers||[]);}catch(e){}
+ $('rpricemsg').textContent='✓';setTimeout(()=>{$('rpricemsg').textContent='';},1500);
+ load();
+}
 sel.onchange=()=>{cur=sel.value;localStorage.setItem('obihist',cur);load();};
 $('rf').onclick=()=>load();
 rrangeSel.value=rawHours;
@@ -3242,7 +3343,7 @@ async function load(silent){
  if(!cur)return;
  if(!silent)main.innerHTML='<div class=empty>'+t('loading')+'</div>';
  let h;try{h=await (await fetch('/api/history?id='+cur)).json();}catch(e){if(!silent)main.innerHTML='<div class=card><div class=empty>'+t('loadErr')+'</div></div>';return;}
- const S=h.samples||[],days=(h.daily||[]).map(d=>({ep:d[0],imp:d[1],exp:d[2]}));
+ const S=h.samples||[],days=(h.daily||[]).map(d=>({ep:d[0],imp:d[1],exp:d[2],dayWh:d[3]||0,nightWh:d[4]||0}));
  // shared time window (header select, default 1h, capped at 24h) for every raw-sample view below --
  // Import/Export/Power charts and the Watt table all use the SAME cutoff, so the page stays predictable
  // instead of each one picking its own amount to show. KPIs further down intentionally keep using the
@@ -3250,12 +3351,26 @@ async function load(silent){
  const rHrs=Math.min(24,parseInt(rawHours)||1);
  const rNowEp=h.tvalid&&h.now?h.now:(S.length?S[S.length-1][0]:Math.floor(Date.now()/1000));
  const rCutoff=rNowEp-rHrs*3600;
- const price=(h.price!=null?h.price:31),eur=price/100;      // ct/kWh and €/kWh (global, shown in the header)
+ const price=(h.price!=null?h.price:31),eur=price/100;      // ct/kWh and €/kWh -- always THIS reader's own
+                                                              // price now, no global setting exists any more
  const eprice=(h.eprice!=null?h.eprice:0),eeur=eprice/100;  // feed-in tariff ct/kWh and €/kWh (export earnings)
- // per-day consumption from the kWh-counter deltas (import can only rise)
+ // header price boxes are per-reader -- fill them with THIS reader's resolved values every load(), unless
+ // the user is actively editing one (the silent 60s auto-refresh already skips load() while focused; an
+ // explicit reload, e.g. switching readers, should still show the newly-selected reader's own price)
+ if(document.activeElement!==$('price'))$('price').value=price;
+ if(document.activeElement!==$('eprice'))$('eprice').value=eprice;
+ // day/night tariff: when on, cost is blended from the day_wh/night_wh split the gateway accumulates live
+ // (see historyService()/isNightNow() in gateway_web.cpp) instead of one flat rate for the whole day. That
+ // split only exists going forward from when it was enabled -- there's nothing to backfill it from.
+ const nightOn=!!h.night_on;
+ const nightPrice=(h.night_price!=null?h.night_price:price),neur=nightPrice/100;
+ // per-day consumption from the kWh-counter deltas (import can only rise), plus each day's cost -- blended
+ // day/night when the tariff is on, otherwise the plain flat-rate calc.
  let cons=[];
  for(let i=1;i<days.length;i++){let di=(days[i].imp-days[i-1].imp)/1000,de=(days[i].exp-days[i-1].exp)/1000;
-  cons.push({ep:days[i].ep,imp:di<0?0:di,exp:de<0?0:de});}
+  di=di<0?0:di; de=de<0?0:de;
+  let cost=nightOn?(days[i].dayWh||0)/1000*eur+(days[i].nightWh||0)/1000*neur:di*eur;
+  cons.push({ep:days[i].ep,imp:di,exp:de,cost});}
  let html='';
  if(!h.tvalid)html+='<div class=warn>'+t('ntp')+'</div>';
  if(!S.length&&!days.length){
@@ -3271,18 +3386,20 @@ async function load(silent){
  // are only a fallback for the very first day, before any previous daily row exists.
  const dayKey=ep=>{let d=D(ep);return d.getFullYear()+'-'+d.getMonth()+'-'+d.getDate();};
  let anyExp=S.some(s=>s[2]>0)||days.some(d=>d.exp>0);
- let today=null,todayExp=null;
+ let today=null,todayExp=null,todayCost=null;
  if(days.length>=2&&dayKey(days[days.length-1].ep)===dayKey(h.now)){
   const base=days[days.length-2];                               // counter at the start of today (yesterday's close)
   const curImp=last?last[1]:days[days.length-1].imp,curExp=last?last[2]:days[days.length-1].exp;
-  today=Math.max(0,(curImp-base.imp)/1000);todayExp=Math.max(0,(curExp-base.exp)/1000);}
+  today=Math.max(0,(curImp-base.imp)/1000);todayExp=Math.max(0,(curExp-base.exp)/1000);
+  const t=days[days.length-1];   // today's RAM-merged row already carries the live day/night split
+  todayCost=nightOn?Math.max(0,t.dayWh||0)/1000*eur+Math.max(0,t.nightWh||0)/1000*neur:today*eur;}
  if(today==null&&S.length){let tk=dayKey(h.now),td=S.filter(s=>dayKey(s[0])===tk);   // first-day fallback
-  if(td.length>=2){today=Math.max(0,(td[td.length-1][1]-td[0][1])/1000);todayExp=Math.max(0,(td[td.length-1][2]-td[0][2])/1000);}}
+  if(td.length>=2){today=Math.max(0,(td[td.length-1][1]-td[0][1])/1000);todayExp=Math.max(0,(td[td.length-1][2]-td[0][2])/1000);todayCost=today*eur;}}
  html+='<div class=kpis>'+
   `<div class=kpi><div class=v>${nf(totImp,2)}</div><div class=l>${t('kImp')}</div></div>`+
   `<div class=kpi><div class="v neg">${nf(totExp,2)}</div><div class=l>${t('kExp')}</div></div>`+
   `<div class=kpi><div class=v>${today==null?'—':nf(today,2)}</div><div class=l>${t('kToday')}</div></div>`+
-  (eur>0?`<div class=kpi><div class="v euro">${today==null?'—':nf(today*eur,2)+' €'}</div><div class=l>${t('kCost')(nf(price,2))}</div></div>`:'')+
+  (eur>0?`<div class=kpi><div class="v euro">${todayCost==null?'—':nf(todayCost,2)+' €'}</div><div class=l>${t('kCost')(nightOn?nf(price,2)+'/'+nf(nightPrice,2):nf(price,2))}</div></div>`:'')+
   (anyExp?`<div class=kpi><div class="v neg">${todayExp==null?'—':nf(todayExp,2)}</div><div class=l>${t('kTodayExp')}</div></div>`:'')+
   (anyExp&&eeur>0?`<div class=kpi><div class="v euro">${todayExp==null?'—':nf(todayExp*eeur,2)+' €'}</div><div class=l>${t('kEarn')(nf(eprice,2))}</div></div>`:'')+
  '</div>';
@@ -3296,7 +3413,7 @@ async function load(silent){
  const yr=ep=>D(ep).getFullYear();
  function bucketBy(keyFn){
   let map=new Map();
-  cons.forEach(c=>{const k=keyFn(c.ep);let b=map.get(k);if(!b){b={ep:c.ep,imp:0,exp:0};map.set(k,b);}b.imp+=c.imp;b.exp+=c.exp;b.ep=c.ep;});
+  cons.forEach(c=>{const k=keyFn(c.ep);let b=map.get(k);if(!b){b={ep:c.ep,imp:0,exp:0,cost:0};map.set(k,b);}b.imp+=c.imp;b.exp+=c.exp;b.cost+=c.cost;b.ep=c.ep;});
   return [...map.values()];
  }
  // months capped to the most recent 36 (3 years) so the chart/table stay legible on a device with many
@@ -3305,25 +3422,29 @@ async function load(silent){
   if(!rows.length)return '';
   const showCost=eur>0,showExp=anyExp,showEarn=anyExp&&eeur>0;
   let head='<th>'+t(thKey)+'</th><th>'+t('thCons')+'</th>'+(showCost?'<th>'+t('thCost')+'</th>':'')+(showExp?'<th>'+t('thExp')+'</th>':'')+(showEarn?'<th>'+t('thEarn')+'</th>':'');
-  let trows=rows.slice().reverse().map(r=>'<tr><td>'+labelFn(r.ep)+'</td><td class="mono pos">'+nf(r.imp,2)+'</td>'+(showCost?'<td class="mono euro">'+nf(r.imp*eur,2)+' €</td>':'')+(showExp?'<td class="mono neg">'+nf(r.exp,2)+'</td>':'')+(showEarn?'<td class="mono euro">'+nf(r.exp*eeur,2)+' €</td>':'')+'</tr>').join('');
+  let trows=rows.slice().reverse().map(r=>'<tr><td>'+labelFn(r.ep)+'</td><td class="mono pos">'+nf(r.imp,2)+'</td>'+(showCost?'<td class="mono euro">'+nf(r.cost,2)+' €</td>':'')+(showExp?'<td class="mono neg">'+nf(r.exp,2)+'</td>':'')+(showEarn?'<td class="mono euro">'+nf(r.exp*eeur,2)+' €</td>':'')+'</tr>').join('');
   return '<div class=card><h2>'+t(titleKey)+'</h2><p class=cap>'+t(capKey)+'</p><div class=twrap><table><thead><tr>'+head+'</tr></thead><tbody>'+trows+'</tbody></table></div></div>';
  }
  // field: 'imp' or 'exp' -- price: the matching €/kWh rate (eur for import, eeur for export) so the value
- // label under each bar shows cost/earnings just like the day chart's does.
- function periodChart(rows,labelFn,titleKey,capKey,color,field,price){
+ // label under each bar shows cost/earnings just like the day chart's does. costField: for 'imp', the
+ // already-blended (day/night-aware) €.cost field on each row; 'exp' has no day/night split, so it's left
+ // null and the value label is derived with a plain value*price like before.
+ function periodChart(rows,labelFn,titleKey,capKey,color,field,price,costField){
   if(!rows.length)return '';
-  const bars=rows.map(r=>({label:labelFn(r.ep),value:r[field],vlab:price>0?[fmtK(r[field]),nf(r[field]*price,2)+' €']:[fmtK(r[field])]}));
+  const bars=rows.map(r=>{const v=r[field],cost=costField?r[costField]:v*price;
+   return {label:labelFn(r.ep),value:v,vlab:price>0?[fmtK(v),nf(cost,2)+' €']:[fmtK(v)]};});
   return '<div class=card><h2>'+t(titleKey)+'</h2><p class=cap>'+t(capKey)+'</p>'+barChart(bars,'kWh',color)+'</div>';
  }
  let yearRows=bucketBy(yr);
  let monthRows=bucketBy(ep=>{const d=D(ep);return d.getFullYear()*12+d.getMonth();}).slice(-36);
  // year: too few data points for a bar chart to add anything -- the table alone is enough
  html+=periodTable(yearRows,yr,'cYear','capYear','thYear');
- html+=periodChart(monthRows,my,'cMonth','capMonth',C.month,'imp',eur);
- if(anyExp)html+=periodChart(monthRows,my,'cMonthExp','capMonthExp',C.exp,'exp',eeur);
+ html+=periodChart(monthRows,my,'cMonth','capMonth',C.month,'imp',eur,'cost');
+ if(anyExp)html+=periodChart(monthRows,my,'cMonthExp','capMonthExp',C.exp,'exp',eeur,null);
  html+=periodTable(monthRows,my,'cMonthTbl','capMonthTbl','thMonth');
- // daily consumption bar chart — each bar labelled with its kWh amount; the € cost line only when a price is set
- let barsC=cons.slice(-31).map(c=>({label:dm(c.ep),value:c.imp,vlab:eur>0?[fmtK(c.imp),nf(c.imp*eur,2)+' €']:[fmtK(c.imp)]}));
+ // daily consumption bar chart — each bar labelled with its kWh amount; the € cost line (blended day/night
+ // when that tariff is on) only when a price is set
+ let barsC=cons.slice(-31).map(c=>({label:dm(c.ep),value:c.imp,vlab:eur>0?[fmtK(c.imp),nf(c.cost,2)+' €']:[fmtK(c.imp)]}));
  html+='<div class=card><h2>'+t('cDay')+'</h2><p class=cap>'+t('capDay')+'</p>'+barChart(barsC,'kWh',C.day)+'</div>';
  // feed-in per day (own chart + scale, only when there is any solar export) — € earnings line only when a feed-in tariff is set
  if(cons.some(c=>c.exp>0)){let barsE=cons.slice(-31).map(c=>({label:dm(c.ep),value:c.exp,vlab:eeur>0?[fmtK(c.exp),nf(c.exp*eeur,2)+' €']:[fmtK(c.exp)]}));
@@ -3368,7 +3489,7 @@ async function load(silent){
  if(cons.length){
   const showCost=eur>0,showExp=anyExp,showEarn=anyExp&&eeur>0;   // € columns only when their price is set
   let head='<th>'+t('thDay')+'</th><th>'+t('thCons')+'</th>'+(showCost?'<th>'+t('thCost')+'</th>':'')+(showExp?'<th>'+t('thExp')+'</th>':'')+(showEarn?'<th>'+t('thEarn')+'</th>':'');
-  let rows=cons.slice(-31).reverse().map(c=>'<tr><td>'+dmy(c.ep)+'</td><td class="mono pos">'+nf(c.imp,2)+'</td>'+(showCost?'<td class="mono euro">'+nf(c.imp*eur,2)+' €</td>':'')+(showExp?'<td class="mono neg">'+nf(c.exp,2)+'</td>':'')+(showEarn?'<td class="mono euro">'+nf(c.exp*eeur,2)+' €</td>':'')+'</tr>').join('');
+  let rows=cons.slice(-31).reverse().map(c=>'<tr><td>'+dmy(c.ep)+'</td><td class="mono pos">'+nf(c.imp,2)+'</td>'+(showCost?'<td class="mono euro">'+nf(c.cost,2)+' €</td>':'')+(showExp?'<td class="mono neg">'+nf(c.exp,2)+'</td>':'')+(showEarn?'<td class="mono euro">'+nf(c.exp*eeur,2)+' €</td>':'')+'</tr>').join('');
   html+='<div class=card><h2>'+t('cTbl')+'</h2><p class=cap>'+t('capTbl')+'</p><div class=twrap><table><thead><tr>'+head+'</tr></thead><tbody>'+rows+'</tbody></table></div></div>';
  }
  // hourly values: kWh consumed / fed-in within each local clock hour (from the counter deltas)
@@ -3394,6 +3515,27 @@ async function load(silent){
    let s=o.s,pw=s[3]==null?'<span class=na>—</span>':nf(s[3],0);
    return `<tr><td>${dmy(s[0])} ${hm(s[0])}</td><td class="mono">${pw}</td><td class="mono">${fmtW(o.cw)}</td><td class="mono">${nf(s[1]/1000,2)}</td><td class="mono">${fmtD(o.di)}</td><td class="mono">${nf(s[2]/1000,2)}</td><td class="mono">${fmtD(o.de)}</td></tr>`;}).join('');
   html+='<div class=card><h2>'+t('cWatt')+'</h2><p class=cap>'+t('capWatt')+' ('+shown.length+'/'+all.length+')</p><div class=twrap><table><thead><tr><th>'+t('thTime')+'</th><th>'+t('thPow')+'</th><th>'+t('thPowCalc')+'</th><th>'+t('thImpK')+'</th><th>'+t('thDelta')+'</th><th>'+t('thExpK')+'</th><th>'+t('thDeltaExp')+'</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+ }
+ // day/night tariff settings for this reader -- deliberately the LAST section on the page (a settings
+ // block, not something to read regularly like the charts/tables above). Base/export price lives in the
+ // header boxes instead (per-reader now, no global setting) -- see savePrice()/saveEprice(). Raw (not
+ // gateway-resolved) override state comes from the `readers` array boot() already fetched, since
+ // /api/history only returns the resolved price.
+ { const rdr=readers.find(x=>x.id===cur);
+   if(rdr){
+    const nOn=!!rdr.night_on;
+    html+='<div class=card><h2>'+t('cNight')+'</h2>'+
+     '<label style="display:flex;align-items:center;gap:8px;margin-top:4px;cursor:pointer">'+
+      '<input type=checkbox id=rnight style="width:auto;margin:0"'+(nOn?' checked':'')+'><span>'+t('lNightOn')+'</span></label>'+
+     '<p class=cap>'+t('capNight')+'</p>'+
+     '<div class=grid>'+
+      '<div><label>'+t('lNightStart')+'</label><input id=rnstart type=number min=0 max=23 value="'+(rdr.night_start!=null?rdr.night_start:22)+'"></div>'+
+      '<div><label>'+t('lNightEnd')+'</label><input id=rnend type=number min=0 max=23 value="'+(rdr.night_end!=null?rdr.night_end:6)+'"></div>'+
+      '<div><label>'+t('lNightPrice')+'</label><input id=rnprice type=number step=1 min=0'+(rdr.night_price_cent!=null?' value="'+rdr.night_price_cent+'"':'')+'></div>'+
+     '</div>'+
+     '<div class=row><button onclick=saveReaderPrice()>'+t('bSavePrice')+'</button><span class=msg id=rpricemsg></span></div>'+
+    '</div>';
+   }
  }
  main.innerHTML=html;
 }
@@ -3468,6 +3610,7 @@ static void startServices() {
   server.on("/api/assign",      HTTP_POST, guard(handleAssign));   // accept/drop a reader onto this gateway
   server.on("/api/name",        HTTP_POST, guard(handleName));    // set/clear a reader's friendly name
   server.on("/api/boxcfg",      HTTP_POST, guard(handleBoxCfg));  // set/clear a reader's dashboard box layout
+  server.on("/api/reader/price", HTTP_POST, guard(handleReaderPrice));  // per-reader price override / day-night tariff
   server.on("/api/pairall",     HTTP_POST, guard(handlePairAll));  // open the 3-min auto-accept window
   server.on("/radio",           HTTP_GET,  guard(handleRadioPage));  // live radio message view
   server.on("/api/radio",       HTTP_GET,  guard(handleRadioApi));
@@ -3476,8 +3619,6 @@ static void startServices() {
   server.on("/api/history/csv", HTTP_GET,  guard(handleHistoryCsv));
   server.on("/api/history/readers", HTTP_GET, guard(handleHistoryReaders));
   server.on("/api/history/clear", HTTP_POST, guard(handleHistoryClear));
-  server.on("/api/price",       HTTP_GET,  guard(handlePrice));        // read the € ct/kWh price
-  server.on("/api/price",       HTTP_POST, guard(handlePrice));        // set + persist it
   static const char *collectHdrs[] = { "Cookie" };
   server.collectHeaders(collectHdrs, 1);   // needed so server.header("Cookie") works for the login session
   }   // end one-time route registration
@@ -4011,8 +4152,6 @@ static void webTask(void *) {
   g_nightMode = prefs.getBool("nightmode", false);
   g_hideUnbound = prefs.getBool("hideunb", false);
   g_numFmt = prefs.getUChar("numfmt", 0);
-  g_priceCent = prefs.getFloat("pkwh", 31.0f);   // electricity price (€ ct/kWh) for the history cost columns
-  g_exportCent = prefs.getFloat("ekwh", 0.0f);   // feed-in tariff (€ ct/kWh); default 0 = no pay for export
   prefs.end();
   setenv("TZ", g_tz, 1); tzset();                // apply the saved zone up-front (localtime works before NTP too)
   clampTimeSanity();   // esp_restart() (self-OTA) carries the RTC clock across reboots -- clear it up-front

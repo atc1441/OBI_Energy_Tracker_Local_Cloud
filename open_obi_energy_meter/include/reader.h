@@ -56,6 +56,17 @@ struct Reader {
   uint32_t mqttPubEnergyMs = 0;     // lastEnergyMs value at the last MQTT publish — drives event-driven publishing
                                     // (publish the moment a fresh energy frame differs from this). Owned by the
                                     // web/MQTT task only; lastEnergyMs is written by the LoRa task (atomic uint32).
+  // Per-reader price override + optional day/night tariff (persisted in NVS ns "obiprice", see main.cpp).
+  // -1 on either price field means "not set, use the global g_priceCent/g_exportCent" (gateway_web.cpp).
+  // When nightTariffOn, energy is bucketed live into day/night sub-totals the moment it's recorded (see
+  // historyService() in gateway_web.cpp) rather than derived after the fact -- the raw sample log this could
+  // otherwise be reconstructed from is short-retention, but the daily rollup (where day_wh/night_wh live) is
+  // permanent, so this is the only way to get an exact split that lasts as long as the rest of the history.
+  float    priceCentOverride  = -1;
+  float    exportCentOverride = -1;
+  bool     nightTariffOn   = false;
+  uint8_t  nightStartHour  = 22, nightEndHour = 6;   // hour-of-day [start,end); wraps past midnight if start>=end
+  float    nightPriceCent  = -1;    // -1 = not set (falls back to the day rate if nightTariffOn is somehow on anyway)
 };
 
 // defined in main.cpp
@@ -81,6 +92,10 @@ uint32_t gw_uptime_s();
 bool gw_assign_reader(const uint8_t handle[3], bool on);              // accept (or drop) a reader onto this gateway
 bool gw_set_reader_name(const uint8_t handle[3], const char *name);   // set ("" clears) the friendly name; false = unknown reader
 bool gw_set_reader_boxcfg(const uint8_t handle[3], const char *cfg);  // set ("" clears) the dashboard box layout; false = unknown reader
+// set (or clear, with a negative price) a reader's price override / day-night tariff; false = unknown reader.
+// nightStart/nightEnd are hours 0-23; the caller always sends the full set together (see /api/reader/price).
+bool gw_set_reader_price(const uint8_t handle[3], float priceCent, float exportCent,
+                          bool nightOn, uint8_t nightStart, uint8_t nightEnd, float nightPriceCent);
 void gw_pair_all(uint16_t seconds);                                   // open a window that auto-assigns every reader
 uint32_t gw_pair_remaining_s();                                       // seconds left in the auto-pair window (0 = off)
 
