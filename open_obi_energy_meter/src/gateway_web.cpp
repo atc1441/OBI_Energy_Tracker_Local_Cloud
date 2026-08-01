@@ -102,6 +102,10 @@ static char     g_tz[48] = "CET-1CEST,M3.5.0,M10.5.0/3";   // POSIX TZ for the h
 static char     g_ntp[64] = "pool.ntp.org";                // NTP server for the wall clock (user-settable)
 static volatile bool g_nightMode = false;                    // disable normal-operation LED activity
 static bool g_hideUnbound = false;                           // dashboard: hide unbound (pending) reader cards (persisted, NVS "obigw"/"hideunb")
+// Number format for every kWh/W/€ value shown in the web UI, independent of the DE/EN text language toggle
+// (a user may want German text with US-style numbers or vice versa): 0 = auto (follow the page's text
+// language, the historical behavior), 1 = force EU style (1.234,56), 2 = force US style (1,234.56).
+static uint8_t g_numFmt = 0;
 static uint16_t g_pubEvery = 15;   // gateway-state publish cadence (s); reader telemetry is event-driven, not throttled by this
 
 // HTTP Basic Auth for the whole web dashboard/API. Blank username = auth disabled (open, backward compatible).
@@ -268,6 +272,7 @@ static String statusJson() {
     // timeValid()) never gets rendered as a plausible-looking date; callers only trust "time" when time_valid.
     j += ",\"tz\":" + jstr(g_tz) + ",\"ntp\":" + jstr(g_ntp) + ",\"time\":\"" + tb + "\",\"time_valid\":" + String(tv ? "true" : "false"); }
   j += ",\"night_mode\":" + String(g_nightMode ? "true" : "false");
+  j += ",\"num_fmt\":" + String(g_numFmt);   // 0=auto(follow lang) 1=EU (1.234,56) 2=US (1,234.56)
   j += ",\"hide_unbound\":" + String(g_hideUnbound ? "true" : "false");
   j += ",\"lora_sf\":" + String(g_loraSF);   // SF actually running since boot -- see /api/lora/sf
   j += ",\"wifi\":" + String(g_wifiOk ? "true" : "false");
@@ -539,6 +544,11 @@ const T={
   ren:'Rename',abort:'Cancel',
   samever:'The reader is already on v%v — it will not accept the same version (no reflash).\n\nTry anyway?'}};
 let lang=localStorage.getItem('lang')||'de',L=T[lang];
+// number format for every kWh/W/€ value: independent of `lang` (the UI TEXT language) -- 0=auto (follow
+// lang, the historical behavior), 1=force EU (1.234,56), 2=force US (1,234.56). Set from /api/status's
+// num_fmt in tick() below; a global gateway setting (Settings page), not a per-page localStorage choice.
+let numFmt=0;
+const numLoc=()=>numFmt===1?'de-DE':numFmt===2?'en-US':(lang=='de'?'de-DE':'en-US');
 function setLang(x){lang=x;L=T[x];localStorage.setItem('lang',x);applyLang();tick();}
 function applyLang(){$('#lde').className=lang=='de'?'act':'';$('#len').className=lang=='en'?'act':'';
  $('#pair_btn').textContent=L.pairall;$('#hideunb_lbl').textContent=L.hideUnb;}
@@ -562,10 +572,10 @@ async function wifiConnect(){let s=wifiSsid();if(!s){$('#wf_msg').textContent=la
  $('#wf_msg').textContent=(lang=='de'?'verbinde mit ':'connecting to ')+s+' — '+(lang=='de'?'Status oben beachten':'watch the status bar')+'.';}
 function wifiPortal(){fetch('/api/wifi',{method:'POST'}).then(r=>r.json()).then(d=>{
  alert((lang=='de'?'Portal gestartet auf WLAN: ':'Portal started on WiFi: ')+d.ssid+'\n'+(lang=='de'?'Verbinde dich damit und öffne ':'Connect to it and open ')+'http://192.168.4.1/');}).catch(()=>{});}
-const nf=n=>n.toLocaleString(lang=='de'?'de-DE':'en-US');
+const nf=n=>n.toLocaleString(numLoc());
 function val(v,unit){return v===null?`<span class="v na">–</span>`:`<span class="v">${nf(v)}${unit?' <small>'+unit+'</small>':''}</span>`}
 // import/export come as raw Wh -> show kWh (raw/1000) with 3 decimals
-function valE(v){return v===null?`<span class="v na">–</span>`:`<span class="v">${(v/1000).toLocaleString(lang=='de'?'de-DE':'en-US',{minimumFractionDigits:3,maximumFractionDigits:3})} <small>kWh</small></span>`}
+function valE(v){return v===null?`<span class="v na">–</span>`:`<span class="v">${(v/1000).toLocaleString(numLoc(),{minimumFractionDigits:3,maximumFractionDigits:3})} <small>kWh</small></span>`}
 function bcol(p){return p>50?'var(--accent)':p>20?'var(--amber)':'var(--red)'}
 function fmt(s){const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return (d?d+'d ':'')+(h?h+'h ':'')+m+'m'}
 function fmtKB(n){return n==null?'?':(n/1024).toFixed(0)+' KB'}
@@ -573,7 +583,7 @@ let cfgLoaded=false;
 let lastStatus=null;   // cached /api/status, so file-picker checks don't need their own fetch
 async function tick(){try{
  const st=await (await fetch('/api/status')).json(), rs=await (await fetch('/api/readers')).json();_rs=rs;
- lastStatus=st;
+ lastStatus=st;numFmt=st.num_fmt||0;
  $('#logout_btn').style.display=(st.auth&&st.auth.enabled)?'':'none';   // only show logout when a login is required
  $('#sub').textContent='OBI Gateway '+(st.gw||st.gwid).toUpperCase();
  $('#gw').textContent=st.gwid_ascii+' · '+(st.mac||st.gwid);
@@ -1050,6 +1060,20 @@ static void handleNightMode() {
   server.send(200, "application/json", String("{\"ok\":true,\"enabled\":") + (g_nightMode ? "true" : "false") + "}");
 }
 
+// Number format for every kWh/W/€ value across the web UI (see g_numFmt comment). Global, persisted like
+// night mode -- independent of each page's own DE/EN text-language toggle.
+static void handleNumFmt() {
+  if (server.hasArg("fmt")) {
+    int f = server.arg("fmt").toInt();
+    if (f == 0 || f == 1 || f == 2) {
+      g_numFmt = (uint8_t)f;
+      prefs.begin("obigw", false); prefs.putUChar("numfmt", g_numFmt); prefs.end();
+      Serial.printf("[settings] num_fmt = %u\n", g_numFmt);
+    } else { server.send(400, "application/json", "{\"ok\":false,\"err\":\"fmt\"}"); return; }
+  }
+  server.send(200, "application/json", String("{\"ok\":true,\"fmt\":") + g_numFmt + "}");
+}
+
 // Dashboard cosmetic: hide unbound (pending) reader cards. Global (not per-reader), persisted in NVS like
 // night mode. The web UI still auto-reveals pending readers during a pairing window, so binding never locks out.
 static void handleHideUnbound() {
@@ -1492,6 +1516,9 @@ button:disabled{opacity:.5;cursor:default}
   <label style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
    <input type=checkbox id=night style="width:auto;margin:0"><span id=lnight>Nachtmodus: normale LED-Aktivität aus</span></label>
   <div class=row><button type=button onclick=saveNightMode()><span id=bnsave>Speichern</span></button><span class=msg id=nmsg></span></div>
+  <label id=lnumfmt style="margin-top:14px;display:block">Zahlenformat</label>
+  <select id=numfmt><option value=0>Automatisch (nach Sprache)</option><option value=1>1.234,56 (EU)</option><option value=2>1,234.56 (US)</option></select>
+  <div class=row><button type=button onclick=saveNumFmt()><span id=bnumfmt>Speichern</span></button><span class=msg id=numfmtmsg></span></div>
  </div>
 
  <div class=card>
@@ -1562,6 +1589,11 @@ $('lghivl').textContent=t('Prüfintervall','Check interval');$('oghH').textConte
 $('htime').textContent=t('Zeit','Time');$('ltz').textContent=t('Zeitzone','Timezone');$('lntp').textContent=t('NTP-Server','NTP server');$('btz').textContent=t('Speichern','Save');
 $('hmisc').textContent=t('Sonstiges','Misc');$('lnight').textContent=t('Nachtmodus (normale LED-Aktivität aus)','Night mode (mute normal LED activity)');
 $('bnsave').textContent=t('Speichern','Save');
+$('lnumfmt').textContent=t('Zahlenformat (kWh/W/€ im gesamten Web-UI)','Number format (kWh/W/€ across the whole web UI)');
+$('numfmt').options[0].textContent=t('Automatisch (nach Sprache)','Automatic (follows the text language)');
+$('numfmt').options[1].textContent=t('1.234,56 (europäisch)','1.234,56 (European)');
+$('numfmt').options[2].textContent=t('1,234.56 (US)','1,234.56 (US)');
+$('bnumfmt').textContent=t('Speichern','Save');
 $('hlora').textContent=t('LoRa-Reichweite','LoRa range');$('llorasf').textContent=t('Spreizfaktor (Spreading Factor)','Spreading factor');
 $('lorasf').options[0].textContent=t('SF7 (Standard)','SF7 (default)');$('lorasf').options[1].textContent=t('SF9 (mehr Reichweite, langsamer)','SF9 (more range, slower)');
 $('lorawarn').textContent=t('Nur ändern, wenn ALLE Reader bereits mit der passenden SF-Firmware geflasht sind — sonst verlieren sie sofort nach dem Neustart die Verbindung. Änderung wirkt erst nach einem Neustart des Gateways.','Only change this once ALL readers are already flashed with matching-SF firmware — otherwise they lose the connection the moment this reboots. Takes effect after a gateway reboot.');
@@ -1578,7 +1610,7 @@ async function load(){try{
   $('mqstat').innerHTML=!q.enabled?`<span class="dot idle"></span>${t('deaktiviert','disabled')}`:q.connected?`<span class="dot on"></span>${t('verbunden','connected')} · ${q.host}${tls}`:`<span class="dot off"></span>${t('getrennt','disconnected')} — ${q.state}${tls}`;
   if(!cfg){cfg=true;$('mh').value=q.host||'';$('mp').value=q.port||1883;$('mu').value=q.user||'';$('mt').value=q.topic||'';
    $('mtls').checked=!!q.tls;if(q.ca_set)$('mca').placeholder=t('Zertifikat gespeichert — leer lassen zum Beibehalten','certificate saved — leave blank to keep');
-   $('au').value=(s.auth&&s.auth.user)||'';$('night').checked=!!s.night_mode;}
+   $('au').value=(s.auth&&s.auth.user)||'';$('night').checked=!!s.night_mode;$('numfmt').value=s.num_fmt||0;}
   $('austat').innerHTML=(s.auth&&s.auth.enabled)?`<span class="dot on"></span>${t('geschützt als','protected as')} <code>${s.auth.user}</code>`:`<span class="dot idle"></span>${t('offen — kein Passwort','open — no password')}`;
   $('fwcur').innerHTML=`${t('Aktuell','Current')}: <code>${s.fw?s.fw.version:'?'}</code> (${s.fw?s.fw.target:''})`;
   if(s.lora_sf&&!loraSfc){loraSfc=true;$('lorasf').value=s.lora_sf;loraSfChanged();}
@@ -1592,6 +1624,7 @@ async function load(){try{
 }catch(e){}}
 function tzPick(){const v=$('tzsel').value;if(v)$('tztext').value=v;}
 async function saveNightMode(){const m=$('nmsg');m.textContent='…';try{const r=await(await fetch('/api/night_mode',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'enabled='+($('night').checked?'1':'0')})).json();if(!r.ok)throw Error();m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);}catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
+async function saveNumFmt(){const m=$('numfmtmsg');m.textContent='…';try{const r=await(await fetch('/api/numfmt',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'fmt='+$('numfmt').value})).json();if(!r.ok)throw Error();m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);}catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
 async function saveLoraSf(){const sf=$('lorasf').value;
  const risk9=sf==='9'?t(' SF9 verbraucht außerdem spürbar mehr Akku pro Reader (grob das 3,4-Fache an Sendezeit) und ist eine inoffizielle, ungetestete Anpassung — Nutzung auf eigenes Risiko.',' SF9 also uses meaningfully more reader battery (roughly 3.4× the airtime) and is an unofficial, off-label patch — use at your own risk.'):'';
  if(!confirm(t('SF'+sf+' speichern? Erst NACH dem manuellen Neustart aktiv. Alle Reader müssen dann bereits auf SF'+sf+' geflasht sein, sonst sind sie nach dem Neustart nicht mehr erreichbar.','Save SF'+sf+'? Only takes effect after a manual reboot. Every reader must already be flashed to SF'+sf+' by then, or it becomes unreachable the moment this reboots.')+risk9))return;
@@ -2744,6 +2777,10 @@ let readers=[],cur=null;
 let rawHours=localStorage.getItem('obiRawHours')||'1';
 const C={imp:'#31d07a',exp:'#5aa9ff',day:'#e3b341',pow:'#f0616d',calc:'#3ddbd9',month:'#b48cff',year:'#e08a4f'};
 let lang=localStorage.getItem('obilang');if(lang!=='en'&&lang!=='de')lang=(navigator.language||'de').slice(0,2)==='de'?'de':'en';
+// number format for every kWh/W/€ value: independent of `lang` -- 0=auto (follow lang, historical
+// behavior), 1=force EU (1.234,56), 2=force US (1,234.56). Set from /api/status's num_fmt in boot() below
+// (a global gateway setting from the Settings page, not a per-page localStorage choice).
+let numFmt=0;
 const T={
  de:{reload:'neu laden',dlLabel:'Export:',dlRawT:'Rohdaten (Messpunkte) als CSV herunterladen',dlDailyT:'Tageswerte als CSV herunterladen',clearT:'Historie dieses Readers löschen',fsFreeT:'Freier Speicher für die Verlaufsdaten aller Reader (siehe /debug für Details)',fsRaw:'Rohdaten',fsDaily:'Tageswerte',priceT:'Strompreis – gilt global für alle Reader',priceTexp:'Einspeisevergütung – gilt global für alle Reader',
   loading:'lädt…',loadErr:'Fehler beim Laden.',
@@ -2803,7 +2840,7 @@ const T={
   clearC:r=>'Delete stored history for '+r+'?'}
 };
 const t=k=>T[lang][k];
-const loc=()=>lang==='de'?'de-DE':'en-GB';
+const loc=()=>numFmt===1?'de-DE':numFmt===2?'en-GB':(lang==='de'?'de-DE':'en-GB');
 const nf=(v,d=2)=>Number(v).toLocaleString(loc(),{minimumFractionDigits:d,maximumFractionDigits:d});
 const p2=n=>n<10?'0'+n:''+n;
 const D=ep=>new Date(ep*1000);
@@ -2883,7 +2920,7 @@ async function boot(){
  applyLang();main.innerHTML='<div class=empty>'+t('loading')+'</div>';
  try{let p=await (await fetch('/api/price')).json();$('price').value=p.cent;$('eprice').value=p.ecent;}catch(e){}   // global prices into the header
  $('price').onchange=savePrice;$('eprice').onchange=saveEprice;
- try{let s=await (await fetch('/api/status')).json();const hf=s.hist_fs;
+ try{let s=await (await fetch('/api/status')).json();numFmt=s.num_fmt||0;const hf=s.hist_fs;
   if(hf&&hf.ok){const kb=n=>(n/1024).toFixed(0)+' KB';
    $('fsstat').textContent='💾 '+t('fsRaw')+' '+kb(hf.total-hf.used)+'/'+kb(hf.total)+(hf.backend==='ota'?' (OTA)':'')+
     ' · '+t('fsDaily')+' '+kb(hf.daily_total-hf.daily_used)+'/'+kb(hf.daily_total);
@@ -3124,6 +3161,7 @@ static void startServices() {
   server.on("/api/appass", HTTP_POST, guard(handleApPassword));  // set the setup-hotspot AP password
   server.on("/api/tz",   HTTP_POST, guard(handleTz));       // set the timezone (history day-buckets)
   server.on("/api/night_mode", HTTP_POST, guard(handleNightMode)); // disable normal-operation LED activity
+  server.on("/api/numfmt", HTTP_POST, guard(handleNumFmt));        // number format: 0=auto 1=EU 2=US
   server.on("/api/hideunbound", HTTP_POST, guard(handleHideUnbound)); // dashboard: hide unbound reader cards
   server.on("/api/lora/sf", HTTP_POST, guard(handleLoraSF));          // LoRa spreading factor (7/9) -- reboot required
   server.on("/api/wifi", HTTP_POST, guard(handleWifiPortal));        // open the on-demand WiFiManager portal (AP)
@@ -3687,6 +3725,7 @@ static void webTask(void *) {
   { String n = prefs.getString("ntp", "pool.ntp.org"); n.toCharArray(g_ntp, sizeof g_ntp); }
   g_nightMode = prefs.getBool("nightmode", false);
   g_hideUnbound = prefs.getBool("hideunb", false);
+  g_numFmt = prefs.getUChar("numfmt", 0);
   g_priceCent = prefs.getFloat("pkwh", 31.0f);   // electricity price (€ ct/kWh) for the history cost columns
   g_exportCent = prefs.getFloat("ekwh", 0.0f);   // feed-in tariff (€ ct/kWh); default 0 = no pay for export
   prefs.end();
