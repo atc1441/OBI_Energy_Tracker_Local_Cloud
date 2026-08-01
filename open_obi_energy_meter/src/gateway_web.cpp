@@ -2726,8 +2726,8 @@ td.mono{font-family:var(--mono)}
 <button id=clr>🗑</button>
 <span class=langtog><button data-l=de>DE</button><button data-l=en>EN</button></span>
 <span class=sp></span>
-<span id=pbox class=pricebox>💶<input id=price type=number step=0.01 min=0><small>ct/kWh</small><span id=psaved></span></span>
-<span id=ebox class=pricebox>☀️<input id=eprice type=number step=0.01 min=0><small>ct/kWh</small><span id=esaved></span></span>
+<span id=pbox class=pricebox>💶<input id=price type=number step=1 min=0><small>ct/kWh</small><span id=psaved></span></span>
+<span id=ebox class=pricebox>☀️<input id=eprice type=number step=1 min=0><small>ct/kWh</small><span id=esaved></span></span>
 <span id=fsstat class=dllabel></span>
 <a href="/">← dashboard</a>
 </header>
@@ -2742,7 +2742,7 @@ let readers=[],cur=null;
 // instead of each chart picking its own amount to show. The full sample array is already fetched in one
 // /api/history call either way; this only limits what's rendered. Persisted per-browser.
 let rawHours=localStorage.getItem('obiRawHours')||'1';
-const C={imp:'#31d07a',exp:'#5aa9ff',day:'#e3b341',pow:'#f0616d',calc:'#3ddbd9'};
+const C={imp:'#31d07a',exp:'#5aa9ff',day:'#e3b341',pow:'#f0616d',calc:'#3ddbd9',month:'#b48cff',year:'#e08a4f'};
 let lang=localStorage.getItem('obilang');if(lang!=='en'&&lang!=='de')lang=(navigator.language||'de').slice(0,2)==='de'?'de':'en';
 const T={
  de:{reload:'neu laden',dlLabel:'Export:',dlRawT:'Rohdaten (Messpunkte) als CSV herunterladen',dlDailyT:'Tageswerte als CSV herunterladen',clearT:'Historie dieses Readers löschen',fsFreeT:'Freier Speicher für die Verlaufsdaten aller Reader (siehe /debug für Details)',fsRaw:'Rohdaten',fsDaily:'Tageswerte',priceT:'Strompreis – gilt global für alle Reader',priceTexp:'Einspeisevergütung – gilt global für alle Reader',
@@ -2752,10 +2752,15 @@ const T={
   noHist:r=>'Für <b>'+r+'</b> wurde noch keine Historie aufgezeichnet.<br>Die Werte werden fortlaufend gespeichert — schau in ein paar Minuten wieder vorbei.',
   ntp:'⏱ Uhrzeit noch nicht per NTP synchronisiert — Tagesverbrauch wird erst nach dem Zeitabgleich korrekt zugeordnet.',
   kImp:'Import · Bezug gesamt (kWh)',kExp:'Export · Einspeisung gesamt (kWh)',kToday:'Verbrauch heute – bisher (kWh)',
-  kCost:p=>'Kosten heute ('+p+' ct/kWh)',kTodayExp:'Einspeisung heute – bisher (kWh)',kPow:'Leistung aktuell (W)',
+  kCost:p=>'Kosten heute ('+p+' ct/kWh)',kTodayExp:'Einspeisung heute – bisher (kWh)',
   kEarn:p=>'Erlös heute ('+p+' ct/kWh)',
   cDay:'Verbrauch pro Tag',capDay:'kWh/Tag aus den Änderungen des Zählerstands (zuverlässig, unabhängig vom Watt-Wert).',
   cDayExp:'Einspeisung pro Tag',capDayExp:'kWh/Tag per Solar ins Netz eingespeist — aus den Änderungen des Export-Zählerstands.',
+  cMonth:'Verbrauch pro Monat',capMonth:'kWh/Monat aus den Änderungen des Zählerstands — Summe der Tageswerte je Kalendermonat.',
+  cMonthExp:'Einspeisung pro Monat',capMonthExp:'kWh/Monat per Solar ins Netz eingespeist — Summe der Tageswerte je Kalendermonat.',
+  cMonthTbl:'Monats-Tabelle',capMonthTbl:'Verbrauch (Import), Kosten, Einspeisung (Export) und Erlös je Monat.',thMonth:'Monat',
+  cYear:'Verbrauch pro Jahr',capYear:'kWh/Jahr aus den Änderungen des Zählerstands — Summe der Tageswerte je Kalenderjahr.',
+  cYearTbl:'Jahres-Tabelle',capYearTbl:'Verbrauch (Import), Kosten, Einspeisung (Export) und Erlös je Jahr.',thYear:'Jahr',
   cImp:'Zählerstand-Verlauf · Import (Bezug)',capImp:'Kumuliert aus dem Netz bezogener Strom (kWh) — der Hauptwert.',
   cExp:'Zählerstand-Verlauf · Export (Solar-Einspeisung)',capExp:'Kumuliert per Solar ins Netz eingespeister Strom (kWh) — eigene Skala.',
   cPow:'Leistungsverlauf (W)',capPow:'Momentanleistung über die Zeit — negative Werte bedeuten Einspeisung ins Netz. Die gestrichelte Linie ist die aus den Zählerstand-Änderungen (Import/Export) berechnete Durchschnittsleistung — nützlich wenn der Zähler falsche/unplausible Watt-Werte liefert (z. B. fehlerhafte 24-Bit-Vorzeichenerweiterung bei negativer Leistung).',
@@ -2775,10 +2780,15 @@ const T={
   noHist:r=>'No history recorded for <b>'+r+'</b> yet.<br>Values are stored continuously — check back in a few minutes.',
   ntp:'⏱ Clock not yet synced via NTP — daily consumption is only attributed correctly after the time sync.',
   kImp:'Import · consumed total (kWh)',kExp:'Export · fed-in total (kWh)',kToday:'Consumption today – so far (kWh)',
-  kCost:p=>'Cost today ('+p+' ct/kWh)',kTodayExp:'Feed-in today – so far (kWh)',kPow:'Power now (W)',
+  kCost:p=>'Cost today ('+p+' ct/kWh)',kTodayExp:'Feed-in today – so far (kWh)',
   kEarn:p=>'Earnings today ('+p+' ct/kWh)',
   cDay:'Consumption per day',capDay:'kWh/day from the meter-counter changes (reliable, independent of the Watt value).',
   cDayExp:'Feed-in per day',capDayExp:'kWh/day fed into the grid (solar) — from the export-counter changes.',
+  cMonth:'Consumption per month',capMonth:'kWh/month from the meter-counter changes — sum of the daily values per calendar month.',
+  cMonthExp:'Feed-in per month',capMonthExp:'kWh/month fed into the grid (solar) — sum of the daily values per calendar month.',
+  cMonthTbl:'Monthly table',capMonthTbl:'Consumption (import), cost, feed-in (export) and earnings per month.',thMonth:'Month',
+  cYear:'Consumption per year',capYear:'kWh/year from the meter-counter changes — sum of the daily values per calendar year.',
+  cYearTbl:'Yearly table',capYearTbl:'Consumption (import), cost, feed-in (export) and earnings per year.',thYear:'Year',
   cImp:'Meter reading history · Import (consumption)',capImp:'Cumulative energy drawn from the grid (kWh) — the main value.',
   cExp:'Meter reading history · Export (solar feed-in)',capExp:'Cumulative solar energy fed into the grid (kWh) — own scale.',
   cPow:'Power history (W)',capPow:'Instantaneous power over time — negative values mean feeding into the grid. The dashed line is the average power calculated from the import/export counter changes — useful when the meter reports wrong/implausible power values (e.g. broken 24-bit sign extension for negative power).',
@@ -2955,7 +2965,6 @@ async function load(silent){
   today=Math.max(0,(curImp-base.imp)/1000);todayExp=Math.max(0,(curExp-base.exp)/1000);}
  if(today==null&&S.length){let tk=dayKey(h.now),td=S.filter(s=>dayKey(s[0])===tk);   // first-day fallback
   if(td.length>=2){today=Math.max(0,(td[td.length-1][1]-td[0][1])/1000);todayExp=Math.max(0,(td[td.length-1][2]-td[0][2])/1000);}}
- let lastPow=last&&last[3]!=null?last[3]:null;
  html+='<div class=kpis>'+
   `<div class=kpi><div class=v>${nf(totImp,2)}</div><div class=l>${t('kImp')}</div></div>`+
   `<div class=kpi><div class="v neg">${nf(totExp,2)}</div><div class=l>${t('kExp')}</div></div>`+
@@ -2963,10 +2972,44 @@ async function load(silent){
   (eur>0?`<div class=kpi><div class="v euro">${today==null?'—':nf(today*eur,2)+' €'}</div><div class=l>${t('kCost')(nf(price,2))}</div></div>`:'')+
   (anyExp?`<div class=kpi><div class="v neg">${todayExp==null?'—':nf(todayExp,2)}</div><div class=l>${t('kTodayExp')}</div></div>`:'')+
   (anyExp&&eeur>0?`<div class=kpi><div class="v euro">${todayExp==null?'—':nf(todayExp*eeur,2)+' €'}</div><div class=l>${t('kEarn')(nf(eprice,2))}</div></div>`:'')+
-  `<div class=kpi><div class=v>${lastPow==null?'—':nf(lastPow,0)}</div><div class=l>${t('kPow')}</div></div>`+
  '</div>';
- // daily consumption bar chart — each bar labelled with its kWh amount; the € cost line only when a price is set
  const fmtK=v=>nf(v,v>=10?1:2);
+ // Coarsest-to-finest overview first: year, then month, then (below) the existing day-level charts/table --
+ // bucket the SAME per-day counter-delta array (`cons`) the day view already computes; the daily rollup
+ // (`/api/history`'s `daily` field) already retains a long history on-device (years, not just the few hours
+ // the raw sample ring buffer spans, see the comment above `today`), so no extra storage or API call is
+ // needed here, just grouping the existing days by calendar month/year.
+ const my=ep=>{const d=D(ep);return lang==='de'?p2(d.getMonth()+1)+'.'+d.getFullYear():p2(d.getMonth()+1)+'/'+d.getFullYear();};
+ const yr=ep=>D(ep).getFullYear();
+ function bucketBy(keyFn){
+  let map=new Map();
+  cons.forEach(c=>{const k=keyFn(c.ep);let b=map.get(k);if(!b){b={ep:c.ep,imp:0,exp:0};map.set(k,b);}b.imp+=c.imp;b.exp+=c.exp;b.ep=c.ep;});
+  return [...map.values()];
+ }
+ // months capped to the most recent 36 (3 years) so the chart/table stay legible on a device with many
+ // years of history; years are left uncapped since there will realistically only ever be a handful.
+ function periodTable(rows,labelFn,titleKey,capKey,thKey){
+  if(!rows.length)return '';
+  const showCost=eur>0,showExp=anyExp,showEarn=anyExp&&eeur>0;
+  let head='<th>'+t(thKey)+'</th><th>'+t('thCons')+'</th>'+(showCost?'<th>'+t('thCost')+'</th>':'')+(showExp?'<th>'+t('thExp')+'</th>':'')+(showEarn?'<th>'+t('thEarn')+'</th>':'');
+  let trows=rows.slice().reverse().map(r=>'<tr><td>'+labelFn(r.ep)+'</td><td class="mono pos">'+nf(r.imp,3)+'</td>'+(showCost?'<td class="mono euro">'+nf(r.imp*eur,2)+' €</td>':'')+(showExp?'<td class="mono neg">'+nf(r.exp,3)+'</td>':'')+(showEarn?'<td class="mono euro">'+nf(r.exp*eeur,2)+' €</td>':'')+'</tr>').join('');
+  return '<div class=card><h2>'+t(titleKey)+'</h2><p class=cap>'+t(capKey)+'</p><div class=twrap><table><thead><tr>'+head+'</tr></thead><tbody>'+trows+'</tbody></table></div></div>';
+ }
+ // field: 'imp' or 'exp' -- price: the matching €/kWh rate (eur for import, eeur for export) so the value
+ // label under each bar shows cost/earnings just like the day chart's does.
+ function periodChart(rows,labelFn,titleKey,capKey,color,field,price){
+  if(!rows.length)return '';
+  const bars=rows.map(r=>({label:labelFn(r.ep),value:r[field],vlab:price>0?[fmtK(r[field]),nf(r[field]*price,2)+' €']:[fmtK(r[field])]}));
+  return '<div class=card><h2>'+t(titleKey)+'</h2><p class=cap>'+t(capKey)+'</p>'+barChart(bars,'kWh',color)+'</div>';
+ }
+ let yearRows=bucketBy(yr);
+ let monthRows=bucketBy(ep=>{const d=D(ep);return d.getFullYear()*12+d.getMonth();}).slice(-36);
+ // year: too few data points for a bar chart to add anything -- the table alone is enough
+ html+=periodTable(yearRows,yr,'cYear','capYear','thYear');
+ html+=periodChart(monthRows,my,'cMonth','capMonth',C.month,'imp',eur);
+ if(anyExp)html+=periodChart(monthRows,my,'cMonthExp','capMonthExp',C.exp,'exp',eeur);
+ html+=periodTable(monthRows,my,'cMonthTbl','capMonthTbl','thMonth');
+ // daily consumption bar chart — each bar labelled with its kWh amount; the € cost line only when a price is set
  let barsC=cons.slice(-31).map(c=>({label:dm(c.ep),value:c.imp,vlab:eur>0?[fmtK(c.imp),nf(c.imp*eur,2)+' €']:[fmtK(c.imp)]}));
  html+='<div class=card><h2>'+t('cDay')+'</h2><p class=cap>'+t('capDay')+'</p>'+barChart(barsC,'kWh',C.day)+'</div>';
  // feed-in per day (own chart + scale, only when there is any solar export) — € earnings line only when a feed-in tariff is set
