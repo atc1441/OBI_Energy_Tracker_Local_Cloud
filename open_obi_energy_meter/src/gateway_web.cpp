@@ -129,6 +129,25 @@ static uint32_t g_ghIntervalH = 24;     // hours between auto-checks (UI offers 
 // loop that actually owns/advances it.
 static uint32_t g_ghLastCheckMs = 0xFFFFFFFF;
 
+// Periodic FTP history backup: OFF by default. Uploads every reader's daily CSV (see buildDailyCsv() below)
+// to a remote FTP server every g_ftpIntervalMin minutes, each file named "<id>_daily_<unixtime>.csv" so a
+// run never overwrites a previous one. Plain FTP only (RFC 959, passive mode) -- deliberately no FTPS/TLS,
+// same reasoning as the web UI staying HTTP (see ../02-hardware): a comparable TLS stack just for this
+// wasn't worth it on this device. Credentials and file contents go out in the clear -- LAN use only, the
+// Settings page says so next to the fields. Persisted under NVS "obigw" ("ftpen"/"ftph"/"ftpp"/"ftpu"/
+// "ftppw"/"ftppath"/"ftpivl"); configured via /api/ftp.
+static bool     g_ftpEnabled = false;
+static char     g_ftpHost[64] = "";
+static uint16_t g_ftpPort = 21;
+static char     g_ftpUser[32] = "";
+static char     g_ftpPass[32] = "";
+static char     g_ftpPath[64] = "";       // remote folder ("" = server's login dir); created on demand (MKD+CWD)
+static uint32_t g_ftpIntervalMin = 1440;  // minutes between uploads, default 24h (UI offers minutes or hours, stored as minutes)
+static uint32_t g_ftpLastRunMs = 0xFFFFFFFF;   // same 0xFFFFFFFF "not seeded" convention as g_ghLastCheckMs
+static volatile bool g_ftpBusy = false;        // an upload is in flight -- don't start a second one
+static uint8_t  g_ftpLastResult = 0;           // 0 never run, 1 last run ok, 2 last run failed (Settings page)
+static uint32_t g_ftpLastRunS = 0;             // unix time of the last attempt, 0 = never (Settings page)
+
 // History storage state (see ota_hist.h + the "energy history" section below for the rest) -- declared
 // this early only because statusJson() needs them and is defined well above that section.
 static bool g_fsOk       = false;   // a history store (either backend) is mounted and usable
@@ -288,6 +307,19 @@ static String statusJson() {
     }
     j += ",\"gh_auto\":{\"enabled\":" + String(g_ghAuto ? "true" : "false") + ",\"repo\":" + jstr(g_ghRepo) +
          ",\"interval_h\":" + String(g_ghIntervalH) + ",\"next_check_s\":" + String(nextS) + "}";
+  }
+  { uint32_t nextS = 0;   // seconds until the next periodic FTP upload -- 0 when off/mid-upload, same shape as gh_auto
+    if (g_ftpEnabled) {
+      uint64_t intervalMs = (uint64_t)g_ftpIntervalMin * 60000ULL;
+      if (g_ftpLastRunMs == 0xFFFFFFFF) nextS = (uint32_t)(intervalMs / 1000);
+      else { uint32_t elapsed = millis() - g_ftpLastRunMs;
+             nextS = ((uint64_t)elapsed >= intervalMs) ? 0 : (uint32_t)((intervalMs - elapsed) / 1000); }
+    }
+    j += ",\"ftp\":{\"enabled\":" + String(g_ftpEnabled ? "true" : "false") + ",\"host\":" + jstr(g_ftpHost) +
+         ",\"port\":" + String(g_ftpPort) + ",\"user\":" + jstr(g_ftpUser) + ",\"path\":" + jstr(g_ftpPath) +
+         ",\"interval_min\":" + String(g_ftpIntervalMin) + ",\"next_check_s\":" + String(nextS) +
+         ",\"busy\":" + String(g_ftpBusy ? "true" : "false") + ",\"last_result\":" + String(g_ftpLastResult) +
+         ",\"last_run_s\":" + String(g_ftpLastRunS) + "}";
   }
   { size_t ht = 0, hu = 0; historySpace(ht, hu);
     size_t dt = 0, du = 0; dailySpace(dt, du);
@@ -1412,6 +1444,47 @@ static void handleGithubAuto() {
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
+static void ftpUploadTask(void *);   // fwd: defined below, near the rest of the history/CSV helpers it uses
+
+// ---- /api/ftp — configure the periodic FTP history backup (default: disabled) -----------------------
+static void handleFtpCfg() {
+  if (server.hasArg("host")) { String v = server.arg("host"); v.trim(); strlcpy(g_ftpHost, v.c_str(), sizeof g_ftpHost); }
+  if (server.hasArg("port")) { int p = server.arg("port").toInt(); if (p < 1) p = 1; if (p > 65535) p = 65535; g_ftpPort = (uint16_t)p; }
+  if (server.hasArg("user")) strlcpy(g_ftpUser, server.arg("user").c_str(), sizeof g_ftpUser);
+  if (server.hasArg("pass")) strlcpy(g_ftpPass, server.arg("pass").c_str(), sizeof g_ftpPass);
+  if (server.hasArg("path")) {
+    String v = server.arg("path"); v.trim();
+    while (v.startsWith("/")) v = v.substring(1);     // CWD-per-segment below assumes a relative path
+    while (v.endsWith("/")) v = v.substring(0, v.length() - 1);
+    strlcpy(g_ftpPath, v.c_str(), sizeof g_ftpPath);
+  }
+  if (server.hasArg("enabled")) g_ftpEnabled = server.arg("enabled") == "1" || server.arg("enabled") == "true";
+  if (server.hasArg("interval_min")) {
+    long m = server.arg("interval_min").toInt();
+    if (m < 1) m = 1; else if (m > 43200) m = 43200;   // 1 min .. 30 days, same millis()-wraparound reasoning as g_ghIntervalH
+    g_ftpIntervalMin = (uint32_t)m;
+  }
+  g_ftpLastRunMs = millis();   // restart the countdown from now, same reasoning as g_ghLastCheckMs above
+  prefs.begin("obigw", false);
+  prefs.putBool("ftpen", g_ftpEnabled);
+  prefs.putString("ftph", g_ftpHost);
+  prefs.putUShort("ftpp", g_ftpPort);
+  prefs.putString("ftpu", g_ftpUser);
+  prefs.putString("ftppw", g_ftpPass);
+  prefs.putString("ftppath", g_ftpPath);
+  prefs.putUInt("ftpivl", g_ftpIntervalMin);
+  prefs.end();
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+// On-demand "run now" button (Settings page), independent of the interval countdown.
+static void handleFtpRunNow() {
+  if (g_ftpBusy) { server.send(200, "application/json", "{\"ok\":false,\"err\":\"busy\"}"); return; }
+  if (!g_ftpHost[0]) { server.send(200, "application/json", "{\"ok\":false,\"err\":\"nohost\"}"); return; }
+  g_ftpBusy = true; g_ftpLastRunMs = millis();
+  if (xTaskCreate(ftpUploadTask, "ftpup", 8192, nullptr, 3, nullptr) != pdPASS) g_ftpBusy = false;
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
 // ---- /settings — WiFi, MQTT and Firmware in one tidy place ------------------------------------------
 static const char SETTINGS_HTML[] PROGMEM = R"HTML(<!doctype html><html><head><meta charset=utf-8><link rel=icon href=/favicon.svg>
 <meta name=viewport content='width=device-width,initial-scale=1'><title>Open OBI Energy Tracker — Settings</title><style>
@@ -1522,6 +1595,28 @@ button:disabled{opacity:.5;cursor:default}
  </div>
 
  <div class=card>
+  <h3>📤 <span id=hftp>FTP-Backup der Historie</span></h3>
+  <div class=stat id=ftpstat>…</div>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
+   <input type=checkbox id=ftpen style="width:auto;margin:0"><span id=lftpen>Aktiviert</span></label>
+  <div class=grid>
+   <div><label id=lftphost>Server</label><input id=ftphost placeholder=192.168.1.20></div>
+   <div><label>Port</label><input id=ftpport type=number placeholder=21></div>
+   <div><label id=lftpuser>Benutzer</label><input id=ftpuser></div>
+   <div><label id=lftppass>Passwort</label><input id=ftppass type=password placeholder=••••></div>
+  </div>
+  <label id=lftppath>Zielordner (leer = Login-Verzeichnis)</label><input id=ftppath placeholder="backups/obi">
+  <label id=lftpivl>Upload-Intervall</label>
+  <div style="display:flex;gap:6px"><input id=ftpivln type=number min=1 value=24 style="flex:1">
+   <select id=ftpivlu style="flex:1"><option value=1 id=oftpM>Minuten</option><option value=60 selected id=oftpH>Stunden</option></select></div>
+  <p class=cap id=ftpwarn style="color:var(--red)"></p>
+  <div class=msg id=ftpnote style="margin:8px 0 0"></div>
+  <div class=row><button onclick=saveFtp()><span id=bftp>Speichern</span></button>
+   <button class=g onclick=ftpRunNow()><span id=bftprun>Jetzt hochladen</span></button>
+   <span class=msg id=ftpmsg></span></div>
+ </div>
+
+ <div class=card>
   <h3>📡 <span id=hlora>LoRa-Reichweite</span></h3>
   <div class=stat id=lorastat>…</div>
   <label id=llorasf>Spreizfaktor (Spreading Factor)</label>
@@ -1594,12 +1689,18 @@ $('numfmt').options[0].textContent=t('Automatisch (nach Sprache)','Automatic (fo
 $('numfmt').options[1].textContent=t('1.234,56 (europäisch)','1.234,56 (European)');
 $('numfmt').options[2].textContent=t('1,234.56 (US)','1,234.56 (US)');
 $('bnumfmt').textContent=t('Speichern','Save');
+$('hftp').textContent=t('FTP-Backup der Historie','FTP history backup');$('lftpen').textContent=t('Aktiviert','Enabled');
+$('lftphost').textContent=t('Server','Server');$('lftpuser').textContent=t('Benutzer','User');$('lftppass').textContent=t('Passwort','Password');
+$('lftppath').textContent=t('Zielordner (leer = Login-Verzeichnis)','Target folder (blank = login directory)');
+$('lftpivl').textContent=t('Upload-Intervall','Upload interval');$('oftpM').textContent=t('Minuten','minutes');$('oftpH').textContent=t('Stunden','hours');
+$('ftpwarn').textContent=t('⚠️ Reines FTP überträgt Zugangsdaten und Dateien unverschlüsselt — nur im vertrauenswürdigen lokalen Netzwerk verwenden, niemals über das offene Internet.','⚠️ Plain FTP transmits credentials and files unencrypted — only use this on a trusted local network, never across the open internet.');
+$('bftp').textContent=t('Speichern','Save');$('bftprun').textContent=t('Jetzt hochladen','Upload now');
 $('hlora').textContent=t('LoRa-Reichweite','LoRa range');$('llorasf').textContent=t('Spreizfaktor (Spreading Factor)','Spreading factor');
 $('lorasf').options[0].textContent=t('SF7 (Standard)','SF7 (default)');$('lorasf').options[1].textContent=t('SF9 (mehr Reichweite, langsamer)','SF9 (more range, slower)');
 $('lorawarn').textContent=t('Nur ändern, wenn ALLE Reader bereits mit der passenden SF-Firmware geflasht sind — sonst verlieren sie sofort nach dem Neustart die Verbindung. Änderung wirkt erst nach einem Neustart des Gateways.','Only change this once ALL readers are already flashed with matching-SF firmware — otherwise they lose the connection the moment this reboots. Takes effect after a gateway reboot.');
 $('lorawarn9').textContent=t('⚠️ SF9 kostet deutlich mehr Sendezeit pro Übertragung (grob das 3,4-Fache) und damit spürbar mehr Akku beim Reader als SF7 — nur für Reader mit schwachem Empfang sinnvoll. Inoffizielle, ungetestete Anpassung der Reader-Firmware: Nutzung auf eigenes Risiko.','⚠️ SF9 costs noticeably more airtime per transmission (roughly 3.4×) and therefore meaningfully more reader battery than SF7 — only worth it for readers with a weak signal. An unofficial, off-label reader firmware patch: use at your own risk.');
 $('blorasave').textContent=t('Speichern','Save');
-let cfg=false,tzc=false,ghc=false,loraSfc=false;
+let cfg=false,tzc=false,ghc=false,loraSfc=false,ftpc=false;
 function loraSfChanged(){$('lorawarn9').style.display=$('lorasf').value==='9'?'':'none';}
 async function load(){try{
   const s=await(await fetch('/api/status')).json();
@@ -1619,12 +1720,35 @@ async function load(){try{
    let h=s.gh_auto.interval_h||24;
    if(h>=24&&h%24===0){$('ghivlu').value=24;$('ghivln').value=h/24;}else{$('ghivlu').value=1;$('ghivln').value=h;}}
   if(s.gh_auto)$('ghautonote').textContent=s.gh_auto.enabled?t('aktiv — prüft alle ','on — checking every ')+s.gh_auto.interval_h+t(' Std. auf ',' h against ')+(s.gh_auto.repo||'atc1441/OBI_Energy_Tracker_Local_Cloud')+t(' · nächster Check in ',' · next check in ')+fmtDur(s.gh_auto.next_check_s):t('deaktiviert — Firmware ändert sich nur manuell','off — firmware only changes manually');
+  if(s.ftp&&!ftpc){ftpc=true;$('ftpen').checked=!!s.ftp.enabled;$('ftphost').value=s.ftp.host||'';$('ftpport').value=s.ftp.port||21;
+   $('ftpuser').value=s.ftp.user||'';$('ftppath').value=s.ftp.path||'';
+   let m=s.ftp.interval_min||1440;
+   if(m>=60&&m%60===0){$('ftpivlu').value=60;$('ftpivln').value=m/60;}else{$('ftpivlu').value=1;$('ftpivln').value=m;}}
+  if(s.ftp){const f=s.ftp;
+   const lastTxt=f.last_run_s?(f.last_result===1?t('letzter Upload ok','last upload ok'):t('letzter Upload fehlgeschlagen','last upload failed')):t('noch nie ausgeführt','never run yet');
+   $('ftpstat').innerHTML=!f.enabled?`<span class="dot idle"></span>${t('deaktiviert','disabled')}`
+    :f.busy?`<span class="dot on"></span>${t('Upload läuft…','uploading…')}`
+    :`<span class="${f.last_result===2?'dot off':'dot on'}"></span>${lastTxt}`+(f.enabled?' · '+t('nächster Upload in ','next upload in ')+fmtDur(f.next_check_s):'');}
   $('tzstat').innerHTML=(s.time_valid?'<span class="dot on"></span>':'<span class="dot idle"></span>')+`${t('Gerätezeit','Device time')}: <code>${s.time||'?'}</code>`+(s.time_valid?'':` · ${t('noch nicht per NTP synchronisiert','not NTP-synced yet')}`);
   if(!tzc){tzc=true;$('tztext').value=s.tz||'';$('ntptext').value=s.ntp||'';$('tzsel').value=s.tz||'';if($('tzsel').value!==(s.tz||''))$('tzsel').value='';}
 }catch(e){}}
 function tzPick(){const v=$('tzsel').value;if(v)$('tztext').value=v;}
 async function saveNightMode(){const m=$('nmsg');m.textContent='…';try{const r=await(await fetch('/api/night_mode',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'enabled='+($('night').checked?'1':'0')})).json();if(!r.ok)throw Error();m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);}catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
 async function saveNumFmt(){const m=$('numfmtmsg');m.textContent='…';try{const r=await(await fetch('/api/numfmt',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'fmt='+$('numfmt').value})).json();if(!r.ok)throw Error();m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);}catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
+async function saveFtp(){const b=new URLSearchParams();b.set('host',$('ftphost').value);b.set('port',$('ftpport').value||21);
+ b.set('user',$('ftpuser').value);b.set('path',$('ftppath').value);b.set('enabled',$('ftpen').checked?'1':'0');
+ if($('ftppass').value)b.set('pass',$('ftppass').value);
+ const mult=parseInt($('ftpivlu').value)||60,n=Math.max(1,parseInt($('ftpivln').value)||24);
+ b.set('interval_min',n*mult);
+ const m=$('ftpmsg');m.textContent='…';
+ try{const r=await(await fetch('/api/ftp',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b})).json();if(!r.ok)throw Error();
+  $('ftppass').value='';m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);ftpc=false;load();}
+ catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
+async function ftpRunNow(){const m=$('ftpmsg');m.textContent='…';
+ try{const r=await(await fetch('/api/ftp/run',{method:'POST'})).json();
+  m.textContent=r.ok?t('Upload gestartet…','upload started…'):t('fehlgeschlagen: ','failed: ')+(r.err||'?');
+  setTimeout(()=>m.textContent='',4000);setTimeout(load,1500);}
+ catch(e){m.textContent=t('fehlgeschlagen','failed');}}
 async function saveLoraSf(){const sf=$('lorasf').value;
  const risk9=sf==='9'?t(' SF9 verbraucht außerdem spürbar mehr Akku pro Reader (grob das 3,4-Fache an Sendezeit) und ist eine inoffizielle, ungetestete Anpassung — Nutzung auf eigenes Risiko.',' SF9 also uses meaningfully more reader battery (roughly 3.4× the airtime) and is an unofficial, off-label patch — use at your own risk.'):'';
  if(!confirm(t('SF'+sf+' speichern? Erst NACH dem manuellen Neustart aktiv. Alle Reader müssen dann bereits auf SF'+sf+' geflasht sein, sonst sind sie nach dem Neustart nicht mehr erreichbar.','Save SF'+sf+'? Only takes effect after a manual reboot. Every reader must already be flashed to SF'+sf+' by then, or it becomes unreachable the moment this reboots.')+risk9))return;
@@ -2603,6 +2727,158 @@ static String isoLocal(time_t ep) {
   return String(b);
 }
 
+// Build the daily CSV for one reader (same content handleHistoryCsv's kind=daily download produces), as a
+// plain in-memory String rather than streamed to an HTTP response -- used by the periodic FTP upload below.
+// Daily logs stay small even after years (see ota_hist.h), so building the whole thing in RAM first is fine
+// here (unlike the raw/sample log, which the HTTP download path keeps chunked instead).
+static String buildDailyCsv(const String &id) {
+  if (!g_fsOk) return String();
+  String d = fsRead(fpD(id));
+  for (int i = 0; i < MAX_READERS; i++)
+    if (hDaily[i].day && readers[i].used && hex(readers[i].handle, 3) == id) {
+      d = withDailyRow(d, hDaily[i].day, hDaily[i].imp, hDaily[i].exp, dailyCapBytes());
+      break;
+    }
+  String out = "date,day_start_epoch,import_wh,export_wh\n";
+  int i = 0, n = (int)d.length();
+  while (i < n) {
+    int nl = d.indexOf('\n', i); if (nl < 0) nl = n;
+    String line = d.substring(i, nl); line.trim(); i = nl + 1;
+    if (!line.length()) continue;
+    int fc = line.indexOf(',');
+    unsigned long ep = strtoul((fc < 0 ? line : line.substring(0, fc)).c_str(), nullptr, 10);
+    if (ep <= 1735689600UL || ep >= 4102444800UL) continue;   // same epoch sanity bound as sendCsvRows()
+    out += isoLocal((time_t)ep); out += ","; out += line; out += "\n";
+  }
+  return out;
+}
+
+// Every reader id (6 hex chars) that has a /d<id> (daily) log on flash, live or not -- the set the FTP
+// upload iterates. Own directory scan rather than sharing handleHistoryReaders()'s: that one also matches
+// /s<id> (raw-only) readers, which this feature has nothing to upload for.
+static int listDailyReaderIds(String out[], int maxN) {
+  int n = 0;
+  if (!g_fsOk) return 0;
+  String bases[2] = { g_dailyBase, g_rawBase };
+  int nBases = (g_dailyBase == g_rawBase) ? 1 : 2;
+  for (int b = 0; b < nBases; b++) {
+    DIR *dir = opendir(bases[b].c_str());
+    if (!dir) continue;
+    struct dirent *de;
+    while ((de = readdir(dir)) != nullptr) {
+      String name = de->d_name;
+      if (name.length() == 7 && name[0] == 'd') {
+        String id = name.substring(1);
+        bool okid = true;
+        for (size_t k = 0; k < 6; k++) { char c = id[k]; if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) { okid = false; break; } }
+        bool dup = false;
+        for (int k = 0; k < n; k++) if (out[k] == id) { dup = true; break; }
+        if (okid && !dup && n < maxN) out[n++] = id;
+      }
+    }
+    closedir(dir);
+  }
+  return n;
+}
+
+// ---- plain FTP client (RFC 959, passive mode only) -- just enough to log in, cd, and STOR a buffer -------
+// Read one control-connection reply line (e.g. "230 Login successful"); returns its 3-digit status code, or
+// 0 on timeout/EOF. Every reply this client cares about is single-line, so a multi-line ("150-...") reply
+// parser isn't needed.
+static int ftpReadReply(WiFiClient &c, String *line = nullptr, uint32_t toMs = 8000) {
+  uint32_t t0 = millis();
+  String l;
+  while (millis() - t0 < toMs) {
+    while (c.available()) {
+      char ch = (char)c.read();
+      if (ch == '\n') { if (line) *line = l; return l.substring(0, 3).toInt(); }
+      if (ch != '\r') l += ch;
+    }
+    if (!c.connected()) break;
+    delay(5);
+  }
+  return 0;
+}
+static bool ftpCmd(WiFiClient &c, const String &cmd, int expect, String *line = nullptr) {
+  c.print(cmd); c.print("\r\n");
+  return ftpReadReply(c, line) == expect;
+}
+// Upload one in-memory buffer as a file over a fresh PASV data connection. Control connection must already
+// be logged in and CWD'd into the target directory.
+static bool ftpStor(WiFiClient &ctrl, const String &filename, const String &content) {
+  String reply;
+  if (!ftpCmd(ctrl, "TYPE I", 200)) return false;
+  if (!ftpCmd(ctrl, "PASV", 227, &reply)) return false;
+  // "227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)." -- data IP/port encoded as 6 comma-separated bytes.
+  int a = reply.indexOf('('), b = reply.indexOf(')', a);
+  if (a < 0 || b < 0) return false;
+  String inner = reply.substring(a + 1, b);
+  int p[6] = {0}, idx = 0, start = 0;
+  for (int i = 0; i <= (int)inner.length() && idx < 6; i++) {
+    if (i == (int)inner.length() || inner[i] == ',') { p[idx++] = inner.substring(start, i).toInt(); start = i + 1; }
+  }
+  if (idx != 6) return false;
+  WiFiClient dataConn;
+  if (!dataConn.connect(IPAddress(p[0], p[1], p[2], p[3]), (uint16_t)(p[4] * 256 + p[5]), 8000)) return false;
+  // Opening the data connection before sending STOR (done above) is the standard client order, but it means
+  // the server may reply either 150 ("about to open a data connection") or 125 ("data connection already
+  // open, transfer starting") -- RFC 959 defines both for exactly this case, and live-testing against
+  // pyftpdlib confirmed it sends 125 here specifically because the data socket was already connected.
+  int storCode = 0;
+  { ctrl.print("STOR " + filename); ctrl.print("\r\n"); storCode = ftpReadReply(ctrl); }
+  if (storCode != 150 && storCode != 125) { dataConn.stop(); return false; }
+  size_t written = dataConn.write((const uint8_t *)content.c_str(), content.length());
+  dataConn.stop();
+  int code = ftpReadReply(ctrl, nullptr, 15000);   // "226 Transfer complete" -- can take a while on a slow link
+  return written == content.length() && (code == 226 || code == 250);
+}
+// One background upload pass: log in, cd into g_ftpPath (creating any missing segment via MKD), then STOR a
+// fresh "<id>_daily_<unixtime>.csv" for every reader with a stored daily log. The timestamp in every
+// filename is what keeps consecutive runs from ever overwriting each other on the server.
+static void ftpUploadTask(void *) {
+  bool ok = false;
+  WiFiClient ctrl;
+  if (ctrl.connect(g_ftpHost, g_ftpPort, 8000)) {
+    if (ftpReadReply(ctrl) == 220 &&
+        ftpCmd(ctrl, "USER " + String(g_ftpUser), 331) &&
+        ftpCmd(ctrl, "PASS " + String(g_ftpPass), 230)) {
+      ok = true;
+      String path = g_ftpPath;
+      int start = 0;
+      while (ok && start <= (int)path.length()) {
+        int slash = path.indexOf('/', start);
+        String seg = path.substring(start, slash < 0 ? path.length() : slash);
+        if (seg.length()) {
+          ftpCmd(ctrl, "MKD " + seg, 257);      // ignore the result -- "already exists" (550) is fine too,
+          ok = ftpCmd(ctrl, "CWD " + seg, 250);  // the following CWD is the real pass/fail signal
+        }
+        if (slash < 0) break;
+        start = slash + 1;
+      }
+      if (ok) {
+        uint32_t ts = timeValid() ? (uint32_t)time(nullptr) : (uint32_t)(millis() / 1000);
+        String ids[HIST_SLOTS]; int nIds = listDailyReaderIds(ids, HIST_SLOTS);
+        int uploaded = 0;
+        for (int i = 0; i < nIds && ok; i++) {
+          String csv = buildDailyCsv(ids[i]);
+          if (!csv.length()) continue;   // nothing recorded for this reader yet -- nothing to send
+          String fname = ids[i] + "_daily_" + String(ts) + ".csv";
+          if (ftpStor(ctrl, fname, csv)) uploaded++;
+          else { ok = false; Serial.printf("[ftp] STOR %s failed\n", fname.c_str()); }
+        }
+        Serial.printf("[ftp] uploaded %d/%d reader file(s)\n", uploaded, nIds);
+        ok = ok && uploaded > 0;
+      }
+    } else Serial.println("[ftp] login failed");
+    ftpCmd(ctrl, "QUIT", 221);
+    ctrl.stop();
+  } else Serial.printf("[ftp] connect to %s:%u failed\n", g_ftpHost, g_ftpPort);
+  g_ftpLastResult = ok ? 1 : 2;
+  g_ftpLastRunS = timeValid() ? (uint32_t)time(nullptr) : 0;
+  g_ftpBusy = false;
+  vTaskDelete(nullptr);
+}
+
 // Stream a CSV blob (epoch-prefixed lines already on flash, same layout as the /s|/d files) out as a
 // downloadable CSV: a header row, then each line with a local-time column prepended. Same epoch sanity
 // filter as streamRows() so a poisoned row (see that comment) doesn't end up in the export either.
@@ -3176,6 +3452,8 @@ static void startServices() {
   server.on("/api/github/update", HTTP_POST, guard(handleGithubUpdate));     // pull + flash the newest release .bin
   server.on("/api/github/progress", HTTP_GET, guard(handleGithubProgress));  // live download/flash % for the UI
   server.on("/api/github/auto", HTTP_POST, guard(handleGithubAuto));         // configure periodic auto-update
+  server.on("/api/ftp", HTTP_POST, guard(handleFtpCfg));                     // configure periodic FTP history backup
+  server.on("/api/ftp/run", HTTP_POST, guard(handleFtpRunNow));              // upload now, outside the interval
   server.on("/update", HTTP_GET, guard(handleUpdatePage));                   // ESP32 self-update page (still linked from /settings)
   server.on("/api/selfupdate", HTTP_POST, guard(handleSelfOtaDone), handleSelfOtaUpload);
   server.on("/debug", HTTP_GET, guard(handleDebugPage));                     // flash hex editor + flash map
@@ -3721,6 +3999,13 @@ static void webTask(void *) {
   g_ghAuto = prefs.getBool("ghauto", false);                              // periodic GitHub auto-update (default off)
   prefs.getString("ghrepo", "").toCharArray(g_ghRepo, sizeof g_ghRepo);
   g_ghIntervalH = prefs.getUInt("ghivl", 24);
+  g_ftpEnabled = prefs.getBool("ftpen", false);                           // periodic FTP history backup (default off)
+  prefs.getString("ftph", "").toCharArray(g_ftpHost, sizeof g_ftpHost);
+  g_ftpPort = prefs.getUShort("ftpp", 21);
+  prefs.getString("ftpu", "").toCharArray(g_ftpUser, sizeof g_ftpUser);
+  prefs.getString("ftppw", "").toCharArray(g_ftpPass, sizeof g_ftpPass);
+  prefs.getString("ftppath", "").toCharArray(g_ftpPath, sizeof g_ftpPath);
+  g_ftpIntervalMin = prefs.getUInt("ftpivl", 1440);
   { String z = prefs.getString("tz", "CET-1CEST,M3.5.0,M10.5.0/3"); z.toCharArray(g_tz, sizeof g_tz); }
   { String n = prefs.getString("ntp", "pool.ntp.org"); n.toCharArray(g_ntp, sizeof g_ntp); }
   g_nightMode = prefs.getBool("nightmode", false);
@@ -3812,6 +4097,15 @@ static void webTask(void *) {
           g_ghState = 1; g_ghDone = 0; g_ghTotal = 0;
           xTaskCreate(ghOtaTask, "ghota", 10240, nullptr, 4, nullptr);
         } else Serial.println("[gh] auto-update: no newer release");
+      }
+    }
+    if (g_ftpEnabled && conn && g_ftpHost[0] && !g_ftpBusy) {   // periodic FTP history backup -- default OFF, see /api/ftp
+      uint32_t nowMs = millis();                                // full interval after boot, not immediately -- see g_ghAuto above
+      if (g_ftpLastRunMs == 0xFFFFFFFF) g_ftpLastRunMs = nowMs;
+      if (nowMs - g_ftpLastRunMs >= g_ftpIntervalMin * 60000UL) {
+        g_ftpLastRunMs = nowMs;
+        g_ftpBusy = true;
+        if (xTaskCreate(ftpUploadTask, "ftpup", 8192, nullptr, 3, nullptr) != pdPASS) g_ftpBusy = false;
       }
     }
     g_mqttUp = conn && mqtt.connected();                      // cache for the e-paper task (owns PubSubClient here)
