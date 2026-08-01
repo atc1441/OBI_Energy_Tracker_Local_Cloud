@@ -3029,7 +3029,7 @@ async function load(silent){
   if(!rows.length)return '';
   const showCost=eur>0,showExp=anyExp,showEarn=anyExp&&eeur>0;
   let head='<th>'+t(thKey)+'</th><th>'+t('thCons')+'</th>'+(showCost?'<th>'+t('thCost')+'</th>':'')+(showExp?'<th>'+t('thExp')+'</th>':'')+(showEarn?'<th>'+t('thEarn')+'</th>':'');
-  let trows=rows.slice().reverse().map(r=>'<tr><td>'+labelFn(r.ep)+'</td><td class="mono pos">'+nf(r.imp,3)+'</td>'+(showCost?'<td class="mono euro">'+nf(r.imp*eur,2)+' €</td>':'')+(showExp?'<td class="mono neg">'+nf(r.exp,3)+'</td>':'')+(showEarn?'<td class="mono euro">'+nf(r.exp*eeur,2)+' €</td>':'')+'</tr>').join('');
+  let trows=rows.slice().reverse().map(r=>'<tr><td>'+labelFn(r.ep)+'</td><td class="mono pos">'+nf(r.imp,2)+'</td>'+(showCost?'<td class="mono euro">'+nf(r.imp*eur,2)+' €</td>':'')+(showExp?'<td class="mono neg">'+nf(r.exp,2)+'</td>':'')+(showEarn?'<td class="mono euro">'+nf(r.exp*eeur,2)+' €</td>':'')+'</tr>').join('');
   return '<div class=card><h2>'+t(titleKey)+'</h2><p class=cap>'+t(capKey)+'</p><div class=twrap><table><thead><tr>'+head+'</tr></thead><tbody>'+trows+'</tbody></table></div></div>';
  }
  // field: 'imp' or 'exp' -- price: the matching €/kWh rate (eur for import, eeur for export) so the value
@@ -3092,7 +3092,7 @@ async function load(silent){
  if(cons.length){
   const showCost=eur>0,showExp=anyExp,showEarn=anyExp&&eeur>0;   // € columns only when their price is set
   let head='<th>'+t('thDay')+'</th><th>'+t('thCons')+'</th>'+(showCost?'<th>'+t('thCost')+'</th>':'')+(showExp?'<th>'+t('thExp')+'</th>':'')+(showEarn?'<th>'+t('thEarn')+'</th>':'');
-  let rows=cons.slice(-31).reverse().map(c=>'<tr><td>'+dmy(c.ep)+'</td><td class="mono pos">'+nf(c.imp,3)+'</td>'+(showCost?'<td class="mono euro">'+nf(c.imp*eur,2)+' €</td>':'')+(showExp?'<td class="mono neg">'+nf(c.exp,3)+'</td>':'')+(showEarn?'<td class="mono euro">'+nf(c.exp*eeur,2)+' €</td>':'')+'</tr>').join('');
+  let rows=cons.slice(-31).reverse().map(c=>'<tr><td>'+dmy(c.ep)+'</td><td class="mono pos">'+nf(c.imp,2)+'</td>'+(showCost?'<td class="mono euro">'+nf(c.imp*eur,2)+' €</td>':'')+(showExp?'<td class="mono neg">'+nf(c.exp,2)+'</td>':'')+(showEarn?'<td class="mono euro">'+nf(c.exp*eeur,2)+' €</td>':'')+'</tr>').join('');
   html+='<div class=card><h2>'+t('cTbl')+'</h2><p class=cap>'+t('capTbl')+'</p><div class=twrap><table><thead><tr>'+head+'</tr></thead><tbody>'+rows+'</tbody></table></div></div>';
  }
  // hourly values: kWh consumed / fed-in within each local clock hour (from the counter deltas)
@@ -3104,19 +3104,19 @@ async function load(silent){
   for(let i=1;i<horder.length;i++){let a=hmap[horder[i-1]],b=hmap[horder[i]],dd=D(b.ep);
    hours.push({label:dm(b.ep)+' '+p2(dd.getHours())+':00',imp:Math.max(0,(b.imp-a.imp)/1000),exp:Math.max(0,(b.exp-a.exp)/1000)});}
   if(hours.length){
-   let rows=hours.slice(-48).reverse().map(x=>`<tr><td>${x.label}</td><td class="mono pos">${nf(x.imp,3)}</td><td class="mono neg">${anyExp?nf(x.exp,3):'—'}</td></tr>`).join('');
+   let rows=hours.slice(-48).reverse().map(x=>`<tr><td>${x.label}</td><td class="mono pos">${nf(x.imp,2)}</td><td class="mono neg">${anyExp?nf(x.exp,2):'—'}</td></tr>`).join('');
    html+='<div class=card><h2>'+t('cHour')+'</h2><p class=cap>'+t('capHour')+'</p><div class=twrap><table><thead><tr><th>'+t('thHour')+'</th><th>'+t('thCons')+'</th><th>'+t('thExp')+'</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
   }
  }
  // watt / raw sample table
  if(S.length){
-  const fmtD=d=>d==null?'<span class=na>—</span>':(d>0?'<span class=pos>+'+nf(d,3)+'</span>':(d<0?'<span class=neg>'+nf(d,3)+'</span>':'<span class=na>0</span>'));
+  const fmtD=d=>d==null?'<span class=na>—</span>':(d>0?'<span class=pos>+'+nf(d,2)+'</span>':(d<0?'<span class=neg>'+nf(d,2)+'</span>':'<span class=na>0</span>'));
   const fmtW=w=>w==null?'<span class=na>—</span>':(w<0?'<span class=neg>'+nf(w,0)+'</span>':nf(w,0));
   let all=S.map((s,i)=>({s,di:i>0?(s[1]-S[i-1][1])/1000:null,de:i>0?(s[2]-S[i-1][2])/1000:null,cw:calcArr[i]}));
   let shown=all.filter(o=>o.s[0]>=rCutoff);   // same shared window as the charts above (header ⏱ select)
   let rows=shown.reverse().map(o=>{
    let s=o.s,pw=s[3]==null?'<span class=na>—</span>':nf(s[3],0);
-   return `<tr><td>${dmy(s[0])} ${hm(s[0])}</td><td class="mono">${pw}</td><td class="mono">${fmtW(o.cw)}</td><td class="mono">${nf(s[1]/1000,3)}</td><td class="mono">${fmtD(o.di)}</td><td class="mono">${nf(s[2]/1000,3)}</td><td class="mono">${fmtD(o.de)}</td></tr>`;}).join('');
+   return `<tr><td>${dmy(s[0])} ${hm(s[0])}</td><td class="mono">${pw}</td><td class="mono">${fmtW(o.cw)}</td><td class="mono">${nf(s[1]/1000,2)}</td><td class="mono">${fmtD(o.di)}</td><td class="mono">${nf(s[2]/1000,2)}</td><td class="mono">${fmtD(o.de)}</td></tr>`;}).join('');
   html+='<div class=card><h2>'+t('cWatt')+'</h2><p class=cap>'+t('capWatt')+' ('+shown.length+'/'+all.length+')</p><div class=twrap><table><thead><tr><th>'+t('thTime')+'</th><th>'+t('thPow')+'</th><th>'+t('thPowCalc')+'</th><th>'+t('thImpK')+'</th><th>'+t('thDelta')+'</th><th>'+t('thExpK')+'</th><th>'+t('thDeltaExp')+'</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
  }
  main.innerHTML=html;
