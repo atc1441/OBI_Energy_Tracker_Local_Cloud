@@ -102,6 +102,12 @@ static char     g_tz[48] = "CET-1CEST,M3.5.0,M10.5.0/3";   // POSIX TZ for the h
 static char     g_ntp[64] = "pool.ntp.org";                // NTP server for the wall clock (user-settable)
 static volatile bool g_nightMode = false;                    // disable normal-operation LED activity
 static bool g_hideUnbound = false;                           // dashboard: hide unbound (pending) reader cards (persisted, NVS "obigw"/"hideunb")
+// User-settable friendly display name for the GATEWAY itself (Tasmota-style: blank = fall back to the
+// technical default "OBI Gateway <gwId>"), mirroring the existing per-reader r.name. Used as the HA device
+// name in publishGatewayDiscovery(); the technical default stays available too (gateway state JSON "gw_name"
+// field + a dedicated "Original name" HA sensor, mirroring the reader's "ID" sensor) so a renamed gateway can
+// still always be matched back to its physical identity. Persisted under NVS "obigw"/"gwname".
+static char g_gwName[32] = "";
 // Number format for every kWh/W/€ value shown in the web UI, independent of the DE/EN text language toggle
 // (a user may want German text with US-style numbers or vice versa): 0 = auto (follow the page's text
 // language, the historical behavior), 1 = force EU style (1.234,56), 2 = force US style (1,234.56).
@@ -294,6 +300,7 @@ static String statusJson() {
   j += "," + fwJson();
   j += ",\"gwid_ascii\":" + jstr(String((const char *)GWID).substring(0, 6).c_str());
   j += ",\"mac\":\"" + String(gwMac()) + "\",\"gw\":\"" + String(gwId()) + "\"";
+  j += ",\"gw_custom_name\":" + jstr(g_gwName);   // custom display name (blank = using the technical default)
   { float t = gwTempC(); j += ",\"temp_c\":" + (isnan(t) ? String("null") : String(t, 1)); }
   j += ",\"pair_remaining_s\":" + String(gw_pair_remaining_s());
   j += ",\"uptime_s\":" + String(gw_uptime_s());
@@ -967,6 +974,7 @@ static void handleInterval() {
 }
 
 static void publishDiscovery(const Reader &r);   // fwd: publish one reader's HA discovery config (immediate rename push)
+static void publishGatewayDiscovery();            // fwd: publish the gateway's own HA discovery config (immediate rename push)
 
 // Set (or clear, empty name) a reader's friendly display name. WebServer already url-decodes arg().
 static void handleName() {
@@ -988,6 +996,21 @@ static void handleName() {
       }
     server.send(200, "application/json", "{\"ok\":true}");
   } else server.send(400, "application/json", "{\"ok\":false}");
+}
+
+// Set (or clear, empty name) the GATEWAY's own friendly display name (mirrors handleName() for readers).
+// Used as the HA device name; the technical default ("OBI Gateway <gwId>") stays published separately and
+// unconditionally on every gateway state update (see the "gw_name" field in mqttService()) plus a dedicated
+// "Original name" HA sensor mirroring the reader's "ID" sensor, so a rename never loses track of which
+// physical gateway this is.
+static void handleGatewayName() {
+  String name = server.arg("name");
+  if (name.length() >= sizeof g_gwName) { server.send(400, "application/json", "{\"ok\":false}"); return; }
+  name.toCharArray(g_gwName, sizeof g_gwName);
+  prefs.begin("obigw", false); prefs.putString("gwname", g_gwName); prefs.end();
+  // Push the new name to HA right away instead of waiting for the next reconnect/rediscover.
+  if (mqtt.connected()) publishGatewayDiscovery();
+  server.send(200, "application/json", "{\"ok\":true}");
 }
 
 // Set (or clear, empty cfg) a reader's dashboard box layout. Cosmetic web-UI state only; no MQTT side effects.
@@ -1608,6 +1631,14 @@ button:disabled{opacity:.5;cursor:default}
  </div>
 
  <div class=card>
+  <h3>🏷 <span id=hgwname>Gateway-Name</span></h3>
+  <div class=stat id=gwnstat>…</div>
+  <label id=lgwname>Anzeigename (leer = Standard, auch in Home Assistant)</label>
+  <input id=gwname placeholder="OBI Gateway …">
+  <div class=row><button onclick=saveGwName()><span id=bgwname>Speichern</span></button><span class=msg id=gwnmsg></span></div>
+ </div>
+
+ <div class=card>
   <h3>🔒 <span id=hauth>Web-Zugang</span></h3>
   <div class=stat id=austat>…</div>
   <div class=grid>
@@ -1733,6 +1764,7 @@ $('lappass').textContent=t('Hotspot-Passwort (leer = offen)','Hotspot password (
 $('lhost').textContent=t('Server','Server');$('luser').textContent=t('Benutzer','User');$('lpass').textContent=t('Passwort','Password');
 $('ltopic').textContent=t('Basis-Topic','Base topic');$('bmsave').textContent=t('Speichern','Save');$('bdisc').textContent=t('Discovery senden','Send discovery');
 $('ltls').textContent=t('MQTTS (TLS-Verschlüsselung)','MQTTS (TLS encryption)');$('lca').textContent=t('CA-Zertifikat (PEM, optional)','CA certificate (PEM, optional)');
+$('hgwname').textContent=t('Gateway-Name','Gateway name');$('lgwname').textContent=t('Anzeigename (leer = Standard, auch in Home Assistant)','Display name (blank = default, also used in Home Assistant)');$('bgwname').textContent=t('Speichern','Save');
 $('hauth').textContent=t('Web-Zugang','Web access');$('lauser').textContent=t('Benutzer (leer = offen)','User (blank = open)');$('lapass').textContent=t('Passwort','Password');$('basave').textContent=t('Speichern','Save');$('blogout').textContent=t('Abmelden','Log out');
 $('lman2').textContent=t('Manuell flashen (.bin dieses Boards)','Manual flash (.bin for this board)');$('bflash').textContent=t('Flashen & neustart','Flash & reboot');
 $('lfr').textContent=t('Werkseinstellungen','Factory reset');$('bfr').textContent=t('Auf Werkseinstellungen zurücksetzen','Reset to factory settings');
@@ -1771,7 +1803,10 @@ async function load(){try{
   $('mqstat').innerHTML=!q.enabled?`<span class="dot idle"></span>${t('deaktiviert','disabled')}`:q.connected?`<span class="dot on"></span>${t('verbunden','connected')} · ${q.host}${tls}`:`<span class="dot off"></span>${t('getrennt','disconnected')} — ${q.state}${tls}`;
   if(!cfg){cfg=true;$('mh').value=q.host||'';$('mp').value=q.port||1883;$('mu').value=q.user||'';$('mt').value=q.topic||'';
    $('mtls').checked=!!q.tls;if(q.ca_set)$('mca').placeholder=t('Zertifikat gespeichert — leer lassen zum Beibehalten','certificate saved — leave blank to keep');
-   $('au').value=(s.auth&&s.auth.user)||'';$('night').checked=!!s.night_mode;$('numfmt').value=s.num_fmt||0;}
+   $('au').value=(s.auth&&s.auth.user)||'';$('night').checked=!!s.night_mode;$('numfmt').value=s.num_fmt||0;
+   $('gwname').value=s.gw_custom_name||'';}
+  { const orig='OBI Gateway '+s.gw;
+    $('gwnstat').innerHTML=s.gw_custom_name?`${t('aktiv als','active as')} <code>${esc(s.gw_custom_name)}</code> · ${t('original','original')}: <code>${orig}</code>`:`${t('Standardname aktiv','using the default name')}: <code>${orig}</code>`; }
   $('austat').innerHTML=(s.auth&&s.auth.enabled)?`<span class="dot on"></span>${t('geschützt als','protected as')} <code>${s.auth.user}</code>`:`<span class="dot idle"></span>${t('offen — kein Passwort','open — no password')}`;
   $('fwcur').innerHTML=`${t('Aktuell','Current')}: <code>${s.fw?s.fw.version:'?'}</code> (${s.fw?s.fw.target:''})`;
   if(s.lora_sf&&!loraSfc){loraSfc=true;$('lorasf').value=s.lora_sf;loraSfChanged();}
@@ -1796,6 +1831,10 @@ async function load(){try{
 function tzPick(){const v=$('tzsel').value;if(v)$('tztext').value=v;}
 async function saveNightMode(){const m=$('nmsg');m.textContent='…';try{const r=await(await fetch('/api/night_mode',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'enabled='+($('night').checked?'1':'0')})).json();if(!r.ok)throw Error();m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);}catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
 async function saveNumFmt(){const m=$('numfmtmsg');m.textContent='…';try{const r=await(await fetch('/api/numfmt',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'fmt='+$('numfmt').value})).json();if(!r.ok)throw Error();m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);}catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
+async function saveGwName(){const m=$('gwnmsg');m.textContent='…';
+ try{const r=await(await fetch('/api/gwname',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'name='+encodeURIComponent($('gwname').value.trim())})).json();if(!r.ok)throw Error();
+  m.textContent=t('gespeichert ✓ — Discovery gesendet','saved ✓ — discovery sent');setTimeout(()=>m.textContent='',3000);load();}
+ catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
 async function saveFtp(){const b=new URLSearchParams();b.set('host',$('ftphost').value);b.set('port',$('ftpport').value||21);
  b.set('user',$('ftpuser').value);b.set('path',$('ftppath').value);b.set('enabled',$('ftpen').checked?'1':'0');
  if($('ftppass').value)b.set('pass',$('ftppass').value);
@@ -3792,6 +3831,7 @@ static void startServices() {
   server.on("/api/factory_reset", HTTP_POST, guard(handleFactoryReset));  // wipe all settings + reboot to setup portal
   server.on("/api/assign",      HTTP_POST, guard(handleAssign));   // accept/drop a reader onto this gateway
   server.on("/api/name",        HTTP_POST, guard(handleName));    // set/clear a reader's friendly name
+  server.on("/api/gwname",      HTTP_POST, guard(handleGatewayName));  // set/clear the gateway's own friendly display name
   server.on("/api/boxcfg",      HTTP_POST, guard(handleBoxCfg));  // set/clear a reader's dashboard box layout
   server.on("/api/reader/price", HTTP_POST, guard(handleReaderPrice));  // per-reader price override / day-night tariff
   server.on("/api/pairall",     HTTP_POST, guard(handlePairAll));  // open the 3-min auto-accept window
@@ -4032,8 +4072,10 @@ static void publishGatewayDiscovery() {
   String uid = "obi_gw_" + String(gwId());
   String stt = gwStateTopic();
   String avt = avtTopic();
-  String dev = "\"dev\":{\"ids\":[\"" + uid + "\"],\"name\":\"OBI Gateway " + gwId() +
-               "\",\"mf\":\"Open OBI\",\"mdl\":\"LoRa Gateway (" + String(FW_BUILD_TARGET) +
+  String origName = "OBI Gateway " + String(gwId());   // technical default; also always sent as "gw_name" below
+  String dev = "\"dev\":{\"ids\":[\"" + uid + "\"],\"name\":" +
+               (g_gwName[0] ? jstr(g_gwName) : ("\"" + origName + "\"")) +
+               ",\"mf\":\"Open OBI\",\"mdl\":\"LoRa Gateway (" + String(FW_BUILD_TARGET) +
                ")\",\"sw\":\"" + String(FW_VERSION) + " (" + String(FW_GIT_HASH) +
                ")\",\"hw\":\"" + String(gwMac()) + "\"}";
   String availa = ",\"avty_t\":\"" + avt + "\"";
@@ -4092,6 +4134,12 @@ static void publishGatewayDiscovery() {
   { String t = "homeassistant/sensor/" + uid + "/auth_fail/config";
     String p = "{\"name\":\"Failed since reboot\",\"uniq_id\":\"" + uid + "_auth_fail\",\"stat_t\":\"" + stt +
                "\",\"val_tpl\":\"{{ value_json.auth_fail_count }}\",\"stat_cla\":\"total_increasing\",\"icon\":\"mdi:shield-alert\",\"ent_cat\":\"diagnostic\"" + availa + "," + dev + "}";
+    mqtt.publish(t.c_str(), p.c_str(), true); }
+  // original/technical default name — always sent regardless of a custom rename above, so the gateway can
+  // always be identified by its factory identity (mirrors the reader's own "ID" sensor, same reasoning).
+  { String t = "homeassistant/sensor/" + uid + "/orig_name/config";
+    String p = "{\"name\":\"Original name\",\"uniq_id\":\"" + uid + "_orig_name\",\"stat_t\":\"" + stt +
+               "\",\"val_tpl\":\"{{ value_json.gw_name }}\",\"icon\":\"mdi:factory\",\"ent_cat\":\"diagnostic\"" + availa + "," + dev + "}";
     mqtt.publish(t.c_str(), p.c_str(), true); }
 }
 
@@ -4165,6 +4213,7 @@ static void mqttService() {
         for (int i = 0; i < MAX_READERS; i++) if (readers[i].used) { rcAll++; if (readers[i].assigned) rcBound++; }
         float t = gwTempC();
         String gp = "{\"mac\":\"" + String(gwMac()) + "\",\"gw\":\"" + String(gwId()) + "\""
+                    ",\"gw_name\":\"OBI Gateway " + String(gwId()) + "\"" +   // original/technical name -- ALWAYS sent, even after a custom rename (see publishGatewayDiscovery's "dev.name")
                     ",\"temp_c\":" + (isnan(t) ? String("null") : String(t, 1)) +
                     ",\"uptime_s\":" + String(gw_uptime_s()) +
                     ",\"heap_free\":" + String(ESP.getFreeHeap()) +
@@ -4335,6 +4384,7 @@ static void webTask(void *) {
   g_nightMode = prefs.getBool("nightmode", false);
   g_hideUnbound = prefs.getBool("hideunb", false);
   g_numFmt = prefs.getUChar("numfmt", 0);
+  prefs.getString("gwname", "").toCharArray(g_gwName, sizeof g_gwName);
   prefs.end();
   setenv("TZ", g_tz, 1); tzset();                // apply the saved zone up-front (localtime works before NTP too)
   clampTimeSanity();   // esp_restart() (self-OTA) carries the RTC clock across reboots -- clear it up-front
