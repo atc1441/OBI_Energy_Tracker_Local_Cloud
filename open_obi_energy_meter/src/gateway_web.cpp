@@ -129,20 +129,32 @@ static uint32_t g_ghIntervalH = 24;     // hours between auto-checks (UI offers 
 // loop that actually owns/advances it.
 static uint32_t g_ghLastCheckMs = 0xFFFFFFFF;
 
-// Periodic FTP history backup: OFF by default. Uploads every reader's daily CSV (see buildDailyCsv() below)
-// to a remote FTP server every g_ftpIntervalMin minutes, each file named "<id>_daily_<unixtime>.csv" so a
-// run never overwrites a previous one. Plain FTP only (RFC 959, passive mode) -- deliberately no FTPS/TLS,
-// same reasoning as the web UI staying HTTP (see ../02-hardware): a comparable TLS stack just for this
-// wasn't worth it on this device. Credentials and file contents go out in the clear -- LAN use only, the
-// Settings page says so next to the fields. Persisted under NVS "obigw" ("ftpen"/"ftph"/"ftpp"/"ftpu"/
-// "ftppw"/"ftppath"/"ftpivl"); configured via /api/ftp.
+// Periodic FTP history backup: OFF by default. Every run uploads BOTH each reader's daily CSV (see
+// buildDailyCsv()) and its raw sample log (buildRawCsv() -- the same data the History page's "download raw
+// as CSV" button produces), always together, on the same g_ftpIntervalMin schedule -- not a separate option,
+// just what "back up the history" means here. Files are timestamped ("<id>_daily_<unixtime>.csv" /
+// "<id>_raw_<unixtime>.csv") so a run never overwrites a previous one, and kept in separate "daily"/"raw"
+// subfolders (FTP_DAILY_DIR/FTP_RAW_DIR below) so a directory listing alone tells the two apart. The raw
+// log on the device itself is short-retention (a capped ring buffer, hours to days -- see
+// sampleCapBytes()), so on its own it can't answer "what did consumption look like at 3pm three weeks ago"
+// -- but the repeated timestamped snapshots let that be reconstructed OFFLINE later (concatenate + dedupe
+// by epoch in Excel/pandas/etc.), as far back as the snapshots go, provided the upload interval stays
+// shorter than the raw log's own retention window (otherwise gaps appear between snapshots that can't be
+// filled back in). Plain FTP only (RFC 959, passive mode) -- deliberately no FTPS/TLS, same reasoning as
+// the web UI staying HTTP (see ../02-hardware): a comparable TLS stack just for this wasn't worth it on
+// this device. Credentials and file contents go out in the clear -- LAN use only, the Settings page says so
+// next to the fields. Persisted under NVS "obigw" ("ftpen"/"ftph"/"ftpp"/"ftpu"/"ftppw"/"ftppath"/"ftpivl");
+// configured via /api/ftp.
 static bool     g_ftpEnabled = false;
 static char     g_ftpHost[64] = "";
 static uint16_t g_ftpPort = 21;
 static char     g_ftpUser[32] = "";
 static char     g_ftpPass[32] = "";
-static char     g_ftpPath[64] = "";       // remote folder ("" = server's login dir); created on demand (MKD+CWD)
+static char     g_ftpPath[64] = "";       // remote base folder ("" = server's login dir); created on demand
 static uint32_t g_ftpIntervalMin = 1440;  // minutes between uploads, default 24h (UI offers minutes or hours, stored as minutes)
+static const char *FTP_DAILY_DIR = "daily", *FTP_RAW_DIR = "raw";   // subfolders under g_ftpPath (filenames
+                                                                     // are ALSO tagged _daily_/_raw_, in case
+                                                                     // the folders ever get flattened later)
 static uint32_t g_ftpLastRunMs = 0xFFFFFFFF;   // same 0xFFFFFFFF "not seeded" convention as g_ghLastCheckMs
 static volatile bool g_ftpBusy = false;        // an upload is in flight -- don't start a second one
 static uint8_t  g_ftpLastResult = 0;           // 0 never run, 1 last run ok, 2 last run failed (Settings page)
@@ -325,7 +337,8 @@ static String statusJson() {
          ",\"port\":" + String(g_ftpPort) + ",\"user\":" + jstr(g_ftpUser) + ",\"path\":" + jstr(g_ftpPath) +
          ",\"interval_min\":" + String(g_ftpIntervalMin) + ",\"next_check_s\":" + String(nextS) +
          ",\"busy\":" + String(g_ftpBusy ? "true" : "false") + ",\"last_result\":" + String(g_ftpLastResult) +
-         ",\"last_run_s\":" + String(g_ftpLastRunS) + ",\"last_err\":" + jstr(g_ftpLastError.c_str()) + "}";
+         ",\"last_run_s\":" + String(g_ftpLastRunS) + ",\"last_err\":" + jstr(g_ftpLastError.c_str()) +
+         "}";
   }
   { size_t ht = 0, hu = 0; historySpace(ht, hu);
     size_t dt = 0, du = 0; dailySpace(dt, du);
@@ -1800,8 +1813,9 @@ async function ftpRunNow(){const m=$('ftpmsg');m.textContent='…';
 // step-by-step trace of the last upload attempt -- the OBI gateway has no exposed serial port, so this (and
 // the short reason next to the status line above) is the only diagnostic available on a deployed device.
 async function ftpShowLog(){
- const box=$('ftplogbox');
- box.style.display='block';box.textContent='…';
+ const box=$('ftplogbox'),btn=$('bftplog');
+ if(box.style.display==='block'){box.style.display='none';btn.textContent=t('Log anzeigen','Show log');return;}   // toggle: click again to hide
+ box.style.display='block';btn.textContent=t('Log ausblenden','Hide log');box.textContent='…';
  try{
   const log=await(await fetch('/api/ftp/log')).json();
   if(!log.length){box.textContent=t('Noch kein Log vorhanden.','No log yet.');return;}
@@ -2873,10 +2887,32 @@ static String buildDailyCsv(const String &id) {
   return out;
 }
 
-// Every reader id (6 hex chars) that has a /d<id> (daily) log on flash, live or not -- the set the FTP
-// upload iterates. Own directory scan rather than sharing handleHistoryReaders()'s: that one also matches
-// /s<id> (raw-only) readers, which this feature has nothing to upload for.
-static int listDailyReaderIds(String out[], int maxN) {
+// Build the RAW-sample CSV for one reader (same content the /api/history/csv?kind=raw download produces),
+// as a plain in-memory String -- used by the periodic FTP upload's raw-data export, alongside the daily one.
+// Unlike buildDailyCsv() there's no live-RAM-row merge: the on-flash /s<id> file already has everything not
+// yet trimmed off the ring buffer, nothing still-accumulating to fold in.
+static String buildRawCsv(const String &id) {
+  if (!g_fsOk) return String();
+  String d = fsRead(fpS(id));
+  String out = "date,epoch,import_wh,export_wh,power_w\n";
+  int i = 0, n = (int)d.length();
+  while (i < n) {
+    int nl = d.indexOf('\n', i); if (nl < 0) nl = n;
+    String line = d.substring(i, nl); line.trim(); i = nl + 1;
+    if (!line.length()) continue;
+    int fc = line.indexOf(',');
+    unsigned long ep = strtoul((fc < 0 ? line : line.substring(0, fc)).c_str(), nullptr, 10);
+    if (ep <= 1735689600UL || ep >= 4102444800UL) continue;   // same epoch sanity bound as sendCsvRows()
+    out += isoLocal((time_t)ep); out += ","; out += line; out += "\n";
+  }
+  return out;
+}
+
+// Every reader id (6 hex chars) that has a /<prefix><id> log on flash, live or not -- the set the FTP
+// upload iterates ('d' for the daily rollup, 's' for the raw sample ring buffer). Own directory scan rather
+// than sharing handleHistoryReaders()'s: that one matches EITHER prefix at once, which would upload an
+// empty/pointless file for a reader that only has the other kind so far.
+static int listReaderIdsWithPrefix(char prefix, String out[], int maxN) {
   int n = 0;
   if (!g_fsOk) return 0;
   String bases[2] = { g_dailyBase, g_rawBase };
@@ -2887,7 +2923,7 @@ static int listDailyReaderIds(String out[], int maxN) {
     struct dirent *de;
     while ((de = readdir(dir)) != nullptr) {
       String name = de->d_name;
-      if (name.length() == 7 && name[0] == 'd') {
+      if (name.length() == 7 && name[0] == prefix) {
         String id = name.substring(1);
         bool okid = true;
         for (size_t k = 0; k < 6; k++) { char c = id[k]; if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) { okid = false; break; } }
@@ -3025,9 +3061,47 @@ static bool ftpStor(WiFiClient &ctrl, const String &filename, const String &cont
   if (code != 226 && code != 250) { g_ftpLastError = "transfer-complete reply was " + (code == 0 ? String("a timeout") : String(code)); return false; }
   return true;
 }
-// One background upload pass: log in, cd into g_ftpPath (creating any missing segment via MKD), then STOR a
-// fresh "<id>_daily_<unixtime>.csv" for every reader with a stored daily log. The timestamp in every
-// filename is what keeps consecutive runs from ever overwriting each other on the server.
+// Enter directory `seg` (a single path component, no slashes) relative to the current location, creating
+// it first via MKD if needed. "already exists" (550) on the MKD is completely normal after the first run
+// and isn't treated as an error -- ftpCmd() already logs its own trace either way; only the CWD's result
+// decides whether this succeeded.
+static bool ftpEnterDir(WiFiClient &ctrl, const String &seg) {
+  if (!seg.length()) return true;
+  ftpCmd(ctrl, "MKD " + seg, 257);
+  return ftpCmd(ctrl, "CWD " + seg, 250);
+}
+// Upload every reader's file for one content type ("daily" or "raw") into its own subfolder under the
+// current directory (see FTP_DAILY_DIR/FTP_RAW_DIR -- kept as separate subfolders, not just a filename
+// difference, so a directory listing alone tells the two exports apart), then CWD back up so the caller is
+// ready for the next type. buildFn returns the CSV content for one reader id; tag becomes the _daily_/_raw_
+// filename infix. Returns false only on an actual transfer error -- having nothing to upload yet
+// (nIdsOut==0, e.g. right after enabling this) is reported via nIdsOut/uploadedOut, not itself a failure.
+static bool ftpUploadKind(WiFiClient &ctrl, const char *dirName, char idPrefix, const char *tag,
+                           String (*buildFn)(const String &), uint32_t ts, int &uploadedOut, int &nIdsOut) {
+  uploadedOut = 0; nIdsOut = 0;
+  if (!ftpEnterDir(ctrl, dirName)) {
+    ftpLog(String("could not enter/create the \"") + dirName + "\" subfolder");
+    return false;
+  }
+  String ids[HIST_SLOTS]; int nIds = listReaderIdsWithPrefix(idPrefix, ids, HIST_SLOTS);
+  nIdsOut = nIds;
+  ftpLog(String(nIds) + " reader(s) with stored " + tag + " history to upload");
+  bool ok = true;
+  for (int i = 0; i < nIds && ok; i++) {
+    String csv = buildFn(ids[i]);
+    if (!csv.length()) { ftpLog(ids[i] + ": nothing recorded yet, skipping"); continue; }
+    String fname = ids[i] + "_" + tag + "_" + String(ts) + ".csv";
+    ftpLog("uploading " + fname + " (" + String((unsigned)csv.length()) + " B)");
+    if (ftpStor(ctrl, fname, csv)) { uploadedOut++; ftpLog(fname + " ok"); }
+    else { ok = false; ftpLog(fname + " failed: " + g_ftpLastError); }
+  }
+  ftpLog(String(uploadedOut) + "/" + String(nIds) + " " + tag + " file(s) uploaded");
+  ftpCmd(ctrl, "CWD ..", 250);   // back to the base folder, ready for the next content type
+  return ok;
+}
+// One background upload pass: log in, cd into g_ftpPath (creating any missing segment via MKD), then upload
+// the daily rollup AND the raw sample log for every reader that has one, each kind into its own subfolder.
+// Every filename is timestamped so a run never overwrites a previous one.
 static void ftpUploadTask(void *) {
   bool ok = false;
   g_ftpLastError = "";
@@ -3047,33 +3121,21 @@ static void ftpUploadTask(void *) {
       while (ok && start <= (int)path.length()) {
         int slash = path.indexOf('/', start);
         String seg = path.substring(start, slash < 0 ? path.length() : slash);
-        if (seg.length()) {
-          String mkdLine;
-          ftpCmd(ctrl, "MKD " + seg, 257, &mkdLine);   // don't gate on this -- "already exists" (550) is
-                                                        // completely normal on every run after the first;
-                                                        // logged above regardless via ftpCmd()'s own trace
-          ok = ftpCmd(ctrl, "CWD " + seg, 250);         // the following CWD is the real pass/fail signal
-        }
+        if (seg.length()) ok = ftpEnterDir(ctrl, seg);
         if (slash < 0) break;
         start = slash + 1;
       }
       if (!ok) ftpLog("could not enter the configured target folder -- check the path and the account's permissions");
       if (ok) {
         uint32_t ts = timeValid() ? (uint32_t)time(nullptr) : (uint32_t)(millis() / 1000);
-        String ids[HIST_SLOTS]; int nIds = listDailyReaderIds(ids, HIST_SLOTS);
-        ftpLog(String(nIds) + " reader(s) with stored daily history to upload");
-        int uploaded = 0;
-        for (int i = 0; i < nIds && ok; i++) {
-          String csv = buildDailyCsv(ids[i]);
-          if (!csv.length()) { ftpLog(ids[i] + ": nothing recorded yet, skipping"); continue; }
-          String fname = ids[i] + "_daily_" + String(ts) + ".csv";
-          ftpLog("uploading " + fname + " (" + String((unsigned)csv.length()) + " B)");
-          if (ftpStor(ctrl, fname, csv)) { uploaded++; ftpLog(fname + " ok"); }
-          else { ok = false; ftpLog(fname + " failed: " + g_ftpLastError); }
+        int dailyUploaded, dailyIds, rawUploaded, rawIds;
+        ok = ftpUploadKind(ctrl, FTP_DAILY_DIR, 'd', "daily", buildDailyCsv, ts, dailyUploaded, dailyIds);
+        if (ok) ok = ftpUploadKind(ctrl, FTP_RAW_DIR, 's', "raw", buildRawCsv, ts, rawUploaded, rawIds);
+        else { rawUploaded = 0; rawIds = 0; }
+        if (ok && dailyUploaded + rawUploaded == 0 && dailyIds == 0 && rawIds == 0) {
+          g_ftpLastError = "no reader has any stored history yet";
+          ok = false;
         }
-        ftpLog(String(uploaded) + "/" + String(nIds) + " reader file(s) uploaded");
-        ok = ok && uploaded > 0;
-        if (uploaded == 0 && nIds == 0) g_ftpLastError = "no reader has any stored daily history yet";
       }
     } else {
       ftpLog("login failed");
