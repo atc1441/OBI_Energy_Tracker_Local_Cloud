@@ -1605,6 +1605,11 @@ static void ghOtaTask(void *) {
 }
 static void handleGithubUpdate() {
   if (g_ghState == 1) { server.send(200, "application/json", "{\"ok\":false,\"err\":\"busy\"}"); return; }
+  // Mutual exclusion with FTP: both are heap/WiFi-heavy at the exact moment this device can least afford it
+  // (see today's GitHub-OTA-reliability investigation -- a single TLS connection + Update.begin() already
+  // needs ~65-70 KB of this board's ~320 KB RAM). An FTP backup happening to run at the same time would
+  // compete for that same thin margin, so simply refuse to start until it's done rather than risk both.
+  if (g_ftpBusy) { server.send(200, "application/json", "{\"ok\":false,\"err\":\"ftpbusy\"}"); return; }
   g_ghState = 1; g_ghDone = 0; g_ghTotal = 0;
   if (xTaskCreate(ghOtaTask, "ghota", 10240, nullptr, 4, nullptr) != pdPASS) {
     g_ghState = 0; server.send(200, "application/json", "{\"ok\":false,\"err\":\"task\"}"); return;
@@ -1687,6 +1692,7 @@ static void handleFtpCfg() {
 // On-demand "run now" button (Settings page), independent of the interval countdown.
 static void handleFtpRunNow() {
   if (g_ftpBusy) { server.send(200, "application/json", "{\"ok\":false,\"err\":\"busy\"}"); return; }
+  if (g_ghState == 1) { server.send(200, "application/json", "{\"ok\":false,\"err\":\"otabusy\"}"); return; }   // see handleGithubUpdate()
   if (!g_ftpHost[0]) { server.send(200, "application/json", "{\"ok\":false,\"err\":\"nohost\"}"); return; }
   ftpLogAlloc();   // "run now" works even with the periodic upload toggled off -- make sure it's still logged
   g_ftpBusy = true; g_ftpLastRunMs = millis();
@@ -4483,6 +4489,12 @@ static void epdRender() {
 
 static void epdUpdate(bool force) {
   if (!g_epdOk) return;
+  // A full panel refresh is multi-second and busy-waiting -- pure CPU contention this single-core chip can't
+  // afford while a GitHub OTA download is trying to get its TLS handshake and Update.begin() through the
+  // same thin heap/CPU margin (see today's OTA-reliability investigation). The next redraw after the update
+  // finishes (success -> reboot draws fresh anyway; failure -> back to normal polling) picks up any change
+  // that would have happened here, so nothing is lost, just delayed a few seconds.
+  if (g_ghState == 1) return;
   static uint32_t lastRefresh = 0;
   static String   lastSig;
   uint32_t now = millis();
@@ -4611,7 +4623,9 @@ static void webTask(void *) {
         // it on its own, leaving the clock stuck "not synced" indefinitely. Keep retrying here until it
         // actually lands, instead of requiring the user to notice and manually re-save the NTP settings.
         if (conn && !timeValid()) syncNtp(); } }
-    if (g_ghAuto && conn && g_ghState == 0) {   // periodic GitHub auto-update -- default OFF, see /api/github/auto
+    if (g_ghAuto && conn && g_ghState == 0 && !g_ftpBusy) {   // periodic GitHub auto-update -- default OFF, see
+                                                               // /api/github/auto; !g_ftpBusy: don't compete
+                                                               // with an FTP backup for the same thin heap margin
       uint32_t nowMs = millis();                     // full interval after boot, not immediately -- an unplanned
       if (g_ghLastCheckMs == 0xFFFFFFFF) g_ghLastCheckMs = nowMs;   // reboot right at power-up would be surprising.
       if (nowMs - g_ghLastCheckMs >= g_ghIntervalH * 3600000UL) {
@@ -4624,7 +4638,9 @@ static void webTask(void *) {
         } else Serial.println("[gh] auto-update: no newer release");
       }
     }
-    if (g_ftpEnabled && conn && g_ftpHost[0] && !g_ftpBusy) {   // periodic FTP history backup -- default OFF, see /api/ftp
+    if (g_ftpEnabled && conn && g_ftpHost[0] && !g_ftpBusy && g_ghState == 0) {   // periodic FTP history backup --
+                                                               // default OFF, see /api/ftp; g_ghState==0: don't
+                                                               // start while a GitHub OTA is in flight (same reasoning)
       uint32_t nowMs = millis();                                // full interval after boot, not immediately -- see g_ghAuto above
       if (g_ftpLastRunMs == 0xFFFFFFFF) g_ftpLastRunMs = nowMs;
       if (nowMs - g_ftpLastRunMs >= g_ftpIntervalMin * 60000UL) {
