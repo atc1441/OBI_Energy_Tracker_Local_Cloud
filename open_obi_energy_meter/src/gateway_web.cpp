@@ -10,6 +10,7 @@
 #include <Update.h>               // ESP32 self-OTA (reflash our own app into the other OTA slot)
 #include <HTTPClient.h>           // pull the latest release .bin from GitHub (settings -> firmware)
 #include <WiFiClientSecure.h>     // HTTPS to api.github.com / release asset host
+#include <memory>                 // std::unique_ptr<WiFiClientSecure> -- see ghOtaTask()'s resolveAndGet()
 #include <esp_partition.h>        // partition list for the /debug hex editor
 #include <esp_ota_ops.h>           // running/inactive OTA partition -- /debug flash map
 #include <esp_image_format.h>      // esp_image_get_metadata() -- real firmware byte size for the flash map
@@ -1350,32 +1351,17 @@ static bool verNewer(const char *a, const char *b) {
   }
   return false;
 }
-// pull a "key":"value" string out of a (small) JSON body
-static String jsonField(const String &body, const char *key) {
-  String pat = String("\"") + key + "\"";
-  int i = body.indexOf(pat); if (i < 0) return "";
-  i = body.indexOf(':', i + pat.length()); if (i < 0) return "";
-  i++; while (i < (int)body.length() && (body[i] == ' ' || body[i] == '"')) i++;
-  int j = i; while (j < (int)body.length() && body[j] != '"') j++;
-  return body.substring(i, j);
-}
-// find the browser_download_url whose FILENAME matches THIS board target (asset name = "<target>-<ver>.bin").
-// Match "/<target>-" so the filename must *start* with the exact target — otherwise e.g. "generic_esp32"
-// would also match "generic_esp32s3-...". The '/' before it is the last path separator of the download URL.
-static String findAssetUrl(const String &body, const char *target) {
-  String want = String("/") + target + "-";
-  int from = 0; const char *key = "\"browser_download_url\"";
-  for (;;) {
-    int i = body.indexOf(key, from); if (i < 0) return "";
-    int q1 = body.indexOf('"', body.indexOf(':', i) + 1);
-    int q2 = body.indexOf('"', q1 + 1); if (q1 < 0 || q2 < 0) return "";
-    String url = body.substring(q1 + 1, q2);
-    if (url.indexOf(want) >= 0) return url;
-    from = q2 + 1;
-  }
-}
 // GET the latest-release JSON; fill tag + the asset download URL for this board target. false if unavailable.
 // codeOut (optional) receives the HTTP status (or negative HTTPClient error / 0 if we couldn't even connect).
+//
+// Scans the response AS IT STREAMS IN rather than buffering the whole body first: the release JSON keeps
+// growing as more board/reader targets get added (19+ KB and counting as of v1.2.58, one release object per
+// asset with a full nested uploader/timestamps block each) and buffering all of it into one contiguous
+// String is exactly the kind of large allocation that fails silently on this board's fragmented ~300 KB
+// heap -- String::concat() swallows realloc failures, so the body would just quietly truncate mid-asset-list
+// and a real, existing asset for this board would come back as "not found" (observed live against a real
+// release). A small rolling "carry" buffer avoids ever needing a big contiguous block, however large the
+// release grows.
 static bool githubLatest(String &tag, String &url, int *codeOut = nullptr) {
   if (codeOut) *codeOut = 0;
   if (WiFi.status() != WL_CONNECTED) return false;
@@ -1388,20 +1374,40 @@ static bool githubLatest(String &tag, String &url, int *codeOut = nullptr) {
   int code = http.GET();
   if (codeOut) *codeOut = code;
   if (code != 200) { Serial.printf("[gh] latest -> HTTP %d\n", code); http.end(); return false; }
-  // Read the body straight off the (TLS) stream ourselves. http.getString() intermittently returns an
-  // empty String here with WiFiClientSecure even though Content-Length is set — read until we have the
-  // whole body (or the stream idles), which is reliable.
   int clen = http.getSize();
   WiFiClient *st = http.getStreamPtr();
-  String body; if (clen > 0 && clen < 40000) body.reserve(clen + 1);
+  String want = String("/") + FW_BUILD_TARGET + "-";   // asset filename must START with "<target>-" -- see
+                                                          // the old findAssetUrl()'s comment, same reasoning
+                                                          // (so e.g. "generic_esp32" can't match "...s3-...")
+  String carry;                          // small rolling tail -- never the full (and growing) body
   uint8_t tmp[512];
   uint32_t last = millis();
+  size_t totalRead = 0;
   while (st && (millis() - last) < 8000) {
     int n = st->available();
     if (n > 0) {
       n = st->readBytes(tmp, (size_t)(n > (int)sizeof(tmp) ? (int)sizeof(tmp) : n));
-      if (n > 0) { body.concat((const char *)tmp, (unsigned)n); last = millis(); }
-    } else if (clen > 0 && (int)body.length() >= clen) {
+      if (n > 0) {
+        carry.concat((const char *)tmp, (unsigned)n);
+        totalRead += (size_t)n; last = millis();
+        if (!tag.length()) {
+          int i = carry.indexOf("\"tag_name\":\"");
+          if (i >= 0) { int q2 = carry.indexOf('"', i + 12); if (q2 >= 0) tag = carry.substring(i + 12, q2); }
+        }
+        for (;;) {   // consume every "browser_download_url" seen so far in the carry buffer
+          int i = carry.indexOf("\"browser_download_url\":\"");
+          if (i < 0) break;
+          int vs = i + 24, q2 = carry.indexOf('"', vs);   // pattern is exactly 24 chars; value starts right after
+          if (q2 < 0) break;                    // value not fully arrived in this chunk yet -- wait for more
+          if (!url.length()) { String u = carry.substring(vs, q2); if (u.indexOf(want) >= 0) url = u; }
+          carry.remove(0, q2 + 1);              // consumed -- next loop iteration looks for the NEXT one
+        }
+        // Once both fields of interest are resolved there's nothing left to scan for, but keep draining the
+        // socket (the loop condition still needs totalRead/clen below) -- just stop growing the carry buffer.
+        if ((!tag.length() || !url.length()) && carry.length() > 600) carry.remove(0, carry.length() - 300);
+        else if (tag.length() && url.length()) carry = String();
+      }
+    } else if (clen > 0 && totalRead >= (size_t)clen) {
       break;                                   // got the whole body
     } else if (!http.connected()) {
       break;                                   // server closed and nothing more buffered
@@ -1410,8 +1416,6 @@ static bool githubLatest(String &tag, String &url, int *codeOut = nullptr) {
     }
   }
   http.end();
-  tag = jsonField(body, "tag_name");
-  url = findAssetUrl(body, FW_BUILD_TARGET);
   return tag.length() > 0;
 }
 static void handleGithubLatest() {
@@ -1454,19 +1458,100 @@ static void ghOtaTask(void *) {
   // MQTT disconnect + history unmount above) even though the first one just succeeded -- one retry covers it.
   if (!githubLatest(tag, url) || !url.length()) { delay(1500); githubLatest(tag, url); }
   if (url.length()) {
-    WiFiClientSecure cli; cli.setInsecure();
+    std::unique_ptr<WiFiClientSecure> cli;   // see resolveAndGet(): a FRESH one every attempt, on purpose
     HTTPClient http; http.setUserAgent("OBI-Gateway");
     http.setConnectTimeout(10000); http.setTimeout(20000);
-    http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
-    if (http.begin(cli, url)) {
-      int code = http.GET();
-      int len = http.getSize();
-      Serial.printf("[ghota] GET -> %d len=%d\n", code, len);
-      if (code == 200 && len > 0 && Update.begin(len)) {
-        g_ghTotal = len;
+    static const char *kLocationHdr[] = {"Location"};
+    http.collectHeaders(kLocationHdr, 1);
+    http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+    // Every release asset URL 302s from github.com to a DIFFERENT host (release-assets.githubusercontent.com)
+    // with a long (~900 byte) signed, TIME-LIMITED query string (JWT token). HTTPClient's own
+    // HTTPC_FORCE_FOLLOW_REDIRECTS was observed live to fail this specific cross-host redirect
+    // ("couldn't open a connection to GitHub", reproducible every time) -- likely that long Location value
+    // tripping up its internal re-connect. Resolve it by hand: a plain GET, read Location ourselves, connect
+    // fresh to the real URL -- ordinary single-host requests throughout, nothing exotic for the library.
+    // `rangeFrom` (0 = none) adds a Range header for resuming a partial download after a stall/drop -- also
+    // re-resolves the redirect chain from scratch each time, since the signed URL expires after a few
+    // minutes and a stale one from an earlier attempt won't work for a retry anyway.
+    //
+    // A brand-new WiFiClientSecure every call, not one shared across every attempt: reusing a single one
+    // across many sequential reconnects was observed live to wedge it into a state where every further
+    // connect fails outright (HTTP -1, i.e. connection refused) even with good WiFi signal and plenty of free
+    // heap -- 10 straight resume attempts all failing identically on the same client. githubLatest(), which
+    // always creates its own client fresh, has never shown this. cli lives in the outer unique_ptr (not a
+    // local here) because http keeps using it for the streamed body after this call returns.
+    auto resolveAndGet = [&](size_t rangeFrom) -> int {
+      cli.reset(new WiFiClientSecure());
+      cli->setInsecure();
+      String u = url;
+      for (int hop = 0; hop < 4; hop++) {
+        if (!http.begin(*cli, u)) { g_ghLastError = "hop " + String(hop) + ": http.begin() failed for " + u.substring(0, 60); return 0; }
+        if (rangeFrom > 0) http.addHeader("Range", "bytes=" + String((unsigned)rangeFrom) + "-");
+        int code = http.GET();
+        Serial.printf("[ghota] hop %d GET %s -> %d\n", hop, u.substring(0, 80).c_str(), code);
+        if (code != 301 && code != 302 && code != 303 && code != 307 && code != 308) return code;   // terminal
+        String loc = http.header("Location");
+        http.end();
+        if (!loc.length()) { g_ghLastError = "hop " + String(hop) + ": redirect (" + String(code) + ") with no Location header"; return 0; }
+        u = loc;
+        cli.reset(new WiFiClientSecure());   // fresh again for the cross-host hop too
+        cli->setInsecure();
+      }
+      g_ghLastError = "too many redirects";
+      return 0;
+    };
+    // The initial connection itself can fail outright on a bad link (observed live: HTTP -1, i.e.
+    // connection refused, before a single byte of the actual image ever arrives) -- that's just as
+    // retryable as a mid-download stall, so give it the same handful of attempts before falling through
+    // to the resume loop below, which only ever runs once Update.begin() has already succeeded.
+    int code = 0, len = -1;
+    for (int setupAttempt = 0; setupAttempt < 5; setupAttempt++) {
+      if (setupAttempt > 0) { delay(min(1000 * setupAttempt, 5000)); http.end(); }
+      code = resolveAndGet(0);
+      len = (code == 200) ? http.getSize() : -1;
+      Serial.printf("[ghota] setup attempt %d: GET -> %d len=%d\n", setupAttempt, code, len);
+      if (code == 200) break;   // got a real response (good or bad content) -- stop retrying the connect itself
+    }
+    // Update.begin() itself can transiently fail right after the connection succeeds (observed live:
+    // "No Error" with free heap as low as ~13 KB, at the exact moment TLS handshake buffers from the just-
+    // finished GET haven't been released yet) -- a few short retries lets that settle rather than aborting
+    // an otherwise-good connection over a one-off allocation blip.
+    bool began = false;
+    if (code == 200 && len > 0) {
+      for (int b = 0; b < 5 && !began; b++) {
+        if (b > 0) delay(500);
+        began = Update.begin(len);
+        if (!began) Serial.printf("[ghota] Update.begin() attempt %d failed: %s (heap %u)\n", b, Update.errorString(), (unsigned)ESP.getFreeHeap());
+      }
+    }
+    if (began) {
+      g_ghTotal = (uint32_t)len;
+      size_t written = 0;
+      bool fatal = false;   // a flash-write/verify failure -- not worth retrying
+      // This board's WiFi link can be weak/flaky (observed live down to -83 dBm) -- rather than needing one
+      // unbroken multi-minute transfer to succeed, retry a stalled/dropped connection with a Range request
+      // picking up from `written`, with a short (capped) backoff. Observed live: on a bad day the CDN
+      // connection can drop roughly every 150-300 KB, so a 1.4+ MB image can need a good double-digit number
+      // of resumes to get all the way through -- capping the backoff keeps that bounded in TIME rather than
+      // needing a smaller attempt count. Genuinely fatal problems (flash write failure, or a server that
+      // ignores Range entirely) still bail out immediately below, same as before.
+      const int kMaxAttempts = 20;
+      for (int attempt = 0; attempt < kMaxAttempts && written < (size_t)len && !fatal; attempt++) {
+        if (attempt > 0) {
+          delay(min(1000 * attempt, 5000));
+          http.end();
+          int rcode = resolveAndGet(written);
+          if (rcode != 206) {
+            if (rcode != 200)   // anything but a real partial-content reply -- worth trying again
+              g_ghLastError = "resume attempt " + String(attempt) + "/" + String(kMaxAttempts) + " got HTTP " + String(rcode) +
+                               " at " + String((unsigned)written) + "/" + String(len) + " bytes";
+            else { g_ghLastError = "server ignored the resume request (can't recover without restarting)"; fatal = true; }
+            continue;
+          }
+        }
         WiFiClient *st = http.getStreamPtr();
         uint8_t buf[1024];
-        size_t written = 0; uint32_t lastData = millis();
+        uint32_t lastData = millis();
         while (written < (size_t)len) {
           // Read straight off the TLS stream. Do NOT gate on available() — for WiFiClientSecure it can
           // stay 0 forever (its 0-byte ssl_read doesn't always pump a record), which is the 0%-stall.
@@ -1475,43 +1560,42 @@ static void ghOtaTask(void *) {
             if (Update.write(buf, n) != (size_t)n) {
               g_ghLastError = "flash write failed at " + String((unsigned)written) + "/" + String(len) +
                                " bytes (" + Update.errorString() + ")";
-              break;
+              fatal = true; break;
             }
             written += n; g_ghDone = written; lastData = millis();
           } else if (!st->connected() && st->available() == 0) {
-            g_ghLastError = "GitHub closed the connection after " + String((unsigned)written) + "/" + String(len) + " bytes";
-            break;                                         // server closed, nothing left
+            g_ghLastError = "connection dropped at " + String((unsigned)written) + "/" + String(len) + " bytes -- will retry";
+            break;                                         // retryable: next attempt resumes via Range
           } else if (millis() - lastData > 20000) {
             // Observed root cause on obi_gateway_c3 (320 KB RAM, single core): free/allocatable heap can
             // collapse to a few KB during a large HTTPS download (TLS + flash-write + the web server all
             // competing for it), which stalls the TLS read well before this timeout and looks identical to
             // a network stall from here -- so surface the current heap, it's the fastest way to tell them apart.
-            g_ghLastError = "download stalled after " + String((unsigned)written) + "/" + String(len) +
-                             " bytes, no data for 20s (free heap right now: " + String((unsigned)ESP.getFreeHeap()) + " B)";
-            break;                                         // stall
+            g_ghLastError = "stalled at " + String((unsigned)written) + "/" + String(len) +
+                             " bytes, no data for 20s (free heap: " + String((unsigned)ESP.getFreeHeap()) + " B) -- will retry";
+            break;                                         // retryable
           } else {
             delay(2);                                      // yield; wait for the next TLS record
           }
         }
-        if (written == (size_t)len && Update.end(true)) {
-          ok = true;
-        } else {
-          if (!g_ghLastError.length())
-            g_ghLastError = written < (size_t)len
-              ? "connection dropped at " + String((unsigned)written) + "/" + String(len) + " bytes"
-              : String("firmware verify failed (") + Update.errorString() + ")";
-          Update.printError(Serial);
-          Update.abort();     // release the OTA slot so a stalled/partial download can't block the next OTA/self-update
-        }
-        Serial.printf("[ghota] wrote %u/%d ok=%d\n", (unsigned)written, len, ok);
-      } else {
-        g_ghLastError = code != 200 ? "GitHub download returned HTTP " + String(code)
-                       : len <= 0    ? "GitHub download had an empty/unknown size"
-                       : String("couldn't start the flash write (") + Update.errorString() +
-                         ", " + String((unsigned)ESP.getFreeHeap()) + " B free heap)";
-        Serial.println("[ghota] no image / Update.begin failed");
       }
-    } else g_ghLastError = "couldn't open a connection to GitHub";
+      if (written == (size_t)len && !fatal && Update.end(true)) {
+        ok = true; g_ghLastError = "";
+      } else {
+        if (!g_ghLastError.length())   // every failure path above already sets a specific reason -- this is a fallback only
+          g_ghLastError = "gave up after retries at " + String((unsigned)written) + "/" + String(len) + " bytes";
+        Update.printError(Serial);
+        Update.abort();     // release the OTA slot so a stalled/partial download can't block the next OTA/self-update
+      }
+      Serial.printf("[ghota] wrote %u/%d ok=%d\n", (unsigned)written, len, ok);
+    } else if (code == 200) {
+      g_ghLastError = len <= 0 ? "GitHub download had an empty/unknown size"
+                     : String("couldn't start the flash write (") + Update.errorString() +
+                       ", " + String((unsigned)ESP.getFreeHeap()) + " B free heap)";
+      Serial.println("[ghota] no image / Update.begin failed");
+    } else if (code != 0) {
+      g_ghLastError = "GitHub download returned HTTP " + String(code);
+    }   // code==0: g_ghLastError already set by resolveAndGet() with the specific hop/URL that failed
     http.end();
   } else g_ghLastError = "no matching release asset found on GitHub for this board (" + String(FW_BUILD_TARGET) + ")";
   g_ghState = ok ? 2 : 3;
@@ -1564,6 +1648,8 @@ static void handleGithubAuto() {
 }
 
 static void ftpUploadTask(void *);   // fwd: defined below, near the rest of the history/CSV helpers it uses
+static void ftpLogAlloc();           // fwd: defined below, next to the FtpLogLine ring buffer itself
+static void ftpLogFree();
 
 // ---- /api/ftp — configure the periodic FTP history backup (default: disabled) -----------------------
 static void handleFtpCfg() {
@@ -1577,7 +1663,10 @@ static void handleFtpCfg() {
     while (v.endsWith("/")) v = v.substring(0, v.length() - 1);
     strlcpy(g_ftpPath, v.c_str(), sizeof g_ftpPath);
   }
-  if (server.hasArg("enabled")) g_ftpEnabled = server.arg("enabled") == "1" || server.arg("enabled") == "true";
+  if (server.hasArg("enabled")) {
+    g_ftpEnabled = server.arg("enabled") == "1" || server.arg("enabled") == "true";
+    if (g_ftpEnabled) ftpLogAlloc(); else ftpLogFree();   // give the RAM back the moment FTP is turned off
+  }
   if (server.hasArg("interval_min")) {
     long m = server.arg("interval_min").toInt();
     if (m < 1) m = 1; else if (m > 43200) m = 43200;   // 1 min .. 30 days, same millis()-wraparound reasoning as g_ghIntervalH
@@ -1599,6 +1688,7 @@ static void handleFtpCfg() {
 static void handleFtpRunNow() {
   if (g_ftpBusy) { server.send(200, "application/json", "{\"ok\":false,\"err\":\"busy\"}"); return; }
   if (!g_ftpHost[0]) { server.send(200, "application/json", "{\"ok\":false,\"err\":\"nohost\"}"); return; }
+  ftpLogAlloc();   // "run now" works even with the periodic upload toggled off -- make sure it's still logged
   g_ftpBusy = true; g_ftpLastRunMs = millis();
   if (xTaskCreate(ftpUploadTask, "ftpup", 8192, nullptr, 3, nullptr) != pdPASS) g_ftpBusy = false;
   server.send(200, "application/json", "{\"ok\":true}");
@@ -3031,12 +3121,26 @@ static int listReaderIdsWithPrefix(char prefix, String out[], int maxN) {
 // serial port, so Serial.print alone is useless for a deployed device -- ftpLog() below also keeps a small
 // ring buffer viewable from the web (Settings page, "Log anzeigen") for exactly that reason.
 // (g_ftpLastError itself is declared up with the rest of the g_ftp* state, near the top of the file.)
-#define FTP_LOG_N 60
-struct FtpLogLine { uint32_t ms = 0; char text[100] = {0}; };
-static FtpLogLine g_ftpLog[FTP_LOG_N];
+// Sized down from 60x100B (6.2 KB) -- on this board that alone was nearly the entire difference between a
+// GitHub OTA update reliably succeeding and reliably failing (see the "obi_gateway_c3 has ~320 KB total RAM,
+// a single HTTPS connection + Update.begin() together need ~65-70 KB of heap" investigation). Every static
+// byte here is heap this device doesn't have during an update; 16 lines x 64 chars still covers one run's
+// worth of connect/login/upload steps for a realistic handful of readers, just with less scrollback.
+//
+// Allocated on the HEAP, and only while FTP is actually enabled -- most users never turn FTP on at all, and
+// a fixed static array would cost them this memory permanently for a feature they don't use, for no reason
+// (exactly the mistake that caused the GitHub OTA regression above). ftpLogAlloc()/ftpLogFree() are called
+// from the two places g_ftpEnabled changes: the boot-time NVS load and handleFtpCfg()'s save handler.
+#define FTP_LOG_N 16
+struct FtpLogLine { uint32_t ms = 0; char text[64] = {0}; };
+static FtpLogLine *g_ftpLog = nullptr;
 static int g_ftpLogHead = 0;
+static void ftpLogAlloc() { if (!g_ftpLog) { g_ftpLog = new FtpLogLine[FTP_LOG_N]; g_ftpLogHead = 0; } }
+static void ftpLogFree()  { delete[] g_ftpLog; g_ftpLog = nullptr; g_ftpLogHead = 0; }
 static void ftpLog(const String &line) {
   Serial.println("[ftp] " + line);
+  if (!g_ftpLog) return;   // FTP disabled -- nothing to log into (shouldn't normally be reached: nothing
+                            // calls ftpLog() unless a run is in flight, which requires FTP to be enabled)
   FtpLogLine &e = g_ftpLog[g_ftpLogHead];
   e.ms = millis() ? millis() : 1;   // never 0 -- that's the "unwritten slot" sentinel ftpLogJson() skips
   strlcpy(e.text, line.c_str(), sizeof e.text);
@@ -3047,6 +3151,7 @@ static void ftpLog(const String &line) {
 static String ftpLogJson() {
   String j = "[";
   bool first = true;
+  if (!g_ftpLog) return j + "]";   // FTP disabled -- nothing was ever allocated to read from
   for (int k = 0; k < FTP_LOG_N; k++) {
     FtpLogLine &e = g_ftpLog[(g_ftpLogHead + k) % FTP_LOG_N];
     if (!e.ms) continue;
@@ -4420,6 +4525,7 @@ static void webTask(void *) {
   prefs.getString("ghrepo", "").toCharArray(g_ghRepo, sizeof g_ghRepo);
   g_ghIntervalH = prefs.getUInt("ghivl", 24);
   g_ftpEnabled = prefs.getBool("ftpen", false);                           // periodic FTP history backup (default off)
+  if (g_ftpEnabled) ftpLogAlloc();   // only pay for the log ring buffer if FTP is actually going to run
   prefs.getString("ftph", "").toCharArray(g_ftpHost, sizeof g_ftpHost);
   g_ftpPort = prefs.getUShort("ftpp", 21);
   prefs.getString("ftpu", "").toCharArray(g_ftpUser, sizeof g_ftpUser);
