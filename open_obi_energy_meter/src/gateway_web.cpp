@@ -130,6 +130,14 @@ static char     g_apPass[64] = "";
 static bool     g_ghAuto      = false;
 static char     g_ghRepo[80]  = "";     // blank = GH_DEFAULT_REPO
 static uint32_t g_ghIntervalH = 24;     // hours between auto-checks (UI offers hours or days, stored as hours)
+// GitHub OTA run state -- declared this early (rather than next to ghOtaTask() itself, further down) only
+// because statusJson() needs them and is defined well above that section (same reasoning as g_fsOk et al.).
+static volatile uint8_t  g_ghState = 0;          // 0 idle · 1 running · 2 done (reboot imminent) · 3 error
+static volatile uint32_t g_ghDone = 0, g_ghTotal = 0;
+// Human-readable reason for the last failure (Settings page + /api/github/progress "err"). This board has
+// no exposed serial port, so without this a failed update is completely unexplained to the user -- same gap
+// the FTP backup log ring buffer (ftpLog()) closed for that feature; mirrors g_ftpLastError's role there.
+static String g_ghLastError;
 // millis() of the last periodic check (0xFFFFFFFF sentinel = not seeded yet, see the webTask() loop below).
 // File-scope so statusJson() can report a countdown to the next check for the Settings page, alongside the
 // loop that actually owns/advances it.
@@ -331,7 +339,8 @@ static String statusJson() {
              nextS = ((uint64_t)elapsed >= intervalMs) ? 0 : (uint32_t)((intervalMs - elapsed) / 1000); }
     }
     j += ",\"gh_auto\":{\"enabled\":" + String(g_ghAuto ? "true" : "false") + ",\"repo\":" + jstr(g_ghRepo) +
-         ",\"interval_h\":" + String(g_ghIntervalH) + ",\"next_check_s\":" + String(nextS) + "}";
+         ",\"interval_h\":" + String(g_ghIntervalH) + ",\"next_check_s\":" + String(nextS) +
+         ",\"state\":" + String(g_ghState) + ",\"last_err\":" + jstr(g_ghLastError.c_str()) + "}";
   }
   { uint32_t nextS = 0;   // seconds until the next periodic FTP upload -- 0 when off/mid-upload, same shape as gh_auto
     if (g_ftpEnabled) {
@@ -1407,7 +1416,13 @@ static bool githubLatest(String &tag, String &url, int *codeOut = nullptr) {
 }
 static void handleGithubLatest() {
   String tag, url; int code = 0;
-  if (!githubLatest(tag, url, &code)) { server.send(200, "application/json", String("{\"ok\":false,\"code\":") + code + "}"); return; }
+  bool got = githubLatest(tag, url, &code);
+  // The release JSON body is read as a streamed TLS response (see githubLatest()) and, on this single-core
+  // low-RAM board, occasionally comes back truncated before this board's own asset entry is reached even
+  // though the request itself succeeded (tag found, asset missing) -- observed live, one retry clears it.
+  // Same reasoning as the retry ghOtaTask() applies to its own internal call to this function.
+  if (got && tag.length() && !url.length()) got = githubLatest(tag, url, &code);
+  if (!got) { server.send(200, "application/json", String("{\"ok\":false,\"code\":") + code + "}"); return; }
   bool newer = verNewer(tag.c_str(), FW_VERSION);
   String j = "{\"ok\":true,\"version\":" + jstr(tag.c_str()) + ",\"current\":\"" + FW_VERSION +
              "\",\"asset\":" + String(url.length() ? "true" : "false") +
@@ -1417,12 +1432,11 @@ static void handleGithubLatest() {
 // Download this board's newest release .bin from GitHub and flash it. Runs in a BACKGROUND TASK so the web
 // server stays responsive and the settings page can poll /api/github/progress for a live % bar. Server picks
 // the URL itself (only ever its own repo's asset). Streams into the OTA slot; Update validates, so a bad/short
-// image is rejected and the running firmware is kept (brick-safe).
-static volatile uint8_t  g_ghState = 0;          // 0 idle · 1 running · 2 done (reboot imminent) · 3 error
-static volatile uint32_t g_ghDone = 0, g_ghTotal = 0;
-
+// image is rejected and the running firmware is kept (brick-safe). g_ghState/g_ghDone/g_ghTotal/g_ghLastError
+// are declared up near the other g_gh* globals (statusJson() needs them and is defined well above this).
 static void ghOtaTask(void *) {
   g_ghDone = 0; g_ghTotal = 0;
+  g_ghLastError = "";
   // Single-core C3: free the CPU + heap by dropping the MQTTS/MQTT link for the duration of the download
   // (mqttService() also skips while g_ghState==1, so it won't reconnect mid-flash). On success we reboot;
   // on failure MQTT reconnects on its own.
@@ -1432,7 +1446,14 @@ static void ghOtaTask(void *) {
   otaHist_prepareForFlash();
   bool ok = false;
   String tag, url;
-  if (githubLatest(tag, url) && url.length()) {
+  // Re-resolves the release/asset URL even though the caller (the auto-update loop, or the settings page's
+  // own "check for updates") typically JUST did the same lookup seconds ago -- kept fresh here rather than
+  // threaded through as a parameter so a manual /api/github/update click (no prior check) still works, and
+  // so a release that changed between check and click can't hand us a stale URL. Observed live: this second
+  // lookup can occasionally fail on its own (transient TLS/DNS hiccup, or simply landing right after the
+  // MQTT disconnect + history unmount above) even though the first one just succeeded -- one retry covers it.
+  if (!githubLatest(tag, url) || !url.length()) { delay(1500); githubLatest(tag, url); }
+  if (url.length()) {
     WiFiClientSecure cli; cli.setInsecure();
     HTTPClient http; http.setUserAgent("OBI-Gateway");
     http.setConnectTimeout(10000); http.setTimeout(20000);
@@ -1451,11 +1472,22 @@ static void ghOtaTask(void *) {
           // stay 0 forever (its 0-byte ssl_read doesn't always pump a record), which is the 0%-stall.
           int n = st->read(buf, sizeof buf);
           if (n > 0) {
-            if (Update.write(buf, n) != (size_t)n) break;
+            if (Update.write(buf, n) != (size_t)n) {
+              g_ghLastError = "flash write failed at " + String((unsigned)written) + "/" + String(len) +
+                               " bytes (" + Update.errorString() + ")";
+              break;
+            }
             written += n; g_ghDone = written; lastData = millis();
           } else if (!st->connected() && st->available() == 0) {
+            g_ghLastError = "GitHub closed the connection after " + String((unsigned)written) + "/" + String(len) + " bytes";
             break;                                         // server closed, nothing left
           } else if (millis() - lastData > 20000) {
+            // Observed root cause on obi_gateway_c3 (320 KB RAM, single core): free/allocatable heap can
+            // collapse to a few KB during a large HTTPS download (TLS + flash-write + the web server all
+            // competing for it), which stalls the TLS read well before this timeout and looks identical to
+            // a network stall from here -- so surface the current heap, it's the fastest way to tell them apart.
+            g_ghLastError = "download stalled after " + String((unsigned)written) + "/" + String(len) +
+                             " bytes, no data for 20s (free heap right now: " + String((unsigned)ESP.getFreeHeap()) + " B)";
             break;                                         // stall
           } else {
             delay(2);                                      // yield; wait for the next TLS record
@@ -1464,14 +1496,24 @@ static void ghOtaTask(void *) {
         if (written == (size_t)len && Update.end(true)) {
           ok = true;
         } else {
+          if (!g_ghLastError.length())
+            g_ghLastError = written < (size_t)len
+              ? "connection dropped at " + String((unsigned)written) + "/" + String(len) + " bytes"
+              : String("firmware verify failed (") + Update.errorString() + ")";
           Update.printError(Serial);
           Update.abort();     // release the OTA slot so a stalled/partial download can't block the next OTA/self-update
         }
         Serial.printf("[ghota] wrote %u/%d ok=%d\n", (unsigned)written, len, ok);
-      } else Serial.println("[ghota] no image / Update.begin failed");
-    }
+      } else {
+        g_ghLastError = code != 200 ? "GitHub download returned HTTP " + String(code)
+                       : len <= 0    ? "GitHub download had an empty/unknown size"
+                       : String("couldn't start the flash write (") + Update.errorString() +
+                         ", " + String((unsigned)ESP.getFreeHeap()) + " B free heap)";
+        Serial.println("[ghota] no image / Update.begin failed");
+      }
+    } else g_ghLastError = "couldn't open a connection to GitHub";
     http.end();
-  }
+  } else g_ghLastError = "no matching release asset found on GitHub for this board (" + String(FW_BUILD_TARGET) + ")";
   g_ghState = ok ? 2 : 3;
   if (ok) { delay(900); ESP.restart(); }
   else otaHist_abortFlash();   // failed/rejected -- stay on current firmware, recover history right away
@@ -1489,7 +1531,8 @@ static void handleGithubProgress() {
   uint32_t d = g_ghDone, tt = g_ghTotal;
   int pct = tt ? (int)((uint64_t)d * 100 / tt) : 0;
   server.send(200, "application/json",
-              String("{\"state\":") + g_ghState + ",\"done\":" + d + ",\"total\":" + tt + ",\"pct\":" + pct + "}");
+              String("{\"state\":") + g_ghState + ",\"done\":" + d + ",\"total\":" + tt + ",\"pct\":" + pct +
+              ",\"err\":" + jstr(g_ghLastError.c_str()) + "}");
 }
 
 // ---- /api/github/auto — configure periodic auto-update (default: disabled) ------------------------------
@@ -1792,7 +1835,7 @@ $('lorasf').options[0].textContent=t('SF7 (Standard)','SF7 (default)');$('lorasf
 $('lorawarn').textContent=t('Nur ändern, wenn ALLE Reader bereits mit der passenden SF-Firmware geflasht sind — sonst verlieren sie sofort nach dem Neustart die Verbindung. Änderung wirkt erst nach einem Neustart des Gateways.','Only change this once ALL readers are already flashed with matching-SF firmware — otherwise they lose the connection the moment this reboots. Takes effect after a gateway reboot.');
 $('lorawarn9').textContent=t('⚠️ SF9 kostet deutlich mehr Sendezeit pro Übertragung (grob das 3,4-Fache) und damit spürbar mehr Akku beim Reader als SF7 — nur für Reader mit schwachem Empfang sinnvoll. Inoffizielle, ungetestete Anpassung der Reader-Firmware: Nutzung auf eigenes Risiko.','⚠️ SF9 costs noticeably more airtime per transmission (roughly 3.4×) and therefore meaningfully more reader battery than SF7 — only worth it for readers with a weak signal. An unofficial, off-label reader firmware patch: use at your own risk.');
 $('blorasave').textContent=t('Speichern','Save');
-let cfg=false,tzc=false,ghc=false,loraSfc=false,ftpc=false;
+let cfg=false,tzc=false,ghc=false,loraSfc=false,ftpc=false,ghBusy=false;
 function loraSfChanged(){$('lorawarn9').style.display=$('lorasf').value==='9'?'':'none';}
 async function load(){try{
   const s=await(await fetch('/api/status')).json();
@@ -1814,7 +1857,8 @@ async function load(){try{
   if(s.gh_auto&&!ghc){ghc=true;$('ghauto').checked=!!s.gh_auto.enabled;$('ghrepo').value=s.gh_auto.repo||'';
    let h=s.gh_auto.interval_h||24;
    if(h>=24&&h%24===0){$('ghivlu').value=24;$('ghivln').value=h/24;}else{$('ghivlu').value=1;$('ghivln').value=h;}}
-  if(s.gh_auto)$('ghautonote').textContent=s.gh_auto.enabled?t('aktiv — prüft alle ','on — checking every ')+s.gh_auto.interval_h+t(' Std. auf ',' h against ')+(s.gh_auto.repo||'atc1441/OBI_Energy_Tracker_Local_Cloud')+t(' · nächster Check in ',' · next check in ')+fmtDur(s.gh_auto.next_check_s):t('deaktiviert — Firmware ändert sich nur manuell','off — firmware only changes manually');
+  if(s.gh_auto){$('ghautonote').textContent=s.gh_auto.enabled?t('aktiv — prüft alle ','on — checking every ')+s.gh_auto.interval_h+t(' Std. auf ',' h against ')+(s.gh_auto.repo||'atc1441/OBI_Energy_Tracker_Local_Cloud')+t(' · nächster Check in ',' · next check in ')+fmtDur(s.gh_auto.next_check_s):t('deaktiviert — Firmware ändert sich nur manuell','off — firmware only changes manually');
+   if(s.gh_auto.state===3&&s.gh_auto.last_err)$('ghautonote').textContent+=' · '+t('letzter Versuch fehlgeschlagen: ','last attempt failed: ')+s.gh_auto.last_err;}
   if(s.ftp&&!ftpc){ftpc=true;$('ftpen').checked=!!s.ftp.enabled;$('ftphost').value=s.ftp.host||'';$('ftpport').value=s.ftp.port||21;
    $('ftpuser').value=s.ftp.user||'';$('ftppath').value=s.ftp.path||'';
    let m=s.ftp.interval_min||1440;
@@ -1921,16 +1965,19 @@ async function ghUpdate(){if(!confirm(t('Firmware von GitHub laden und flashen? 
  const box=$('ghbox');box.className='msg';
  box.innerHTML='⏳ '+t('lade & flashe von GitHub… (nicht trennen)','downloading & flashing from GitHub… (do not disconnect)')
    +'<div class="bar on" style="margin:10px 0 4px"><div class=fill id=ghfill></div></div><div id=ghp class=msg>0%</div>';
+ // Pause the 5s /api/status poll (load()) for the duration -- it's a big JSON build on a device with only
+ // ~320 KB RAM, and competing with it for heap is a real contributor to OTA download stalls on this board.
+ ghBusy=true;
  try{const r=await(await fetch('/api/github/update',{method:'POST'})).json();
-  if(!r.ok){box.className='msg';box.textContent=t('Start fehlgeschlagen','failed to start')+' ('+(r.err||'?')+')';return;}
+  if(!r.ok){box.className='msg';box.textContent=t('Start fehlgeschlagen','failed to start')+' ('+(r.err||'?')+')';ghBusy=false;return;}
   ghPoll();
- }catch(e){box.className='msg';box.textContent=t('Fehler beim Start','error starting');}}
+ }catch(e){box.className='msg';box.textContent=t('Fehler beim Start','error starting');ghBusy=false;}}
 async function ghPoll(){try{const p=await(await fetch('/api/github/progress')).json();
   const f=$('ghfill'),info=$('ghp');
   if(f)f.style.width=(p.pct||0)+'%';
   if(info)info.textContent=(p.pct||0)+'%'+(p.total?' · '+Math.round((p.done||0)/1024)+'/'+Math.round(p.total/1024)+' KB':'');
-  if(p.state==2){if(info)info.textContent='✓ '+t('fertig — Neustart läuft…','done — rebooting…');setTimeout(()=>location.href='/',10000);return;}
-  if(p.state==3){$('ghbox').className='msg';$('ghbox').textContent=t('Update fehlgeschlagen — aktuelle Firmware bleibt.','update failed — current firmware kept.');return;}
+  if(p.state==2){ghBusy=false;if(info)info.textContent='✓ '+t('fertig — Neustart läuft…','done — rebooting…');setTimeout(()=>location.href='/',10000);return;}
+  if(p.state==3){ghBusy=false;$('ghbox').className='msg';$('ghbox').textContent=t('Update fehlgeschlagen','Update failed')+(p.err?' — '+p.err:'')+' — '+t('aktuelle Firmware bleibt.','current firmware kept.');return;}
   setTimeout(ghPoll,700);
  }catch(e){setTimeout(()=>location.href='/',10000);}}  // a failing poll usually means it's rebooting
 async function saveGhAuto(){const en=$('ghauto').checked;
@@ -1950,7 +1997,7 @@ async function factoryReset(){
  $('frbtn').disabled=true;$('frmsg').textContent=t('setze zurück…','resetting…');
  try{await fetch('/api/factory_reset',{method:'POST'});}catch(e){}
  $('frmsg').textContent=t('zurückgesetzt — Neustart ins Setup-Portal…','reset — rebooting into setup portal…');}
-load();ghCheck();setInterval(load,5000);   // keep WiFi/MQTT status + the device clock fresh
+load();ghCheck();setInterval(()=>{if(!ghBusy)load();},5000);   // keep WiFi/MQTT status + the device clock fresh -- but not while a GitHub OTA is running, see ghUpdate()
 </script></body></html>)HTML";
 static void handleSettingsPage() {
   server.send_P(200, "text/html", SETTINGS_HTML);
