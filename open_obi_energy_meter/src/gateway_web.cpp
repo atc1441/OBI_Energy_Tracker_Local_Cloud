@@ -125,6 +125,20 @@ static char     g_authPass[64] = "";
 // validated in handleApPassword() before it's ever handed to softAP()/WiFiManager.
 static char     g_apPass[64] = "";
 
+// Custom DHCP / static IP for the STA (router-facing) link. Off by default (plain DHCP, unchanged behavior).
+// ESP32's WiFi.config() is a per-power-cycle call, NOT itself NVS-persisted like the SSID/PSK are -- so
+// applyStaticIp() (below, near the WiFi connect helpers) re-applies this from these globals immediately
+// before every single WiFi.begin()/autoConnect()/startConfigPortal() call, every time. A bad value here
+// (wrong subnet/gateway) can make the dashboard unreachable over the network -- recovery is the same
+// case-button factory reset that already exists for a forgotten WiFi password (wipes NVS "obigw", these
+// keys included, back to plain DHCP). Configured via /api/staticip; validated there (must parse as IPv4).
+static bool     g_staticIpOn   = false;
+static char     g_staticIp[16]   = "";
+static char     g_staticGw[16]   = "";
+static char     g_staticSn[16]   = "255.255.255.0";
+static char     g_staticDns1[16] = "";
+static char     g_staticDns2[16] = "";
+
 // Periodic GitHub firmware auto-update: OFF by default, points at GH_DEFAULT_REPO (see below) unless the
 // user sets their own (e.g. a fork), checks every g_ghIntervalH hours. Persisted under NVS "obigw"
 // ("ghauto"/"ghrepo"/"ghivl"); configured via /api/github/auto.
@@ -239,6 +253,10 @@ static const char *mqttStateText(int s) {
   }
 }
 static String jstr(const char *s) { String o = "\""; for (; *s; s++) { if (*s == '"' || *s == '\\') o += '\\'; o += *s; } return o + "\""; }
+// 0.0.0.0 is IPAddress's zero-value, returned e.g. by WiFi.dnsIP(1) when the network only hands out one DNS
+// server -- report that as "unset" (empty string) rather than a literal "0.0.0.0" the Settings page would
+// otherwise prefill into the DNS 2 field as if it meant something.
+static String ipOrEmpty(IPAddress ip) { return ip == IPAddress(0, 0, 0, 0) ? String("") : ip.toString(); }
 
 static String readersJson() {
   // Sort used readers by their 3-byte handle so the web UI always lists them in
@@ -332,6 +350,17 @@ static String statusJson() {
   j += ",\"ip\":\"" + (g_wifiOk ? WiFi.localIP().toString() : String("-")) + "\"";
   j += ",\"wifi_rssi\":" + String(g_wifiOk ? WiFi.RSSI() : 0);
   j += ",\"ap\":{\"ssid\":" + jstr(apSsid()) + ",\"pass_set\":" + String(g_apPass[0] ? "true" : "false") + "}";
+  j += ",\"static_ip\":{\"on\":" + String(g_staticIpOn ? "true" : "false") + ",\"ip\":" + jstr(g_staticIp) +
+       ",\"gw\":" + jstr(g_staticGw) + ",\"sn\":" + jstr(g_staticSn) + ",\"dns1\":" + jstr(g_staticDns1) +
+       ",\"dns2\":" + jstr(g_staticDns2) +
+       // the CURRENTLY active values (DHCP-assigned or static, whichever is in effect right now) -- lets the
+       // Settings page prefill the fields with today's real DHCP lease instead of blanks, so turning static
+       // IP on for the first time starts from "what already works" rather than an empty form.
+       ",\"cur_ip\":" + jstr(g_wifiOk ? ipOrEmpty(WiFi.localIP()).c_str() : "") +
+       ",\"cur_sn\":" + jstr(g_wifiOk ? ipOrEmpty(WiFi.subnetMask()).c_str() : "") +
+       ",\"cur_gw\":" + jstr(g_wifiOk ? ipOrEmpty(WiFi.gatewayIP()).c_str() : "") +
+       ",\"cur_dns1\":" + jstr(g_wifiOk ? ipOrEmpty(WiFi.dnsIP(0)).c_str() : "") +
+       ",\"cur_dns2\":" + jstr(g_wifiOk ? ipOrEmpty(WiFi.dnsIP(1)).c_str() : "") + "}";
   { uint32_t nextS = 0;   // seconds until the next periodic check -- 0 when auto-update is off/mid-update
     if (g_ghAuto) {
       uint64_t intervalMs = (uint64_t)g_ghIntervalH * 3600000ULL;
@@ -1127,6 +1156,51 @@ static void handleApPassword() {
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
+// ---- /api/staticip — custom DHCP / static IP for the router-facing (STA) link ----------------------------
+// Strict validation when turning it on: IP/gateway/subnet must all parse as IPv4 (DNS fields optional) -- a
+// malformed value here could make the dashboard unreachable over the network once applied, so this refuses
+// rather than silently accepting garbage. Reboots right after saving (like handleReboot(): answer first,
+// then restart) so the new config actually takes effect immediately instead of silently waiting for whatever
+// the next unrelated reconnect happens to be -- the boot-time path (applyStaticIp()/applyWmStaticIp(), just
+// before wm.autoConnect()) is what picks it up.
+static void handleStaticIp() {
+  bool on = server.arg("on") == "1" || server.arg("on") == "true";
+  IPAddress t;
+  if (on) {
+    if (!t.fromString(server.arg("ip"))) { server.send(400, "application/json", "{\"ok\":false,\"err\":\"ip\"}"); return; }
+    if (!t.fromString(server.arg("gw"))) { server.send(400, "application/json", "{\"ok\":false,\"err\":\"gw\"}"); return; }
+    if (!t.fromString(server.arg("sn"))) { server.send(400, "application/json", "{\"ok\":false,\"err\":\"sn\"}"); return; }
+    if (server.arg("dns1").length() && !t.fromString(server.arg("dns1"))) { server.send(400, "application/json", "{\"ok\":false,\"err\":\"dns1\"}"); return; }
+    if (server.arg("dns2").length() && !t.fromString(server.arg("dns2"))) { server.send(400, "application/json", "{\"ok\":false,\"err\":\"dns2\"}"); return; }
+  }
+  g_staticIpOn = on;
+  if (on) {
+    strlcpy(g_staticIp,   server.arg("ip").c_str(),   sizeof g_staticIp);
+    strlcpy(g_staticGw,   server.arg("gw").c_str(),   sizeof g_staticGw);
+    strlcpy(g_staticSn,   server.arg("sn").c_str(),   sizeof g_staticSn);
+    strlcpy(g_staticDns1, server.arg("dns1").c_str(), sizeof g_staticDns1);
+    strlcpy(g_staticDns2, server.arg("dns2").c_str(), sizeof g_staticDns2);
+  } else {
+    // Actually clear these on disable (not just leave g_staticIpOn=false with stale values still sitting in
+    // NVS) -- functionally inert either way (applyStaticIp() already checks g_staticIpOn first), but a clean
+    // "off" should mean off, not "off, but still quietly remembering the last IP" in the API response.
+    g_staticIp[0] = g_staticGw[0] = g_staticDns1[0] = g_staticDns2[0] = '\0';
+    strlcpy(g_staticSn, "255.255.255.0", sizeof g_staticSn);
+  }
+  prefs.begin("obigw", false);
+  prefs.putBool("sipon", g_staticIpOn);
+  prefs.putString("sip", g_staticIp);
+  prefs.putString("sgw", g_staticGw);
+  prefs.putString("ssn", g_staticSn);
+  prefs.putString("sdns1", g_staticDns1);
+  prefs.putString("sdns2", g_staticDns2);
+  prefs.end();
+  server.send(200, "application/json", "{\"ok\":true}");
+  Serial.println("[web] static IP settings saved -- rebooting to apply");
+  delay(200);
+  ESP.restart();
+}
+
 // (Re)start the SNTP client with the user-set NTP server (custom first, public pools as fallback) and zone.
 static void syncNtp() {
   configTzTime(g_tz, g_ntp, "pool.ntp.org", "time.nist.gov");
@@ -1751,6 +1825,22 @@ button:disabled{opacity:.5;cursor:default}
  </div>
 
  <div class=card>
+  <h3>🌐 <span id=hstip>Statische IP</span></h3>
+  <div class=stat id=stipstat>…</div>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
+   <input type=checkbox id=stipon style="width:auto;margin:0"><span id=lstipon>Statische IP statt DHCP verwenden</span></label>
+  <div class=grid>
+   <div><label id=lstipip>IP-Adresse</label><input id=stipip placeholder=192.168.1.50></div>
+   <div><label id=lstipsn>Subnetzmaske</label><input id=stipsn placeholder=255.255.255.0></div>
+   <div><label id=lstipgw>Gateway</label><input id=stipgw placeholder=192.168.1.1></div>
+   <div><label id=lstipd1>DNS 1</label><input id=stipd1 placeholder=192.168.1.1></div>
+  </div>
+  <label id=lstipd2>DNS 2 (optional)</label><input id=stipd2 placeholder="8.8.8.8">
+  <p class=cap id=stipwarn style="color:var(--red)"></p>
+  <div class=row><button onclick=saveStaticIp()><span id=bstip>Speichern</span></button><span class=msg id=stipmsg></span></div>
+ </div>
+
+ <div class=card>
   <h3>⚙ MQTT</h3>
   <div class=stat id=mqstat>…</div>
   <div class=grid>
@@ -1900,6 +1990,10 @@ $('lnet').textContent=t('Netzwerk (Scan)','Network (scan)');$('bscan').textConte
 $('lman').textContent=t('…oder SSID eingeben','…or type SSID');$('lwpass').textContent=t('Passwort','Password');
 $('bconn').textContent=t('Verbinden & speichern','Connect & save');$('bportal').textContent=t('Setup-Portal (AP)','Setup portal (AP)');
 $('lappass').textContent=t('Hotspot-Passwort (leer = offen)','Hotspot password (blank = open)');$('bapsave').textContent=t('Speichern','Save');
+$('hstip').textContent=t('Statische IP','Static IP');$('lstipon').textContent=t('Statische IP statt DHCP verwenden','Use a static IP instead of DHCP');
+$('lstipip').textContent=t('IP-Adresse','IP address');$('lstipsn').textContent=t('Subnetzmaske','Subnet mask');$('lstipgw').textContent=t('Gateway','Gateway');
+$('lstipd1').textContent=t('DNS 1','DNS 1');$('lstipd2').textContent=t('DNS 2 (optional)','DNS 2 (optional)');$('bstip').textContent=t('Speichern','Save');
+$('stipwarn').textContent=t('⚠️ Eine falsche IP/Gateway/Subnetzmaske kann das Dashboard über das Netzwerk unerreichbar machen — Wiederherstellung dann nur über den Werksreset-Taster am Gerät (setzt WLAN + alle Einstellungen zurück).','⚠️ A wrong IP/gateway/subnet mask can make the dashboard unreachable over the network — recovery then only via the device\'s factory-reset button (resets WiFi + all settings).');
 $('lhost').textContent=t('Server','Server');$('luser').textContent=t('Benutzer','User');$('lpass').textContent=t('Passwort','Password');
 $('ltopic').textContent=t('Basis-Topic','Base topic');$('bmsave').textContent=t('Speichern','Save');$('bdisc').textContent=t('Discovery senden','Send discovery');
 $('ltls').textContent=t('MQTTS (TLS-Verschlüsselung)','MQTTS (TLS encryption)');$('lca').textContent=t('CA-Zertifikat (PEM, optional)','CA certificate (PEM, optional)');
@@ -1943,9 +2037,17 @@ async function load(){try{
   if(!cfg){cfg=true;$('mh').value=q.host||'';$('mp').value=q.port||1883;$('mu').value=q.user||'';$('mt').value=q.topic||'';
    $('mtls').checked=!!q.tls;if(q.ca_set)$('mca').placeholder=t('Zertifikat gespeichert — leer lassen zum Beibehalten','certificate saved — leave blank to keep');
    $('au').value=(s.auth&&s.auth.user)||'';$('night').checked=!!s.night_mode;$('numfmt').value=s.num_fmt||0;
-   $('gwname').value=s.gw_custom_name||'';}
+   $('gwname').value=s.gw_custom_name||'';
+   const si=s.static_ip||{};$('stipon').checked=!!si.on;
+   // Off (no custom values saved yet): prefill with whatever DHCP actually handed out right now, so turning
+   // this on starts from "what already works" instead of blank fields the user has to look up themselves.
+   $('stipip').value=si.on?si.ip:(si.cur_ip||'');$('stipsn').value=si.on?(si.sn||'255.255.255.0'):(si.cur_sn||'255.255.255.0');
+   $('stipgw').value=si.on?si.gw:(si.cur_gw||'');$('stipd1').value=si.on?si.dns1:(si.cur_dns1||'');$('stipd2').value=si.on?si.dns2:(si.cur_dns2||'');}
   { const orig='OBI Gateway '+s.gw;
     $('gwnstat').innerHTML=s.gw_custom_name?`${t('aktiv als','active as')} <code>${esc(s.gw_custom_name)}</code> · ${t('original','original')}: <code>${orig}</code>`:`${t('Standardname aktiv','using the default name')}: <code>${orig}</code>`; }
+  { const si=s.static_ip||{};
+    $('stipstat').innerHTML=(si.on?`<span class="dot on"></span>${t('statisch konfiguriert','static configured')}: <code>${esc(si.ip)}</code>`:`<span class="dot idle"></span>${t('DHCP (automatisch)','DHCP (automatic)')}`)+
+     ` · ${t('aktuell aktiv','currently active')}: <code>${s.ip}</code>`; }
   $('austat').innerHTML=(s.auth&&s.auth.enabled)?`<span class="dot on"></span>${t('geschützt als','protected as')} <code>${s.auth.user}</code>`:`<span class="dot idle"></span>${t('offen — kein Passwort','open — no password')}`;
   $('fwcur').innerHTML=`${t('Aktuell','Current')}: <code>${s.fw?s.fw.version:'?'}</code> (${s.fw?s.fw.target:''})`;
   if(s.lora_sf&&!loraSfc){loraSfc=true;$('lorasf').value=s.lora_sf;loraSfChanged();}
@@ -2037,6 +2139,25 @@ async function saveApPass(){const p=$('appass').value;
  $('apmsg').textContent='…';const r=await(await fetch('/api/appass',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'pass='+encodeURIComponent(p)})).json();
  if(!r.ok){$('apmsg').textContent=t('mind. 8 Zeichen (oder leer lassen)','8+ chars (or leave blank)');return;}
  $('appass').value='';$('apmsg').textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>$('apmsg').textContent='',3000);load();}
+function validIp4(v){return /^(\d{1,3}\.){3}\d{1,3}$/.test(v)&&v.split('.').every(o=>+o>=0&&+o<=255);}
+async function saveStaticIp(){const on=$('stipon').checked;
+ if(on){
+  const ip=$('stipip').value.trim(),sn=$('stipsn').value.trim(),gw=$('stipgw').value.trim(),d1=$('stipd1').value.trim(),d2=$('stipd2').value.trim();
+  if(!validIp4(ip)){$('stipmsg').textContent=t('ungültige IP-Adresse','invalid IP address');return;}
+  if(!validIp4(sn)){$('stipmsg').textContent=t('ungültige Subnetzmaske','invalid subnet mask');return;}
+  if(!validIp4(gw)){$('stipmsg').textContent=t('ungültiges Gateway','invalid gateway');return;}
+  if(d1&&!validIp4(d1)){$('stipmsg').textContent=t('ungültiger DNS 1','invalid DNS 1');return;}
+  if(d2&&!validIp4(d2)){$('stipmsg').textContent=t('ungültiger DNS 2','invalid DNS 2');return;}
+  if(!confirm(t('Statische IP speichern? Das Gateway startet danach sofort neu. Bei falschen Werten ist das Dashboard über das Netzwerk evtl. nicht mehr erreichbar (Wiederherstellung dann nur per Werksreset-Taster).','Save static IP? The gateway restarts immediately afterward. Wrong values may make the dashboard unreachable over the network (recovery then only via the factory-reset button).')))return;
+ } else if(!confirm(t('Zurück auf DHCP wechseln? Das Gateway startet danach sofort neu.','Switch back to DHCP? The gateway restarts immediately afterward.'))) return;
+ const b=new URLSearchParams();b.set('on',on?'1':'0');
+ if(on){b.set('ip',$('stipip').value.trim());b.set('sn',$('stipsn').value.trim());b.set('gw',$('stipgw').value.trim());b.set('dns1',$('stipd1').value.trim());b.set('dns2',$('stipd2').value.trim());}
+ $('stipmsg').textContent='…';
+ try{
+  const r=await(await fetch('/api/staticip',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b})).json();
+  if(!r.ok){$('stipmsg').textContent=t('Speichern fehlgeschlagen: ','save failed: ')+(r.err||'?');return;}
+ }catch(e){}   // the gateway reboots right after answering -- a dropped connection here is expected, not a failure
+ $('stipmsg').textContent=t('gespeichert ✓ — Gateway startet neu… Dashboard ggf. unter neuer IP erneut öffnen.','saved ✓ — gateway restarting… reopen the dashboard at the new IP if it changed.');}
 async function saveMqtt(){const b=new URLSearchParams();b.set('host',$('mh').value);b.set('port',$('mp').value||1883);b.set('user',$('mu').value);b.set('topic',$('mt').value);if($('mpw').value)b.set('pass',$('mpw').value);
  b.set('tls',$('mtls').checked?'1':'0');if($('mca').value.trim())b.set('ca',$('mca').value.trim());  // blank CA = keep existing / encrypt-only
  $('mqmsg').textContent='…';await fetch('/api/mqtt',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b});$('mpw').value='';$('mqmsg').textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>$('mqmsg').textContent='',3000);load();}
@@ -3956,6 +4077,7 @@ static void startServices() {
   server.on("/api/mqtt", HTTP_POST, guard(handleMqttCfg));
   server.on("/api/auth", HTTP_POST, guard(handleAuthCfg));   // set web Basic Auth user/pass
   server.on("/api/appass", HTTP_POST, guard(handleApPassword));  // set the setup-hotspot AP password
+  server.on("/api/staticip", HTTP_POST, guard(handleStaticIp));  // custom DHCP / static IP for the STA link
   server.on("/api/tz",   HTTP_POST, guard(handleTz));       // set the timezone (history day-buckets)
   server.on("/api/night_mode", HTTP_POST, guard(handleNightMode)); // disable normal-operation LED activity
   server.on("/api/numfmt", HTTP_POST, guard(handleNumFmt));        // number format: 0=auto 1=EU 2=US
@@ -4045,6 +4167,38 @@ static void handleWifiScan() {
   server.send(200, "application/json", j);
 }
 
+// Re-applies the custom static IP (or explicitly releases back to DHCP) from the g_static* globals. Must be
+// called right before EVERY WiFi.begin()/autoConnect() -- WiFi.config() only affects the connection about to
+// be made, it isn't itself remembered by the WiFi driver across a later reconnect the way SSID/PSK are.
+// Passing all-zero addresses is the documented ESP32 Arduino way to say "use DHCP", which is also the
+// natural off-state here (g_staticIpOn false, or an incomplete/invalid entry) -- so this is safe to call
+// unconditionally on every connect attempt without needing to track whether one was already applied before.
+static void applyStaticIp() {
+  IPAddress ip, gw, sn, d1, d2;   // default-construct to 0.0.0.0 each -- the "use DHCP" signal on its own
+  if (g_staticIpOn && ip.fromString(g_staticIp)) {
+    if (!g_staticGw[0] || !gw.fromString(g_staticGw)) gw = IPAddress(0, 0, 0, 0);   // left unset -- validated in handleStaticIp(), shouldn't normally happen
+    if (!g_staticSn[0] || !sn.fromString(g_staticSn)) sn = IPAddress(255, 255, 255, 0);
+    if (g_staticDns1[0]) d1.fromString(g_staticDns1);
+    if (g_staticDns2[0]) d2.fromString(g_staticDns2);
+  } else {
+    ip = gw = sn = IPAddress(0, 0, 0, 0);   // static IP off (or the stored value is somehow invalid) -- DHCP
+  }
+  WiFi.config(ip, gw, sn, d1, d2);
+}
+// WiFiManager manages its OWN connection attempts inside autoConnect()/startConfigPortal() (a plain
+// WiFi.config() call made beforehand isn't guaranteed to survive that), so those two also need the static
+// IP handed to WiFiManager directly. Only called when actually enabled+valid -- `wm` is a fresh object each
+// boot, so simply never calling this at all is equivalent to "unset" (DHCP), no explicit off-state needed.
+static void applyWmStaticIp() {
+  IPAddress ip;
+  if (!g_staticIpOn || !ip.fromString(g_staticIp) || !g_staticGw[0]) return;
+  IPAddress gw, sn(255, 255, 255, 0), d1;
+  if (!gw.fromString(g_staticGw)) return;
+  if (g_staticSn[0]) sn.fromString(g_staticSn);
+  if (g_staticDns1[0]) d1.fromString(g_staticDns1);
+  wm.setSTAStaticIPConfig(ip, gw, sn, d1);   // single-DNS overload -- see applyStaticIp() for the dns2 case
+}
+
 // Connect to a network chosen in the dashboard (no AP switch needed when already connected). We answer
 // BEFORE calling WiFi.begin(), because begin() drops the current link. Credentials persist to NVS, so
 // autoConnect() uses them on the next boot. The webTask connect/disconnect watcher updates AP + state.
@@ -4055,6 +4209,7 @@ static void handleWifiConnect() {
   Serial.printf("[web] dashboard: connecting to '%s'\n", ssid.c_str());
   WiFi.persistent(true);
   if (WiFi.getMode() == WIFI_MODE_AP) WiFi.mode(WIFI_AP_STA);   // keep AP up during the switch
+  applyStaticIp();
   WiFi.begin(ssid.c_str(), pass.c_str());
 }
 
@@ -4069,6 +4224,7 @@ static void runPortal() {
   wm.setEnableConfigPortal(true);
   wm.setConfigPortalBlocking(true);
   wm.setConfigPortalTimeout(180);
+  applyWmStaticIp();   // re-apply on every portal open -- a fresh WiFiManager session state each boot
   wm.startConfigPortal(apSsid(), g_apPass[0] ? g_apPass : nullptr);   // serves the WiFiManager UI until saved or 3-min timeout
   wm.setConfigPortalBlocking(false);
   wm.setConfigPortalTimeout(0);
@@ -4550,6 +4706,12 @@ static void webTask(void *) {
   g_hideUnbound = prefs.getBool("hideunb", false);
   g_numFmt = prefs.getUChar("numfmt", 0);
   prefs.getString("gwname", "").toCharArray(g_gwName, sizeof g_gwName);
+  g_staticIpOn = prefs.getBool("sipon", false);
+  prefs.getString("sip",   "").toCharArray(g_staticIp,   sizeof g_staticIp);
+  prefs.getString("sgw",   "").toCharArray(g_staticGw,   sizeof g_staticGw);
+  { String s = prefs.getString("ssn", "255.255.255.0"); s.toCharArray(g_staticSn, sizeof g_staticSn); }
+  prefs.getString("sdns1", "").toCharArray(g_staticDns1, sizeof g_staticDns1);
+  prefs.getString("sdns2", "").toCharArray(g_staticDns2, sizeof g_staticDns2);
   prefs.end();
   setenv("TZ", g_tz, 1); tzset();                // apply the saved zone up-front (localtime works before NTP too)
   clampTimeSanity();   // esp_restart() (self-OTA) carries the RTC clock across reboots -- clear it up-front
@@ -4568,6 +4730,7 @@ static void webTask(void *) {
   wm.setEnableConfigPortal(false);   // never auto-launch the portal — it's on-demand (WiFi button / runPortal)
   wm.setCaptivePortalEnable(false);  // no DNS-hijack redirect -> the OS won't auto-pop a captive window
   wm.setBreakAfterConfig(true);
+  applyStaticIp(); applyWmStaticIp();
   Serial.printf("[web] WiFi: trying saved network (dashboard stays reachable either way, AP '%s')\n", apSsid());
   if (!wm.autoConnect(apSsid(), g_apPass[0] ? g_apPass : nullptr)) {   // try saved creds only; on failure bring up our own AP for the dashboard
     WiFi.mode(WIFI_AP_STA);
@@ -4605,6 +4768,7 @@ static void webTask(void *) {
       if (nowMs - lastRetryMs > 30000UL) {   // own -- even once the router/AP it was on comes back up.
         lastRetryMs = nowMs;
         Serial.println("[web] WiFi still down — retrying saved network");
+        applyStaticIp();
         WiFi.begin();   // non-blocking; reuses the SSID/PSK persisted in NVS (no-op if none saved yet)
       }
     }
