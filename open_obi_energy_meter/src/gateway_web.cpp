@@ -160,20 +160,23 @@ static uint32_t g_ghLastCheckMs = 0xFFFFFFFF;
 
 // Periodic FTP history backup: OFF by default. Every run uploads BOTH each reader's daily CSV (see
 // buildDailyCsv()) and its raw sample log (buildRawCsv() -- the same data the History page's "download raw
-// as CSV" button produces), always together, on the same g_ftpIntervalMin schedule -- not a separate option,
-// just what "back up the history" means here. Files are timestamped ("<id>_daily_<unixtime>.csv" /
-// "<id>_raw_<unixtime>.csv") so a run never overwrites a previous one, and kept in separate "daily"/"raw"
-// subfolders (FTP_DAILY_DIR/FTP_RAW_DIR below) so a directory listing alone tells the two apart. The raw
-// log on the device itself is short-retention (a capped ring buffer, hours to days -- see
-// sampleCapBytes()), so on its own it can't answer "what did consumption look like at 3pm three weeks ago"
-// -- but the repeated timestamped snapshots let that be reconstructed OFFLINE later (concatenate + dedupe
-// by epoch in Excel/pandas/etc.), as far back as the snapshots go, provided the upload interval stays
-// shorter than the raw log's own retention window (otherwise gaps appear between snapshots that can't be
-// filled back in). Plain FTP only (RFC 959, passive mode) -- deliberately no FTPS/TLS, same reasoning as
-// the web UI staying HTTP (see ../02-hardware): a comparable TLS stack just for this wasn't worth it on
-// this device. Credentials and file contents go out in the clear -- LAN use only, the Settings page says so
-// next to the fields. Persisted under NVS "obigw" ("ftpen"/"ftph"/"ftpp"/"ftpu"/"ftppw"/"ftppath"/"ftpivl");
-// configured via /api/ftp.
+// as CSV" button produces), always together -- not a separate option, just what "back up the history" means
+// here. Files are timestamped ("<id>_daily_<unixtime>.csv" / "<id>_raw_<unixtime>.csv") so a run never
+// overwrites a previous one, and kept in separate "daily"/"raw" subfolders (FTP_DAILY_DIR/FTP_RAW_DIR below)
+// so a directory listing alone tells the two apart. The raw log on the device itself is short-retention (a
+// capped ring buffer, hours to days -- see sampleCapBytes()), so on its own it can't answer "what did
+// consumption look like at 3pm three weeks ago" -- but the repeated timestamped snapshots let that be
+// reconstructed OFFLINE later (concatenate + dedupe by epoch in Excel/pandas/etc.), as far back as the
+// snapshots go, provided runs stay frequent enough relative to the raw log's own retention window
+// (otherwise gaps appear between snapshots that can't be filled back in) -- or provided g_ftpWindow is set
+// to a bounded preset with non-overlapping runs, in which case each file is already a distinct, non-
+// duplicate slice and naive concatenation alone is enough (see ftpWindowBounds()). Runs on g_ftpIntervalMin
+// and/or a fixed g_ftpHour:g_ftpMinute time of day (see g_ftpUseInterval/g_ftpUseTime above) -- either,
+// both, whichever the user wants. Plain FTP only (RFC 959, passive mode) -- deliberately no FTPS/TLS, same
+// reasoning as the web UI staying HTTP (see ../02-hardware): a comparable TLS stack just for this wasn't
+// worth it on this device. Credentials and file contents go out in the clear -- LAN use only, the Settings
+// page says so next to the fields. Persisted under NVS "obigw" ("ftpen"/"ftph"/"ftpp"/"ftpu"/"ftppw"/
+// "ftppath"/"ftpivl"/"ftpuseiv"/"ftpusetm"/"ftphh"/"ftpmm"/"ftpwin"); configured via /api/ftp.
 static bool     g_ftpEnabled = false;
 static char     g_ftpHost[64] = "";
 static uint16_t g_ftpPort = 21;
@@ -184,6 +187,23 @@ static uint32_t g_ftpIntervalMin = 1440;  // minutes between uploads, default 24
 static const char *FTP_DAILY_DIR = "daily", *FTP_RAW_DIR = "raw";   // subfolders under g_ftpPath (filenames
                                                                      // are ALSO tagged _daily_/_raw_, in case
                                                                      // the folders ever get flattened later)
+// Two INDEPENDENT trigger mechanisms, either or both can be on at once (each fires its own run; whichever
+// fires first resets both counters, so the other doesn't immediately double-fire right after) -- interval
+// (existing, "every N minutes since the last run") and a fixed time-of-day ("every day at HH:MM", needs a
+// synced clock). Off default preserves the exact prior behavior for anyone who already had FTP configured.
+static bool     g_ftpUseInterval = true;
+static bool     g_ftpUseTime     = false;
+static uint8_t  g_ftpHour   = 2;    // 0-23, local time -- default 02:00, a quiet hour for most households
+static uint8_t  g_ftpMinute = 0;    // 0-59
+static uint32_t g_ftpTimeFiredDay = 0xFFFFFFFF;   // epoch/86400 of the last day the time trigger fired -- so
+                                                   // it fires exactly once per matching minute, not every
+                                                   // loop iteration for the whole 60s the clock matches HH:MM
+// Which slice of the on-device history each export contains -- see ftpWindowBounds()/buildDailyCsv()/
+// buildRawCsv(). 0 = everything currently stored (the original, unfiltered behavior -- default, so enabling
+// FTP alone doesn't silently start dropping data someone might have been relying on getting in full).
+static uint8_t  g_ftpWindow = 0;   // 0=all 1=24h 2=prevday 3=7d 4=30d
+static uint32_t g_ftpWinStart = 0, g_ftpWinEnd = 0xFFFFFFFF;   // set once per run by ftpUploadTask(), just
+                                                                // before building any CSV -- see ftpWindowBounds()
 static uint32_t g_ftpLastRunMs = 0xFFFFFFFF;   // same 0xFFFFFFFF "not seeded" convention as g_ghLastCheckMs
 static volatile bool g_ftpBusy = false;        // an upload is in flight -- don't start a second one
 static uint8_t  g_ftpLastResult = 0;           // 0 never run, 1 last run ok, 2 last run failed (Settings page)
@@ -373,7 +393,7 @@ static String statusJson() {
          ",\"state\":" + String(g_ghState) + ",\"last_err\":" + jstr(g_ghLastError.c_str()) + "}";
   }
   { uint32_t nextS = 0;   // seconds until the next periodic FTP upload -- 0 when off/mid-upload, same shape as gh_auto
-    if (g_ftpEnabled) {
+    if (g_ftpEnabled && g_ftpUseInterval) {
       uint64_t intervalMs = (uint64_t)g_ftpIntervalMin * 60000ULL;
       if (g_ftpLastRunMs == 0xFFFFFFFF) nextS = (uint32_t)(intervalMs / 1000);
       else { uint32_t elapsed = millis() - g_ftpLastRunMs;
@@ -382,6 +402,9 @@ static String statusJson() {
     j += ",\"ftp\":{\"enabled\":" + String(g_ftpEnabled ? "true" : "false") + ",\"host\":" + jstr(g_ftpHost) +
          ",\"port\":" + String(g_ftpPort) + ",\"user\":" + jstr(g_ftpUser) + ",\"path\":" + jstr(g_ftpPath) +
          ",\"interval_min\":" + String(g_ftpIntervalMin) + ",\"next_check_s\":" + String(nextS) +
+         ",\"use_interval\":" + String(g_ftpUseInterval ? "true" : "false") +
+         ",\"use_time\":" + String(g_ftpUseTime ? "true" : "false") +
+         ",\"hh\":" + String(g_ftpHour) + ",\"mm\":" + String(g_ftpMinute) + ",\"window\":" + String(g_ftpWindow) +
          ",\"busy\":" + String(g_ftpBusy ? "true" : "false") + ",\"last_result\":" + String(g_ftpLastResult) +
          ",\"last_run_s\":" + String(g_ftpLastRunS) + ",\"last_err\":" + jstr(g_ftpLastError.c_str()) +
          "}";
@@ -1751,6 +1774,12 @@ static void handleFtpCfg() {
     if (m < 1) m = 1; else if (m > 43200) m = 43200;   // 1 min .. 30 days, same millis()-wraparound reasoning as g_ghIntervalH
     g_ftpIntervalMin = (uint32_t)m;
   }
+  if (server.hasArg("use_interval")) g_ftpUseInterval = server.arg("use_interval") == "1" || server.arg("use_interval") == "true";
+  if (server.hasArg("use_time"))     g_ftpUseTime     = server.arg("use_time") == "1" || server.arg("use_time") == "true";
+  if (server.hasArg("hh")) { int h = server.arg("hh").toInt(); g_ftpHour   = (uint8_t)constrain(h, 0, 23); }
+  if (server.hasArg("mm")) { int m = server.arg("mm").toInt(); g_ftpMinute = (uint8_t)constrain(m, 0, 59); }
+  if (server.hasArg("window")) { int w = server.arg("window").toInt(); g_ftpWindow = (uint8_t)constrain(w, 0, 4); }
+  g_ftpTimeFiredDay = 0xFFFFFFFF;   // a newly-saved time may match "right now" -- let it fire today, not tomorrow
   g_ftpLastRunMs = millis();   // restart the countdown from now, same reasoning as g_ghLastCheckMs above
   prefs.begin("obigw", false);
   prefs.putBool("ftpen", g_ftpEnabled);
@@ -1760,6 +1789,11 @@ static void handleFtpCfg() {
   prefs.putString("ftppw", g_ftpPass);
   prefs.putString("ftppath", g_ftpPath);
   prefs.putUInt("ftpivl", g_ftpIntervalMin);
+  prefs.putBool("ftpuseiv", g_ftpUseInterval);
+  prefs.putBool("ftpusetm", g_ftpUseTime);
+  prefs.putUChar("ftphh", g_ftpHour);
+  prefs.putUChar("ftpmm", g_ftpMinute);
+  prefs.putUChar("ftpwin", g_ftpWindow);
   prefs.end();
   server.send(200, "application/json", "{\"ok\":true}");
 }
@@ -1922,9 +1956,25 @@ button:disabled{opacity:.5;cursor:default}
    <div><label id=lftppass>Passwort</label><input id=ftppass type=password placeholder=••••></div>
   </div>
   <label id=lftppath>Zielordner (leer = Login-Verzeichnis)</label><input id=ftppath placeholder="backups/obi">
-  <label id=lftpivl>Upload-Intervall</label>
-  <div style="display:flex;gap:6px"><input id=ftpivln type=number min=1 value=24 style="flex:1">
+  <label style="display:flex;align-items:center;gap:8px;margin-top:14px;cursor:pointer">
+   <input type=checkbox id=ftpuseiv style="width:auto;margin:0"><span id=lftpuseiv>Nach Intervall hochladen</span></label>
+  <div style="display:flex;gap:6px;margin-top:6px"><input id=ftpivln type=number min=1 value=24 style="flex:1">
    <select id=ftpivlu style="flex:1"><option value=1 id=oftpM>Minuten</option><option value=60 selected id=oftpH>Stunden</option></select></div>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:14px;cursor:pointer">
+   <input type=checkbox id=ftpusetm style="width:auto;margin:0"><span id=lftpusetm>Zu fester Uhrzeit hochladen</span></label>
+  <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+   <input id=ftphh type=number min=0 max=23 value=2 style="flex:1">
+   <span style="color:var(--dim)">:</span>
+   <input id=ftpmm type=number min=0 max=59 value=0 style="flex:1">
+  </div>
+  <label id=lftpwin style="margin-top:14px;display:block">Datenfenster (Zeitraum je Export)</label>
+  <select id=ftpwin>
+   <option value=0 id=owinall>Alle gespeicherten Daten</option>
+   <option value=1 id=owin24h>Letzte 24 Stunden</option>
+   <option value=2 id=owinprevday>Voriger Kalendertag</option>
+   <option value=3 id=owin7d>Letzte 7 Tage</option>
+   <option value=4 id=owin30d>Letzte 30 Tage</option>
+  </select>
   <p class=cap id=ftpwarn style="color:var(--red)"></p>
   <div class=msg id=ftpnote style="margin:8px 0 0"></div>
   <div class=row><button onclick=saveFtp()><span id=bftp>Speichern</span></button>
@@ -2016,7 +2066,11 @@ $('bnumfmt').textContent=t('Speichern','Save');
 $('hftp').textContent=t('FTP-Backup der Historie','FTP history backup');$('lftpen').textContent=t('Aktiviert','Enabled');
 $('lftphost').textContent=t('Server','Server');$('lftpuser').textContent=t('Benutzer','User');$('lftppass').textContent=t('Passwort','Password');
 $('lftppath').textContent=t('Zielordner (leer = Login-Verzeichnis)','Target folder (blank = login directory)');
-$('lftpivl').textContent=t('Upload-Intervall','Upload interval');$('oftpM').textContent=t('Minuten','minutes');$('oftpH').textContent=t('Stunden','hours');
+$('lftpuseiv').textContent=t('Nach Intervall hochladen','Upload on an interval');$('oftpM').textContent=t('Minuten','minutes');$('oftpH').textContent=t('Stunden','hours');
+$('lftpusetm').textContent=t('Zu fester Uhrzeit hochladen','Upload at a fixed time');
+$('lftpwin').textContent=t('Datenfenster (Zeitraum je Export)','Data window (time span per export)');
+$('owinall').textContent=t('Alle gespeicherten Daten','All stored data');$('owin24h').textContent=t('Letzte 24 Stunden','Last 24 hours');
+$('owinprevday').textContent=t('Voriger Kalendertag','Previous calendar day');$('owin7d').textContent=t('Letzte 7 Tage','Last 7 days');$('owin30d').textContent=t('Letzte 30 Tage','Last 30 days');
 $('ftpwarn').textContent=t('⚠️ Reines FTP überträgt Zugangsdaten und Dateien unverschlüsselt — nur im vertrauenswürdigen lokalen Netzwerk verwenden, niemals über das offene Internet.','⚠️ Plain FTP transmits credentials and files unencrypted — only use this on a trusted local network, never across the open internet.');
 $('bftp').textContent=t('Speichern','Save');$('bftprun').textContent=t('Jetzt hochladen','Upload now');
 $('bftplog').textContent=t('Log anzeigen','Show log');
@@ -2060,13 +2114,16 @@ async function load(){try{
   if(s.ftp&&!ftpc){ftpc=true;$('ftpen').checked=!!s.ftp.enabled;$('ftphost').value=s.ftp.host||'';$('ftpport').value=s.ftp.port||21;
    $('ftpuser').value=s.ftp.user||'';$('ftppath').value=s.ftp.path||'';
    let m=s.ftp.interval_min||1440;
-   if(m>=60&&m%60===0){$('ftpivlu').value=60;$('ftpivln').value=m/60;}else{$('ftpivlu').value=1;$('ftpivln').value=m;}}
+   if(m>=60&&m%60===0){$('ftpivlu').value=60;$('ftpivln').value=m/60;}else{$('ftpivlu').value=1;$('ftpivln').value=m;}
+   $('ftpuseiv').checked=s.ftp.use_interval!==false;$('ftpusetm').checked=!!s.ftp.use_time;
+   $('ftphh').value=s.ftp.hh??2;$('ftpmm').value=s.ftp.mm??0;$('ftpwin').value=s.ftp.window||0;}
   if(s.ftp){const f=s.ftp;
    const lastTxt=f.last_run_s?(f.last_result===1?t('letzter Upload ok','last upload ok'):t('letzter Upload fehlgeschlagen','last upload failed')):t('noch nie ausgeführt','never run yet');
    const errTxt=(f.last_result===2&&f.last_err)?' — '+f.last_err:'';
+   const schedTxt=f.use_interval&&f.use_time?t(' · Intervall + feste Uhrzeit',' · interval + fixed time'):f.use_time?t(' · feste Uhrzeit','· fixed time'):'';
    $('ftpstat').innerHTML=!f.enabled?`<span class="dot idle"></span>${t('deaktiviert','disabled')}`
     :f.busy?`<span class="dot on"></span>${t('Upload läuft…','uploading…')}`
-    :`<span class="${f.last_result===2?'dot off':'dot on'}"></span>${lastTxt}${esc(errTxt)}`+(f.enabled?' · '+t('nächster Upload in ','next upload in ')+fmtDur(f.next_check_s):'');}
+    :`<span class="${f.last_result===2?'dot off':'dot on'}"></span>${lastTxt}${esc(errTxt)}`+(f.enabled&&f.use_interval?' · '+t('nächster Upload in ','next upload in ')+fmtDur(f.next_check_s):'')+esc(schedTxt);}
   $('tzstat').innerHTML=(s.time_valid?'<span class="dot on"></span>':'<span class="dot idle"></span>')+`${t('Gerätezeit','Device time')}: <code>${s.time||'?'}</code>`+(s.time_valid?'':` · ${t('noch nicht per NTP synchronisiert','not NTP-synced yet')}`);
   if(!tzc){tzc=true;$('tztext').value=s.tz||'';$('ntptext').value=s.ntp||'';$('tzsel').value=s.tz||'';if($('tzsel').value!==(s.tz||''))$('tzsel').value='';}
 }catch(e){}}
@@ -2082,6 +2139,8 @@ async function saveFtp(){const b=new URLSearchParams();b.set('host',$('ftphost')
  if($('ftppass').value)b.set('pass',$('ftppass').value);
  const mult=parseInt($('ftpivlu').value)||60,n=Math.max(1,parseInt($('ftpivln').value)||24);
  b.set('interval_min',n*mult);
+ b.set('use_interval',$('ftpuseiv').checked?'1':'0');b.set('use_time',$('ftpusetm').checked?'1':'0');
+ b.set('hh',$('ftphh').value||0);b.set('mm',$('ftpmm').value||0);b.set('window',$('ftpwin').value||0);
  const m=$('ftpmsg');m.textContent='…';
  try{const r=await(await fetch('/api/ftp',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b})).json();if(!r.ok)throw Error();
   $('ftppass').value='';m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);ftpc=false;load();}
@@ -2937,6 +2996,24 @@ static uint32_t localDayStart(time_t ep) {
   return (uint32_t)mktime(&lt);
 }
 
+// The [start,end) epoch bounds for the FTP export's currently-selected data window (g_ftpWindow) -- used by
+// buildDailyCsv()/buildRawCsv() to filter rows, so a bounded preset produces a distinct, non-overlapping
+// slice each run instead of always dumping everything currently on flash. start=0/end=UINT32_MAX means "no
+// filtering" (preset 0, or the clock isn't synced yet and a wall-clock window can't be computed at all --
+// safer to export everything than to silently apply a wrong window against a bad clock).
+static void ftpWindowBounds(uint32_t &startEp, uint32_t &endEp) {
+  startEp = 0; endEp = 0xFFFFFFFF;
+  if (!timeValid()) return;
+  uint32_t now = (uint32_t)time(nullptr);
+  switch (g_ftpWindow) {
+    case 1: startEp = now - 24UL * 3600; break;                                   // last 24h (rolling)
+    case 2: endEp = localDayStart((time_t)now); startEp = endEp - 24UL * 3600; break;  // previous calendar day
+    case 3: startEp = now - 7UL * 24 * 3600; break;                               // last 7 days (rolling)
+    case 4: startEp = now - 30UL * 24 * 3600; break;                              // last 30 days (rolling)
+    default: break;                                                               // 0 = everything stored
+  }
+}
+
 // Recover the newest flash-backed sample after a reboot. If the gateway was down across midnight this
 // is the best durable closing value for the previous day; during normal operation the RAM cache is newer.
 static bool lastSample(const String &id, uint32_t &ep, uint32_t &imp, uint32_t &exp) {
@@ -3185,6 +3262,7 @@ static String buildDailyCsv(const String &id) {
     int fc = line.indexOf(',');
     unsigned long ep = strtoul((fc < 0 ? line : line.substring(0, fc)).c_str(), nullptr, 10);
     if (ep <= 1735689600UL || ep >= 4102444800UL) continue;   // same epoch sanity bound as sendCsvRows()
+    if (ep < g_ftpWinStart || ep >= g_ftpWinEnd) continue;    // outside the FTP export's selected window (see ftpWindowBounds())
     out += isoLocal((time_t)ep); out += ","; out += line; out += "\n";
   }
   return out;
@@ -3206,6 +3284,7 @@ static String buildRawCsv(const String &id) {
     int fc = line.indexOf(',');
     unsigned long ep = strtoul((fc < 0 ? line : line.substring(0, fc)).c_str(), nullptr, 10);
     if (ep <= 1735689600UL || ep >= 4102444800UL) continue;   // same epoch sanity bound as sendCsvRows()
+    if (ep < g_ftpWinStart || ep >= g_ftpWinEnd) continue;    // outside the FTP export's selected window (see ftpWindowBounds())
     out += isoLocal((time_t)ep); out += ","; out += line; out += "\n";
   }
   return out;
@@ -3423,6 +3502,8 @@ static bool ftpUploadKind(WiFiClient &ctrl, const char *dirName, char idPrefix, 
 static void ftpUploadTask(void *) {
   bool ok = false;
   g_ftpLastError = "";
+  ftpWindowBounds(g_ftpWinStart, g_ftpWinEnd);   // fixed for this whole run -- both buildDailyCsv() and
+                                                  // buildRawCsv() read it back for every reader below
   ftpLog("connecting to " + String(g_ftpHost) + ":" + String(g_ftpPort) + " ...");
   WiFiClient ctrl;
   if (ctrl.connect(g_ftpHost, g_ftpPort, 10000)) {
@@ -4700,6 +4781,11 @@ static void webTask(void *) {
   prefs.getString("ftppw", "").toCharArray(g_ftpPass, sizeof g_ftpPass);
   prefs.getString("ftppath", "").toCharArray(g_ftpPath, sizeof g_ftpPath);
   g_ftpIntervalMin = prefs.getUInt("ftpivl", 1440);
+  g_ftpUseInterval = prefs.getBool("ftpuseiv", true);
+  g_ftpUseTime     = prefs.getBool("ftpusetm", false);
+  g_ftpHour   = prefs.getUChar("ftphh", 2);
+  g_ftpMinute = prefs.getUChar("ftpmm", 0);
+  g_ftpWindow = prefs.getUChar("ftpwin", 0);
   { String z = prefs.getString("tz", "CET-1CEST,M3.5.0,M10.5.0/3"); z.toCharArray(g_tz, sizeof g_tz); }
   { String n = prefs.getString("ntp", "pool.ntp.org"); n.toCharArray(g_ntp, sizeof g_ntp); }
   g_nightMode = prefs.getBool("nightmode", false);
@@ -4807,7 +4893,20 @@ static void webTask(void *) {
                                                                // start while a GitHub OTA is in flight (same reasoning)
       uint32_t nowMs = millis();                                // full interval after boot, not immediately -- see g_ghAuto above
       if (g_ftpLastRunMs == 0xFFFFFFFF) g_ftpLastRunMs = nowMs;
-      if (nowMs - g_ftpLastRunMs >= g_ftpIntervalMin * 60000UL) {
+      // Two independent triggers, either or both enabled -- whichever fires resets BOTH counters below, so
+      // the other mechanism doesn't also fire again moments later for the same reason a human just triggered
+      // a run (e.g. interval elapsing right as the fixed time also hits).
+      bool fire = g_ftpUseInterval && (nowMs - g_ftpLastRunMs >= g_ftpIntervalMin * 60000UL);
+      if (!fire && g_ftpUseTime && timeValid()) {
+        time_t now = time(nullptr);
+        struct tm lt; localtime_r(&now, &lt);
+        uint32_t today = (uint32_t)(now / 86400);   // just needs to change once/day, not calendar-accurate
+        if (lt.tm_hour == g_ftpHour && lt.tm_min == g_ftpMinute && today != g_ftpTimeFiredDay) {
+          fire = true;
+          g_ftpTimeFiredDay = today;   // don't fire again for the rest of this same minute (or day)
+        }
+      }
+      if (fire) {
         g_ftpLastRunMs = nowMs;
         g_ftpBusy = true;
         if (xTaskCreate(ftpUploadTask, "ftpup", 8192, nullptr, 3, nullptr) != pdPASS) g_ftpBusy = false;
