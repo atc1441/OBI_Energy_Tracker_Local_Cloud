@@ -214,3 +214,9 @@ firmware `1.0.1`, softver `32`/"v32") do the same ECDH → TEA-ECB as `1.2.x`; o
 gateway). The single-byte XOR is only an outer frame obfuscation. The plaintext **UART config channel can read/write
 the TEA key and WiFi credentials**. Details and impact are in
 [03-reverse-engineering](03-reverse-engineering/). These notes exist so owners can secure and self-host their units.
+
+## License
+This repo's own code, documentation, and tooling are licensed under the **[PolyForm Noncommercial 1.0.0](LICENSE)**
+license — free to use, modify, and share for any noncommercial purpose; commercial use or resale is not
+permitted. Vendor firmware/binaries referenced but not distributed here remain their rights holders' property
+— see [DISCLAIMER.md](DISCLAIMER.md).

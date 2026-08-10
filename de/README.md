@@ -101,3 +101,10 @@ frühere Behauptung „alte Reader sind nur 1‑Byte‑XOR" war **falsch**, nach
 korrigiert). Das 1‑Byte‑XOR ist nur äußere Frame‑Obfuskation. Der Klartext‑**UART‑Config‑Kanal kann TEA‑Key und WLAN‑Daten lesen/schreiben**.
 Details: [03 · Reversing](03-reverse-engineering.md). Diese Hinweise dienen dazu, eigene Geräte
 abzusichern/selbst zu hosten.
+
+## Lizenz
+Der eigene Code, die Dokumentation und die Tools in diesem Repo stehen unter der Lizenz
+**[PolyForm Noncommercial 1.0.0](../LICENSE)** — frei nutzbar, veränderbar und teilbar für jeden
+nicht-kommerziellen Zweck; kommerzielle Nutzung oder Weiterverkauf sind nicht gestattet. Vendor-Firmware/
+Binaries, die hier referenziert, aber nicht mitgeliefert werden, bleiben Eigentum der jeweiligen
+Rechteinhaber — siehe [DISCLAIMER.md](../DISCLAIMER.md).
