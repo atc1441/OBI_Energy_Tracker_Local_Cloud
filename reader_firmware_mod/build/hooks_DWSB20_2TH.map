@@ -30,6 +30,7 @@ Linker script and memory map
  .text.entry_sxth16_fix
                 0x0000ee12        0x8 build/hooks_DWSB20_2TH-entry.o
                 0x0000ee12                entry_sxth16_fix
+ *(.text.entry_sxtb8_fix)
  *(.text.entry_power_correct)
  .text.entry_power_correct
                 0x0000ee1a        0xc build/hooks_DWSB20_2TH-entry.o

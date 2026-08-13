@@ -53,6 +53,54 @@ entry_sxth16_fix:
     str  r1, [r4, #4]       // redo the store removed from the original flow
     bx   lr                 // -> sub_C0A4 @ 0xC114 (str r0,[r4]; b loc_C26C)
 
+#ifdef FIX_INT8_SIGN
+// --- entry_sxtb8_fix -----------------------------------------------------
+// The 8-bit sibling of entry_sxth16_fix above, same defect, same family of
+// SML TL bytes: sub_C0A4's TL=0x52 (Integer8) case at 0xC0EE reads the
+// value byte with a plain zero-extending `ldrb r1,[r1,#1]` and then stores
+// R0 -- which the dispatch preamble set to 0 at 0xC0C0 and nothing touches
+// in between -- as the high dword. So the sign is lost twice over: the
+// low dword is the byte's unsigned value and the high dword is hardcoded
+// non-negative. The adjacent TL=0x62 case at 0xC0F8 reads the exact same
+// byte offset but does it correctly (`movs r0,#1 ; ldrsb r0,[r1,r0] ;
+// asrs r1,r0,#0x1f`) -- i.e. the vendor swapped the signed/unsigned
+// handling between the 0x5x and 0x6x TL families for the narrow widths,
+// exactly as they did for Int16 (0x53 missing the `sxth` that 0x63 has).
+//
+// Symptom: a meter that encodes small feed-in power in the shortest SML
+// width that fits sends -1 W as the single byte 0xFF, and this reader
+// reports +255 W; -128 W (0x80) reports as +128 W. Anything beyond -128
+// no longer fits Integer8, moves up to Integer16, which entry_sxth16_fix
+// already handles -- which is why only the smallest export values look
+// wrong. Reported on an EMH eHZ-P (issue #68). At the disassembly level
+// this looks like a general defect in the vendor's SML decoder (same
+// family as the Int16 fix, which IS unconditional in every variant), but
+// unlike that one it has only ever been reported/confirmed on this one
+// meter model -- so, like the DWSB20.2TH negative-power fix below, it
+// ships as its own dedicated variant (FIX_INT8_SIGN, `./build.sh
+// EMHeHZP` + `splice_EMHeHZP.py`) rather than folded into the shared
+// build, until/unless it's seen on other meter types too.
+//
+// Replaces the 4-byte `str r1,[r4] ; str r0,[r4,#4]` at 0xC0F2. Like
+// entry_sxth16_fix this is a straight-line mid-function patch, not a
+// jump-table slot, so it redoes both stores it removes and returns via
+// `bx lr` to 0xC0F6 (the original, unmodified `b loc_C26C`). No internal
+// `bl`, so LR (== 0xC0F6) survives. R0 is free to clobber: loc_C26C
+// immediately recomputes it (`adds r0,r5,r2`) and never reads the
+// incoming value -- the correct TL=0x62 case likewise falls into
+// loc_C26C with R0 holding the decoded value, not 0. Confirmed via a
+// full-image branch scan that nothing jumps into the 4 replaced bytes.
+.section .text.entry_sxtb8_fix, "ax", %progbits
+.global entry_sxtb8_fix
+.thumb_func
+entry_sxtb8_fix:
+    sxtb r1, r1            // the missing sign-extension: bit7 -> 31
+    str  r1, [r4, #0]       // redo the low-dword store removed from the flow
+    asrs r0, r1, #0x1f      // real sign for the high dword (was hardcoded 0)
+    str  r0, [r4, #4]       // redo the high-dword store removed from the flow
+    bx   lr                 // -> sub_C0A4 @ 0xC0F6 (b loc_C26C)
+#endif
+
 #ifdef FIX_NEGATIVE_POWER
 // --- entry_power_correct -------------------------------------------------
 // Replaces the 4-byte `BL sub_4700` at 0x75EE inside sub_7434

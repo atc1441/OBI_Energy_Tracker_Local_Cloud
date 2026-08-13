@@ -17,6 +17,7 @@ SECTIONS
   .text : {
     KEEP(*(.text.entry_int24))
     KEEP(*(.text.entry_sxth16_fix))
+    KEEP(*(.text.entry_sxtb8_fix))
     KEEP(*(.text.entry_power_correct))
     KEEP(*(.text.entry_power_correct2))
     *(.text*)

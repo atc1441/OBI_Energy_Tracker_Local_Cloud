@@ -10,7 +10,7 @@ result into the firmware.
 ## Folder layout
 
 - `reader_stock_v57.bin` — unmodified original firmware (the source
-  `splice.py`/`splice_DWSB20_2TH.py` patch).
+  `splice.py`/`splice_DWSB20_2TH.py`/`splice_EMHeHZP.py` patch).
 - `reader_modded_89mock_v90.bin` — finished result: just the int24 fix
   (SML TL=0x54), IDA-verified. This is the file to flash for meters that
   only needed the int24 fix (power showing "n/a").
@@ -22,46 +22,68 @@ result into the firmware.
   Live-verified on real hardware across sustained periods in both
   directions and across real import↔export transitions (see "Live
   verification" below).
-- `reader_modded_89mock_v90_sf9.bin` / `reader_modded_89mock_v90_DWSB20_2TH_sf9.bin` — same two builds
-  above, plus the LoRa SF7→SF9 patch (see "LoRa SF9 option" below). **Opt-in, unsupported, shortens reader
+- `reader_modded_89mock_v90_EMHeHZP.bin` — the EMH eHZ-P Integer8
+  sign-extension fix (see below), built by
+  `./build.sh EMHeHZP && python splice_EMHeHZP.py`. Flash this instead of
+  the plain variant for an EMH eHZ-P (or any meter) whose small feed-in
+  power values (roughly -1 W to -128 W) read as large bogus positive
+  values (+255 W down to +128 W) instead of negative. Byte-level verified
+  only (see below) — not yet live-tested against a real Integer8-encoding
+  meter.
+- `reader_modded_89mock_v90_sf9.bin` / `reader_modded_89mock_v90_DWSB20_2TH_sf9.bin` /
+  `reader_modded_89mock_v90_EMHeHZP_sf9.bin` — the three builds above, each plus the
+  LoRa SF7→SF9 patch (see "LoRa SF9 option" below). **Opt-in, unsupported, shortens reader
   battery life** — only flash these if you specifically need the extra range and understand the tradeoff.
 
-  **Naming/versioning is deliberate, and identical across both
-  release files**: each firmware's OWN reported softver is 89, but the
-  RELEASE is named/tagged "v90" — a permanent "mock version" mismatch, not
-  a leftover dev artifact. The gateway's web UI parses the OTA target
-  version to advertise from the uploaded filename (`/v(\d+)/`, first
-  match — here "v90"), and only treats an advertised version as a no-op
-  if it equals the reader's own currently-reported softver (or 0). Since
-  90 can never equal any of these files' own reported 89, any release
-  file can be re-uploaded/reflashed any number of times — e.g. to force a
-  reader back onto a known-good build, or to switch a reader from one
-  variant to another — without ever hitting the "already this version,
-  skipping" OTA no-op a same-numbered file would. If you build a further
-  local iteration of any variant with `splice.py`/`splice_DWSB20_2TH.py`,
-  keep both numbers matched to what's actually being tested (see the
-  comment above each script's softver patch) — the 89/"v90" mismatch is
-  only for the pinned release builds.
+  **Naming/versioning is deliberate, and identical across all
+  release files, including future ones**: each firmware's OWN reported
+  softver is 89, but the RELEASE is named/tagged "v90" — a permanent
+  "mock version" mismatch, not a leftover dev artifact, and NOT something
+  that bumps when a new per-meter variant is added. The gateway's web UI
+  parses the OTA target version to advertise from the uploaded filename
+  (`/v(\d+)/`, first match — here "v90"), and only treats an advertised
+  version as a no-op if it equals the reader's own currently-reported
+  softver (or 0). Since 90 can never equal any of these files' own
+  reported 89, any release file can be re-uploaded/reflashed any number
+  of times — e.g. to force a reader back onto a known-good build, or to
+  switch a reader from one variant to another — without ever hitting the
+  "already this version, skipping" OTA no-op a same-numbered file would.
+  Per-variant fixes are told apart by which named `.bin` you flash, not
+  by a version number — this pair only needs to change if the SHARED
+  hooks (`entry_int24`, `entry_sxth16_fix`) themselves change, not when a
+  new meter-specific variant is added. If you build a further local
+  iteration of any variant with `splice.py`/`splice_DWSB20_2TH.py`/
+  `splice_EMHeHZP.py`, keep both numbers matched to what's actually being
+  tested (see the comment above each script's softver patch) — the
+  89/"v90" mismatch is only for the pinned release builds.
 - `hooks.c`, `entry.S`, `link.ld`, `vendor.h`, `build.sh`, `splice.py`,
-  `splice_DWSB20_2TH.py` — shared source and
-  build scripts. `hooks.c` has the DWSB20.2TH fix guarded behind
-  `#ifdef FIX_NEGATIVE_POWER`, which `./build.sh DWSB20_2TH` defines;
-  `./build.sh` (no argument) builds the plain int24 + SML-Int16-sign-fix
-  variant that `splice.py` starts from. All variants read the SAME
-  `hooks.c`/`entry.S`, so a change to shared logic (int24 decode, the
-  Int16 sign fix) only needs to be made once and propagates to every
-  variant on the next build. These are the durable, repeatable release
-  process going forward — run `./build.sh && python splice.py`, and
-  `./build.sh DWSB20_2TH && python splice_DWSB20_2TH.py` whenever
-  `hooks.c`/`entry.S` changes.
+  `splice_DWSB20_2TH.py`, `splice_EMHeHZP.py` — shared source and
+  build scripts. `hooks.c`/`entry.S` have the DWSB20.2TH fix guarded
+  behind `#ifdef FIX_NEGATIVE_POWER` (defined by `./build.sh DWSB20_2TH`)
+  and the EMH eHZ-P fix guarded behind `#ifdef FIX_INT8_SIGN` (defined by
+  `./build.sh EMHeHZP`); `./build.sh` (no argument) builds the plain
+  int24 + SML-Int16-sign-fix variant that `splice.py` starts from. All
+  variants read the SAME `hooks.c`/`entry.S`, so a change to shared logic
+  (int24 decode, the Int16 sign fix) only needs to be made once and
+  propagates to every variant on the next build. These are the durable,
+  repeatable release process going forward — run `./build.sh && python
+  splice.py`, `./build.sh DWSB20_2TH && python splice_DWSB20_2TH.py`, and
+  `./build.sh EMHeHZP && python splice_EMHeHZP.py` whenever
+  `hooks.c`/`entry.S` changes. A genuinely per-meter fix (confirmed/
+  reported on only one meter model, like the two above) gets its own
+  `#ifdef` and its own `splice_<Variant>.py` instead of joining the
+  unconditional/shared hooks — see "Adding a new hook" below.
 - `fix_negative_power.py` — standalone patch script for an early,
   abandoned approach (SML Int8/Int16 dispatch-table retargeting). Kept
   only for the historical record — confirmed NOT the bug the DWSB20.2TH
-  actually hits.
-- `build/` — ONLY compiled intermediate files: `hooks.*` (plain variant)
-  and `hooks_DWSB20_2TH.*` (DWSB20.2TH variant), kept side by side so
-  building one doesn't clobber the other. `build.sh` creates the folder
-  itself if needed.
+  actually hits (its *analysis* of the Int8/Int16 cases was later
+  confirmed correct, just not for that meter — see the Int16 and Int8
+  sign-extension fixes below; the retargeting *approach* itself stays
+  abandoned).
+- `build/` — ONLY compiled intermediate files: `hooks.*` (plain variant),
+  `hooks_DWSB20_2TH.*` (DWSB20.2TH variant), and `hooks_EMHeHZP.*` (EMH
+  eHZ-P variant), kept side by side so building one doesn't clobber
+  another. `build.sh` creates the folder itself if needed.
 
 ## Building blocks
 
@@ -81,36 +103,59 @@ result into the firmware.
                     (raw machine code) and `hooks.map`/`hooks.sym` (symbol
                     addresses for splice.py). Pass `DWSB20_2TH` as the first
                     argument to additionally build the DWSB20.2TH fix
-                    (`-DFIX_NEGATIVE_POWER`) into `hooks_DWSB20_2TH.*` instead.
-- `splice.py` / `splice_DWSB20_2TH.py` — append the matching `hooks*.bin` to
-                    the firmware image and patch the call sites (BL
-                    encoding computed programmatically) to jump into the
-                    entry points from `entry.S`. Each also bumps the
-                    embedded softver bytes — **always to a fresh,
-                    never-before-used value** when iterating: the
+                    (`-DFIX_NEGATIVE_POWER`) into `hooks_DWSB20_2TH.*`, or
+                    `EMHeHZP` to build the EMH eHZ-P Int8 sign fix
+                    (`-DFIX_INT8_SIGN`) into `hooks_EMHeHZP.*`, instead.
+- `splice.py` / `splice_DWSB20_2TH.py` / `splice_EMHeHZP.py` — append the
+                    matching `hooks*.bin` to the firmware image and patch
+                    the call sites (BL encoding computed programmatically)
+                    to jump into the entry points from `entry.S`. Each
+                    also bumps the embedded softver bytes — **always to a
+                    fresh, never-before-used value** when iterating: the
                     reader-OTA path silently skips re-flashing when the
                     embedded/advertised softver matches one already tried,
                     which otherwise looks exactly like "the fix doesn't
-                    work" against genuinely stale code.
+                    work" against genuinely stale code. (This iterate-
+                    with-a-fresh-value advice is for local testing only —
+                    the pinned 89/"v90" release pair itself does not bump
+                    per variant, see above.)
 
 ## Adding a new hook
 
 1. Write the function in `hooks.c` (plain C, no libc other than what
    `vendor.h` declares). Freestanding `-nostdlib` build — no soft-division
-   runtime is linked, so avoid `%`/`/` on non-power-of-2 values.
+   runtime is linked, so avoid `%`/`/` on non-power-of-2 values. Pure-ALU
+   fixes small enough to write directly in asm (like the Int16/Int8 sign
+   fixes) can skip `hooks.c` entirely and live only in `entry.S`.
 2. If the call site doesn't use plain AAPCS (e.g. a vendor-specific
    register convention): add a small trampoline stub in `entry.S` that
    moves the registers into AAPCS arguments (R0,R1,R2,R3), `bl`s into the
    C function, then performs whatever return sequence the call site
-   expects (e.g. `pop {r3-r7,pc}`). Remember to add `-DFIX_NEGATIVE_POWER`
-   guards to entry.S sections too if the hook is DWSB20_2TH-only, and `KEEP()`
-   its section in `link.ld` so `--gc-sections` doesn't drop it.
-3. Add the call-site address + the entry.S symbol name to `HOOKS = [...]`
-   in `splice.py`/`splice_DWSB20_2TH.py`.
-4. `./build.sh [DWSB20_2TH] && python splice.py|splice_DWSB20_2TH.py` — produces
-   a new, patched `.bin`. Bump the softver patch byte to a fresh value
-   first (see above).
-5. **Always** cross-check with IDA (`idalib_open` + `disasm`) before
+   expects (e.g. `pop {r3-r7,pc}`). If the fix is general (confirmed or
+   clearly applicable across meter models, like the int24/Int16 decoder
+   fixes), leave it unconditional so it's built into every variant. If
+   it's only been reported/confirmed on ONE specific meter model (like
+   the DWSB20.2TH negative-power fix or the EMH eHZ-P Int8 fix), give it
+   its own `#ifdef FIX_<NAME>` guard in `entry.S` (and `hooks.c` if it
+   needs a C hook) instead of joining the unconditional hooks, and
+   `KEEP()` its section in `link.ld` so `--gc-sections` doesn't drop it —
+   this keeps a fix that's only confirmed for one meter out of every
+   other reader's build until it's seen elsewhere too.
+3. Add a variant to `build.sh` (`elif [ "$VARIANT" = "..." ]`) defining
+   your new `-DFIX_<NAME>` and its own `build/hooks_<Variant>.*` output,
+   if this is a new per-meter variant rather than a shared/unconditional
+   fix.
+4. Add the call-site address + the entry.S symbol name to `HOOKS = [...]`
+   in the matching `splice*.py` (a new `splice_<Variant>.py`, copied from
+   `splice_EMHeHZP.py` as the simplest template, for a new per-meter
+   variant; the plain `splice.py`, plus every other variant's script, for
+   a shared/unconditional fix).
+5. `./build.sh [<Variant>] && python splice.py|splice_DWSB20_2TH.py|splice_EMHeHZP.py|...`
+   — produces a new, patched `.bin`. Bump the softver patch byte to a
+   fresh value first while iterating locally (see above) — but keep the
+   pinned release build's softver/filename pair at 89/"v90" once you're
+   done, unless the SHARED hooks themselves changed.
+6. **Always** cross-check with IDA (`idalib_open` + `disasm`) before
    flashing — splicing itself only validates byte encoding, not semantics.
    Direct Python byte-reads of the flashed `.bin` are a reliable fallback
    when IDA's headless session gets flaky.
@@ -345,6 +390,77 @@ static analysis) using ground-truth signals that are themselves
 unaffected by the bug, over trying to intercept or override a value
 further downstream in a pipeline that isn't fully mapped.
 
+## EMH eHZ-P Integer8 sign-extension fix (`entry_sxtb8_fix`)
+
+Reported from the field on an **EMH eHZ-P** (issue #68): feed-in power
+between -1 W and -128 W came out as +255 W down to +128 W, while import
+was always correct and larger feed-in values (beyond -128 W) were already
+fine.
+
+The 8-bit sibling of the Integer16 sign-extension bug above — same
+function (`sub_C0A4`), same family of SML TL bytes. The `TL=0x52`
+(Integer8) case at `0xC0EE` reads the value byte with a plain
+zero-extending `ldrb r1,[r1,#1]`, stores that as the low dword, and
+stores **R0** as the high dword — where R0 was set to 0 by the dispatch
+preamble at `0xC0C0` and nothing touches it in between. So the sign is
+lost twice: the low dword is the byte's unsigned value and the high dword
+is hardcoded non-negative. The adjacent `TL=0x62` case at `0xC0F8` reads
+the exact same byte offset but does it correctly (`movs r0,#1 ;
+ldrsb r0,[r1,r0] ; asrs r1,r0,#0x1f`) — i.e. the vendor swapped the
+signed/unsigned handling between the `0x5x` and `0x6x` TL families for
+both narrow widths, exactly as it did for Integer16.
+
+SML encodes each value in the shortest width that fits, so a meter
+reporting small feed-in power sends -1 W as the single byte `0xFF` and
+this reader reports +255 W; -128 W (`0x80`) reports as +128 W. Anything
+past -128 W no longer fits Integer8, moves up to Integer16, and is
+already caught by `entry_sxth16_fix` above — which is exactly why only
+the *smallest* export values looked wrong.
+
+**Fix**: `entry_sxtb8_fix` (`entry.S`) replaces the 4-byte
+`str r1,[r4] ; str r0,[r4,#4]` at `0xC0F2` with a `BL` into a trampoline
+that does the missing `sxtb r1,r1` first, then redoes both stores with
+the real sign in the high dword, and returns via `bx lr` to `0xC0F6`
+(the original, unmodified `b loc_C26C`). Same shape as the Int16 fix: a
+straight-line mid-function patch, not a jump-table slot, so it must redo
+what it removes. Pure ALU, no C hook needed. Deliberately does **not**
+touch the mirror-image bug in the `0x62`/`0x63` unsigned cases (an
+unsigned byte ≥ 0x80 still reads negative) — same call as for the Int16
+fix: only the signed paths a meter's power field actually uses are
+corrected.
+
+**Its own variant, not folded into the shared build**: at the
+disassembly level this looks like the same class of general vendor
+decoder defect as the Int16 fix (which IS unconditional in every
+variant) — but it's so far only been reported on this one meter model,
+unlike the Int16 fix which is a documented, understood-to-be-general
+defect. So it ships as its own dedicated variant
+(`FIX_INT8_SIGN`/`./build.sh EMHeHZP`/`splice_EMHeHZP.py`,
+`reader_modded_89mock_v90_EMHeHZP.bin`), mirroring how the DWSB20.2TH
+negative-power fix above is isolated, rather than being bundled into the
+plain build's `hooks.bin` and forcing every reader onto it regardless of
+meter model. If it's later confirmed on other meter types too, it can
+move into the shared/unconditional hooks the same way `entry_int24` and
+`entry_sxth16_fix` already are.
+
+**Confidence**: high for the decode analysis (byte-exact disassembly of
+the buggy `0x52` case, the correct `0x62` sibling, and the `movs r0,#0`
+at `0xC0C0` that makes the high dword provably always 0) and for the
+patch-site safety (full-image branch scan confirms nothing jumps into
+the 4 replaced bytes; R0/R1 are dead entering `loc_C26C`, which
+immediately recomputes R0 as `adds r0,r5,r2` — the *correct* `0x62` case
+likewise falls in with R0 holding a decoded value rather than 0; LR is
+pure scratch mid-function in `sub_C0A4`, and the trampoline makes no call
+of its own). **Not** live-verified against a real Integer8-encoding
+meter — no EMH eHZ-P is available here, and the DWSB20.2TH test reader
+uses Integer24/Int32 for power, so it cannot exercise this path. Verified
+instead at the byte level: the spliced `EMHeHZP` image disassembles
+exactly as intended (`sxtb r1,r1 / str r1,[r4] / asrs r0,r1,#31 /
+str r0,[r4,#4] / bx lr` at the trampoline address), and the plain and
+DWSB20.2TH builds — which do NOT define `FIX_INT8_SIGN` — compile and
+splice to output byte-identical to their pre-existing release builds,
+confirming this fix is fully contained to its own variant.
+
 ## LoRa SF9 option (2026-07-21) — longer range, shorter reader battery life, opt-in and unsupported
 
 Trades upload rate/airtime for range by moving the LoRa link from the default SF7 to SF9. Both ends must
@@ -354,9 +470,10 @@ handshake, ongoing energy reporting, reader-OTA in both directions) on real hard
 `e1c6c5`) — an earlier attempt got stuck at the handshake and was reverted; the root cause turned out to be
 one of the three patches below (#2), not a fundamental limitation.
 
-**Four patches, all applied by `splice.py --sf9` / `splice_DWSB20_2TH.py --sf9` on top of the normal
-meter-fix hooks** — release builds now ship 4 files total (plain/DWSB20.2TH × SF7/SF9), byte-diff-verified
-clean against their SF7 base (only the intended bytes differ):
+**Four patches, all applied by `splice.py --sf9` / `splice_DWSB20_2TH.py --sf9` /
+`splice_EMHeHZP.py --sf9` on top of the normal meter-fix hooks** — release builds now ship 6 files total
+(plain/DWSB20.2TH/EMHeHZP × SF7/SF9), byte-diff-verified clean against their SF7 base (only the intended
+bytes differ):
 
 1. **`radio_init_config` TX/RX datarate immediates** — `radio_init_config` (starts `0xB69C`) calls the
    vendor SX126x HAL twice (`RadioSetTxConfig`/`RadioSetRxConfig`), each taking the spreading factor as a

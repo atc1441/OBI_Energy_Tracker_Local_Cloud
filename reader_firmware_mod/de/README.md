@@ -10,7 +10,7 @@ FPU) und splicen das Ergebnis in die Firmware.
 ## Ordnerlayout
 
 - `reader_stock_v57.bin` — unveränderte Original-Firmware (Quelle für
-  `splice.py`/`splice_DWSB20_2TH.py`).
+  `splice.py`/`splice_DWSB20_2TH.py`/`splice_EMHeHZP.py`).
 - `reader_modded_89mock_v90.bin` — fertiges Ergebnis: nur der int24-Fix
   (SML TL=0x54), IDA-verifiziert. Diese Datei flashen, wenn beim Zähler
   nur der int24-Fix nötig war (Leistung zeigte „n/a").
@@ -22,46 +22,74 @@ FPU) und splicen das Ergebnis in die Firmware.
   ankommt. Auf echter Hardware über längere Zeiträume in beide Richtungen
   sowie über echte Import↔Export-Wechsel live verifiziert (siehe
   „Live-Verifikation" unten).
+- `reader_modded_89mock_v90_EMHeHZP.bin` — der Integer8-Vorzeichenfix für
+  EMH eHZ-P (siehe unten), gebaut per
+  `./build.sh EMHeHZP && python splice_EMHeHZP.py`. Diese Datei statt der
+  reinen Variante flashen bei einem EMH eHZ-P (oder jedem anderen Zähler),
+  dessen kleine Einspeisewerte (ca. -1 W bis -128 W) als großer falscher
+  positiver Wert (+255 W bis +128 W) statt negativ ankommen. Nur auf
+  Byte-Ebene verifiziert (siehe unten) — noch nicht live an einem echten
+  Integer8-kodierenden Zähler getestet.
+- `reader_modded_89mock_v90_sf9.bin` / `reader_modded_89mock_v90_DWSB20_2TH_sf9.bin` /
+  `reader_modded_89mock_v90_EMHeHZP_sf9.bin` — die drei Builds oben, jeweils plus den
+  LoRa-SF7→SF9-Patch (siehe „LoRa-SF9-Option" unten). **Opt-in, nicht unterstützt, verkürzt die
+  Akkulaufzeit des Readers** — nur flashen, wenn die zusätzliche Reichweite wirklich gebraucht wird und
+  der Tradeoff klar ist.
 
-  **Benennung/Versionierung ist Absicht und für beide Release-Dateien
-  identisch**: jede Firmware meldet selbst Softver 89, das RELEASE ist
-  aber jeweils als „v90" benannt/getaggt — ein dauerhafter
-  „Mock-Version"-Unterschied, kein liegengebliebenes Entwicklungsartefakt.
-  Die Web-UI des Gateways liest die zu bewerbende OTA-Zielversion aus dem
-  hochgeladenen Dateinamen (`/v(\d+)/`, erster Treffer — hier „v90"), und
-  behandelt eine beworbene Version nur dann als No-Op, wenn sie mit dem
-  aktuell vom Reader gemeldeten Softver (oder 0) übereinstimmt. Da 90
-  niemals mit dem von allen Dateien selbst gemeldeten 89 übereinstimmen
-  kann, lässt sich jede Release-Datei beliebig oft erneut
-  hochladen/flashen — z.B. um einen Reader zwangsweise wieder auf einen
-  bekannt guten Stand zu bringen, oder um einen Reader von einer auf eine
-  andere Variante umzustellen — ohne jemals das „schon diese Version,
-  übersprungen"-OTA-No-Op einer gleichnummerierten Datei zu treffen. Wer
-  mit `splice.py`/`splice_DWSB20_2TH.py` lokal weiter iteriert, sollte
-  beide Nummern zueinander passend halten (siehe Kommentar über dem
-  jeweiligen Softver-Patch in diesen Skripten) — der 89/„v90"-Unterschied
-  gilt nur für die gepinnten Release-Builds.
+  **Benennung/Versionierung ist Absicht und für alle Release-Dateien
+  identisch, auch künftige**: jede Firmware meldet selbst Softver 89, das
+  RELEASE ist aber jeweils als „v90" benannt/getaggt — ein dauerhafter
+  „Mock-Version"-Unterschied, kein liegengebliebenes Entwicklungsartefakt,
+  und NICHT etwas, das sich erhöht, wenn eine neue zählerspezifische
+  Variante dazukommt. Die Web-UI des Gateways liest die zu bewerbende
+  OTA-Zielversion aus dem hochgeladenen Dateinamen (`/v(\d+)/`, erster
+  Treffer — hier „v90"), und behandelt eine beworbene Version nur dann als
+  No-Op, wenn sie mit dem aktuell vom Reader gemeldeten Softver (oder 0)
+  übereinstimmt. Da 90 niemals mit dem von allen Dateien selbst gemeldeten
+  89 übereinstimmen kann, lässt sich jede Release-Datei beliebig oft
+  erneut hochladen/flashen — z.B. um einen Reader zwangsweise wieder auf
+  einen bekannt guten Stand zu bringen, oder um einen Reader von einer auf
+  eine andere Variante umzustellen — ohne jemals das „schon diese Version,
+  übersprungen"-OTA-No-Op einer gleichnummerierten Datei zu treffen.
+  Zählerspezifische Fixes werden über den Dateinamen unterschieden, nicht
+  über eine Versionsnummer — die Nummer ändert sich nur, wenn sich die
+  GEMEINSAMEN Hooks (`entry_int24`, `entry_sxth16_fix`) selbst ändern,
+  nicht wenn eine neue zählerspezifische Variante dazukommt. Wer mit
+  `splice.py`/`splice_DWSB20_2TH.py`/`splice_EMHeHZP.py` lokal weiter
+  iteriert, sollte beide Nummern zueinander passend halten (siehe
+  Kommentar über dem jeweiligen Softver-Patch in diesen Skripten) — der
+  89/„v90"-Unterschied gilt nur für die gepinnten Release-Builds.
 - `hooks.c`, `entry.S`, `link.ld`, `vendor.h`, `build.sh`, `splice.py`,
-  `splice_DWSB20_2TH.py` — gemeinsamer Quelltext
-  und Build-Skripte. Der DWSB20.2TH-Fix in `hooks.c` steht hinter
-  `#ifdef FIX_NEGATIVE_POWER`, das `./build.sh DWSB20_2TH` setzt;
-  `./build.sh` (ohne Argument) baut die reine int24- +
-  SML-Int16-Vorzeichenfix-Variante, von der auch `splice.py` ausgeht.
-  Alle Varianten lesen dasselbe `hooks.c`/`entry.S` — eine Änderung an
-  gemeinsamer Logik (int24-Decoder, Int16-Vorzeichenfix) muss also nur an
-  einer Stelle gemacht werden und wirkt sich beim nächsten Build auf alle
-  Varianten aus. Das ist der dauerhafte, wiederholbare Release-Prozess —
-  bei jeder Änderung an `hooks.c`/`entry.S` `./build.sh && python
-  splice.py` UND `./build.sh DWSB20_2TH && python splice_DWSB20_2TH.py`
-  ausführen.
+  `splice_DWSB20_2TH.py`, `splice_EMHeHZP.py` — gemeinsamer Quelltext
+  und Build-Skripte. Der DWSB20.2TH-Fix in `hooks.c`/`entry.S` steht
+  hinter `#ifdef FIX_NEGATIVE_POWER` (gesetzt von `./build.sh
+  DWSB20_2TH`), der EMH-eHZ-P-Fix hinter `#ifdef FIX_INT8_SIGN` (gesetzt
+  von `./build.sh EMHeHZP`); `./build.sh` (ohne Argument) baut die reine
+  int24- + SML-Int16-Vorzeichenfix-Variante, von der auch `splice.py`
+  ausgeht. Alle Varianten lesen dasselbe `hooks.c`/`entry.S` — eine
+  Änderung an gemeinsamer Logik (int24-Decoder, Int16-Vorzeichenfix) muss
+  also nur an einer Stelle gemacht werden und wirkt sich beim nächsten
+  Build auf alle Varianten aus. Das ist der dauerhafte, wiederholbare
+  Release-Prozess — bei jeder Änderung an `hooks.c`/`entry.S` `./build.sh
+  && python splice.py`, `./build.sh DWSB20_2TH && python
+  splice_DWSB20_2TH.py` UND `./build.sh EMHeHZP && python
+  splice_EMHeHZP.py` ausführen. Ein echt zählerspezifischer Fix (nur bei
+  einem einzigen Zählermodell bestätigt/gemeldet, wie die beiden oben)
+  bekommt sein eigenes `#ifdef` und sein eigenes `splice_<Variante>.py`,
+  statt zu den unbedingten/gemeinsamen Hooks dazuzukommen — siehe „Ablauf
+  für einen neuen Hook" unten.
 - `fix_negative_power.py` — eigenständiges Patch-Skript für einen frühen,
   verworfenen Ansatz (SML-Int8/Int16-Dispatch-Table-Umbiegen). Nur noch
   als historische Notiz vorhanden — bestätigt NICHT der Bug, den der
-  DWSB20.2TH tatsächlich auslöst.
-- `build/` — NUR kompilierte Zwischendateien: `hooks.*` (reine Variante)
-  und `hooks_DWSB20_2TH.*` (DWSB20.2TH-Variante), nebeneinander abgelegt,
-  damit sich die Builds nicht gegenseitig überschreiben. `build.sh` legt
-  den Ordner bei Bedarf selbst an.
+  DWSB20.2TH tatsächlich auslöst (seine *Analyse* der Int8-/Int16-Fälle
+  erwies sich später als richtig, nur die Zuordnung zum falschen Zähler
+  nicht — siehe die Int16- und Int8-Vorzeichenfixe unten; der
+  *Umbiege-Ansatz* selbst bleibt verworfen).
+- `build/` — NUR kompilierte Zwischendateien: `hooks.*` (reine Variante),
+  `hooks_DWSB20_2TH.*` (DWSB20.2TH-Variante) und `hooks_EMHeHZP.*`
+  (EMH-eHZ-P-Variante), nebeneinander abgelegt, damit sich die Builds
+  nicht gegenseitig überschreiben. `build.sh` legt den Ordner bei Bedarf
+  selbst an.
 
 ## Bausteine
 
@@ -81,39 +109,64 @@ FPU) und splicen das Ergebnis in die Firmware.
                     (roher Maschinencode) und `hooks.map`/`hooks.sym`
                     (Symboladressen für splice.py). Mit `DWSB20_2TH` als
                     erstem Argument wird zusätzlich der DWSB20.2TH-Fix
-                    (`-DFIX_NEGATIVE_POWER`) in `hooks_DWSB20_2TH.*` gebaut.
-- `splice.py` / `splice_DWSB20_2TH.py` — hängen das passende `hooks*.bin` ans
-                    Firmware-Image an und patchen die Call-Sites
-                    (BL-Encoding programmatisch berechnet) auf die
-                    Einsprungpunkte aus `entry.S`. Beide erhöhen auch die
-                    eingebetteten Softver-Bytes — **immer auf einen
-                    frischen, noch nie verwendeten Wert**, wenn iteriert
-                    wird: der Reader-OTA-Pfad überspringt das erneute
-                    Flashen still, wenn der eingebettete/beworbene Softver
-                    mit einem bereits versuchten übereinstimmt — das sieht
-                    dann exakt aus wie „der Fix funktioniert nicht", obwohl
-                    tatsächlich nur alter Code lief.
+                    (`-DFIX_NEGATIVE_POWER`) in `hooks_DWSB20_2TH.*`
+                    gebaut, mit `EMHeHZP` der EMH-eHZ-P-Int8-Vorzeichenfix
+                    (`-DFIX_INT8_SIGN`) in `hooks_EMHeHZP.*`.
+- `splice.py` / `splice_DWSB20_2TH.py` / `splice_EMHeHZP.py` — hängen das
+                    passende `hooks*.bin` ans Firmware-Image an und
+                    patchen die Call-Sites (BL-Encoding programmatisch
+                    berechnet) auf die Einsprungpunkte aus `entry.S`. Alle
+                    erhöhen auch die eingebetteten Softver-Bytes — **immer
+                    auf einen frischen, noch nie verwendeten Wert**, wenn
+                    iteriert wird: der Reader-OTA-Pfad überspringt das
+                    erneute Flashen still, wenn der eingebettete/beworbene
+                    Softver mit einem bereits versuchten übereinstimmt —
+                    das sieht dann exakt aus wie „der Fix funktioniert
+                    nicht", obwohl tatsächlich nur alter Code lief. (Dieser
+                    Rat gilt nur fürs lokale Testen — das gepinnte
+                    89/„v90"-Release-Paar selbst erhöht sich nicht pro
+                    Variante, siehe oben.)
 
 ## Ablauf für einen neuen Hook
 
 1. Funktion in `hooks.c` schreiben (normales C, keine libc außer was in
    `vendor.h` deklariert ist). Freestanding `-nostdlib`-Build — es ist
    keine Soft-Division-Laufzeit gelinkt, also `%`/`/` auf
-   Nicht-Zweierpotenzen vermeiden.
+   Nicht-Zweierpotenzen vermeiden. Reine ALU-Fixes, die klein genug für
+   direkten Assembler sind (wie die Int16-/Int8-Vorzeichenfixe), können
+   `hooks.c` ganz auslassen und nur in `entry.S` leben.
 2. Falls die Call-Site eine Vendor-spezifische Register-Konvention hat
    (nicht AAPCS-Standardaufruf): kleinen Trampolin-Stub in `entry.S`
    ergänzen, der die Register in AAPCS-Argumente (R0,R1,R2,R3) umlegt, `bl`
    in die C-Funktion macht, und danach die von der Call-Site erwartete
-   Rückkehr-Sequenz (z.B. `pop {r3-r7,pc}`) ausführt. Bei einem nur für
-   DWSB20_2TH gedachten Hook auch die `#ifdef FIX_NEGATIVE_POWER`-Guards in
-   `entry.S` nicht vergessen, und dessen Section per `KEEP()` in
-   `link.ld` gegen `--gc-sections` absichern.
-3. In `splice.py`/`splice_DWSB20_2TH.py` unter `HOOKS = [...]` die
-   Call-Site-Adresse + den Namen des entry.S-Symbols eintragen.
-4. `./build.sh [DWSB20_2TH] && python splice.py|splice_DWSB20_2TH.py` —
-   Ergebnis ist eine neue, gepatchte `.bin`. Vorher das Softver-Patch-Byte
-   auf einen frischen Wert setzen (siehe oben).
-5. **Immer** per IDA (`idalib_open` + `disasm`) gegenprüfen, bevor
+   Rückkehr-Sequenz (z.B. `pop {r3-r7,pc}`) ausführt. Ist der Fix
+   allgemein (bestätigt oder klar über Zählermodelle hinweg anwendbar,
+   wie die int24-/Int16-Decoder-Fixe), unbedingt lassen, damit er in jede
+   Variante einfließt. Wurde er bisher nur bei EINEM bestimmten
+   Zählermodell gemeldet/bestätigt (wie der DWSB20.2TH-Fix für negative
+   Leistung oder der EMH-eHZ-P-Int8-Fix), stattdessen ein eigenes `#ifdef
+   FIX_<NAME>` in `entry.S` (und `hooks.c`, falls ein C-Hook nötig ist)
+   spendieren statt zu den unbedingten Hooks dazuzukommen, und dessen
+   Section per `KEEP()` in `link.ld` gegen `--gc-sections` absichern — so
+   bleibt ein nur bei einem Zähler bestätigter Fix aus jedem anderen
+   Reader-Build heraus, bis er auch woanders auftaucht.
+3. `build.sh` um eine Variante ergänzen (`elif [ "$VARIANT" = "..." ]`),
+   die das neue `-DFIX_<NAME>` und eine eigene `build/hooks_<Variante>.*`-
+   Ausgabe definiert, falls das eine neue zählerspezifische Variante ist
+   statt eines gemeinsamen/unbedingten Fixes.
+4. In der passenden `splice*.py` unter `HOOKS = [...]` die
+   Call-Site-Adresse + den Namen des entry.S-Symbols eintragen (ein neues
+   `splice_<Variante>.py`, kopiert von `splice_EMHeHZP.py` als einfachste
+   Vorlage, für eine neue zählerspezifische Variante; die reine
+   `splice.py` plus jedes andere Varianten-Skript für einen gemeinsamen/
+   unbedingten Fix).
+5. `./build.sh [<Variante>] && python splice.py|splice_DWSB20_2TH.py|splice_EMHeHZP.py|...`
+   — Ergebnis ist eine neue, gepatchte `.bin`. Vorher das Softver-Patch-
+   Byte auf einen frischen Wert setzen, solange lokal iteriert wird
+   (siehe oben) — für den fertigen Release-Build aber beim gepinnten
+   89/„v90"-Paar bleiben, außer die GEMEINSAMEN Hooks haben sich
+   geändert.
+6. **Immer** per IDA (`idalib_open` + `disasm`) gegenprüfen, bevor
    geflasht wird — das Splicen selbst validiert nur Byte-Encoding, nicht
    Semantik. Direkte Python-Byte-Reads der geflashten `.bin` sind ein
    zuverlässiger Fallback, wenn IDAs Headless-Session mal wieder spinnt.
@@ -372,6 +425,81 @@ statischer Analyse), mit Referenzsignalen, die selbst vom Bug nicht
 betroffen sind, statt zu versuchen, einen Wert weiter unten in einer
 nicht vollständig kartierten Pipeline abzufangen oder zu überschreiben.
 
+## EMH-eHZ-P-Integer8-Vorzeichenfix (`entry_sxtb8_fix`)
+
+Aus dem Feld gemeldet für einen **EMH eHZ-P** (Issue #68): Einspeisung
+zwischen -1 W und -128 W kam als +255 W bis +128 W an, Bezug war immer
+korrekt, und größere Einspeisewerte (jenseits -128 W) waren bereits in
+Ordnung.
+
+Das 8-Bit-Gegenstück zum Int16-Vorzeichenfix oben — dieselbe Funktion
+(`sub_C0A4`), dieselbe Familie von SML-TL-Bytes. Der Integer8-Fall
+(`TL=0x52`) bei `0xC0EE` liest das Wertbyte mit einem schlicht
+nullerweiternden `ldrb r1,[r1,#1]`, legt das als Low-Dword ab und
+schreibt **R0** als High-Dword — und R0 wurde im Dispatch-Vorspann bei
+`0xC0C0` auf 0 gesetzt und dazwischen nie wieder angefasst. Das
+Vorzeichen geht also doppelt verloren: Low-Dword ist der vorzeichenlose
+Bytewert, High-Dword ist fest nicht-negativ. Der direkt benachbarte Fall
+`TL=0x62` bei `0xC0F8` liest exakt dasselbe Byte-Offset, macht es aber
+richtig (`movs r0,#1 ; ldrsb r0,[r1,r0] ; asrs r1,r0,#0x1f`) — der
+Hersteller hat also die Vorzeichen-Behandlung zwischen den TL-Familien
+`0x5x` und `0x6x` bei beiden schmalen Breiten vertauscht, genau wie beim
+Int16-Fall.
+
+SML kodiert jeden Wert in der kürzesten passenden Breite, also sendet ein
+Zähler bei kleiner Einspeisung -1 W als einzelnes Byte `0xFF`, und dieser
+Reader meldet +255 W; -128 W (`0x80`) wird zu +128 W. Alles jenseits
+-128 W passt nicht mehr in Integer8, rutscht auf Integer16 hoch und wird
+bereits von `entry_sxth16_fix` oben abgefangen — genau deshalb sahen nur
+die *kleinsten* Einspeisewerte falsch aus.
+
+**Fix**: `entry_sxtb8_fix` (`entry.S`) ersetzt die 4 Bytes
+`str r1,[r4] ; str r0,[r4,#4]` bei `0xC0F2` durch ein `BL` in ein
+Trampolin, das zuerst das fehlende `sxtb r1,r1` ausführt, dann beide
+Stores mit dem echten Vorzeichen im High-Dword wiederholt und per
+`bx lr` nach `0xC0F6` zurückkehrt (das unveränderte `b loc_C26C`).
+Dieselbe Form wie beim Int16-Fix: ein geradliniger Mid-Function-Patch und
+kein Sprungtabellen-Slot, muss also nachholen, was er entfernt. Reine
+ALU, kein C-Hook nötig. Der spiegelbildliche Fehler in den unsignierten
+Fällen `0x62`/`0x63` (ein vorzeichenloses Byte ≥ 0x80 liest sich negativ)
+bleibt bewusst unangetastet — gleiche Entscheidung wie beim Int16-Fix:
+korrigiert werden nur die signierten Pfade, die das Leistungsfeld eines
+Zählers tatsächlich nutzt.
+
+**Eigene Variante statt gemeinsamer Build**: auf Disassemblie-Ebene sieht
+das wie dieselbe Klasse von allgemeinem Vendor-Decoder-Defekt aus wie der
+Int16-Fix (der IST unbedingt in jeder Variante) — bisher aber nur bei
+diesem einen Zählermodell gemeldet, anders als der Int16-Fix, der ein
+dokumentierter, als allgemein verstandener Defekt ist. Er läuft daher als
+eigene, dedizierte Variante
+(`FIX_INT8_SIGN`/`./build.sh EMHeHZP`/`splice_EMHeHZP.py`,
+`reader_modded_89mock_v90_EMHeHZP.bin`), analog dazu, wie der
+DWSB20.2TH-Fix für negative Leistung oben isoliert ist, statt in den
+reinen Build eingebaut zu werden und jeden Reader unabhängig vom
+Zählermodell darauf zu zwingen. Bestätigt sich das später auch bei
+anderen Zählermodellen, kann er genauso in die gemeinsamen/unbedingten
+Hooks wandern wie `entry_int24` und `entry_sxth16_fix` es bereits sind.
+
+**Konfidenz**: hoch für die Decode-Analyse (byte-genaue Disassemblierung
+des fehlerhaften `0x52`-Falls, des korrekten `0x62`-Geschwisters und des
+`movs r0,#0` bei `0xC0C0`, das das High-Dword beweisbar immer 0 macht)
+und für die Sicherheit der Patch-Stelle (ein Branch-Scan über das ganze
+Image bestätigt, dass nichts in die 4 ersetzten Bytes springt; R0/R1 sind
+beim Eintritt in `loc_C26C` tot, das R0 sofort als `adds r0,r5,r2` neu
+berechnet — der korrekte `0x62`-Fall fällt genauso mit R0 = dekodierter
+Wert statt 0 in `loc_C26C` hinein; LR ist mitten in `sub_C0A4` reiner
+Scratch, und das Trampolin ruft selbst nichts auf). **Nicht** live an
+einem echten Integer8-kodierenden Zähler verifiziert — hier steht kein
+EMH eHZ-P zur Verfügung, und der DWSB20.2TH-Testreader nutzt für Leistung
+Integer24/Int32, kann diesen Pfad also gar nicht auslösen. Stattdessen
+auf Byte-Ebene geprüft: das gespleißte `EMHeHZP`-Image disassembliert
+exakt wie beabsichtigt (`sxtb r1,r1 / str r1,[r4] / asrs r0,r1,#31 /
+str r0,[r4,#4] / bx lr` an der Trampolin-Adresse), und die reine sowie
+die DWSB20.2TH-Variante — die `FIX_INT8_SIGN` NICHT setzen — kompilieren
+und spleißen byte-identisch zu ihren bisherigen Release-Builds, was
+bestätigt, dass dieser Fix vollständig auf seine eigene Variante
+beschränkt bleibt.
+
 ## LoRa-SF9-Option (2026-07-21) — mehr Reichweite, kürzere Akkulaufzeit des Readers, opt-in und ohne Support
 
 Tauscht Übertragungsrate/Sendezeit gegen Reichweite, indem die LoRa-Verbindung vom Standard SF7 auf SF9
@@ -382,9 +510,10 @@ ECDH-Handshake, laufendes Energy-Reporting, Reader-OTA in beide Richtungen) auf 
 (DWSB20.2TH-Reader `e1c6c5`) — ein früherer Versuch blieb beim Handshake hängen und wurde zurückgerollt;
 die Ursache war einer der folgenden vier Patches (#2), keine grundsätzliche Grenze.
 
-**Vier Patches, alle über `splice.py --sf9` / `splice_DWSB20_2TH.py --sf9` zusätzlich zu den normalen
-Zähler-Fix-Hooks angewendet** — Release-Builds enthalten jetzt 4 Dateien insgesamt (plain/DWSB20.2TH ×
-SF7/SF9), byte-diff-geprüft sauber gegen die jeweilige SF7-Basis (nur die beabsichtigten Bytes ändern sich):
+**Vier Patches, alle über `splice.py --sf9` / `splice_DWSB20_2TH.py --sf9` /
+`splice_EMHeHZP.py --sf9` zusätzlich zu den normalen Zähler-Fix-Hooks angewendet** — Release-Builds
+enthalten jetzt 6 Dateien insgesamt (plain/DWSB20.2TH/EMHeHZP × SF7/SF9), byte-diff-geprüft sauber gegen
+die jeweilige SF7-Basis (nur die beabsichtigten Bytes ändern sich):
 
 1. **`radio_init_config`-Datarate-Immediates für TX/RX** — `radio_init_config` (beginnt bei `0xB69C`) ruft
    zweimal die Vendor-SX126x-HAL auf (`RadioSetTxConfig`/`RadioSetRxConfig`), jeweils mit dem

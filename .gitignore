@@ -15,6 +15,7 @@ perm_test/
 certs_*/
 __pycache__/
 *.pyc
+.claude/
 *.i64
 *.id0
 *.id1

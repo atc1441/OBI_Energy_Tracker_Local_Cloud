@@ -138,14 +138,23 @@ jobs:
           python3 splice_DWSB20_2TH.py
           python3 splice_DWSB20_2TH.py --sf9
 
+      - name: Build + splice (EMH eHZ-P Int8 sign fix)
+        working-directory: reader_firmware_mod
+        run: |
+          bash build.sh EMHeHZP
+          python3 splice_EMHeHZP.py
+          python3 splice_EMHeHZP.py --sf9
+
       - name: Stage binaries
         working-directory: reader_firmware_mod
         run: |
           mkdir -p dist
           cp reader_modded_89mock_v90.bin dist/
           cp reader_modded_89mock_v90_DWSB20_2TH.bin dist/
+          cp reader_modded_89mock_v90_EMHeHZP.bin dist/
           cp reader_modded_89mock_v90_sf9.bin dist/
           cp reader_modded_89mock_v90_DWSB20_2TH_sf9.bin dist/
+          cp reader_modded_89mock_v90_EMHeHZP_sf9.bin dist/
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

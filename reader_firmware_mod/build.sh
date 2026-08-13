@@ -10,15 +10,19 @@
 # PlatformIO-bundled Windows toolchain for local dev on this machine.
 #
 # Variant: pass "DWSB20_2TH" as $1 to additionally build the DWSB20.2TH
-# negative-power fix into hook_decode_int24 (-DFIX_NEGATIVE_POWER),
-# writing to build/hooks_DWSB20_2TH.{o,elf,bin,sym} instead of the plain
-# build/hooks.* -- so both variants can be built back-to-back without one
-# overwriting the other (splice.py / splice_DWSB20_2TH.py each read their
-# own).
+# negative-power fix into hook_decode_int24 (-DFIX_NEGATIVE_POWER), or
+# "EMHeHZP" to build the SML Integer8 sign-extension fix (-DFIX_INT8_SIGN,
+# entry.S only, no C hook) -- each writing to its own build/hooks_<variant>.
+# {o,elf,bin,sym} instead of the plain build/hooks.*, so all variants can be
+# built back-to-back without one overwriting another (splice.py /
+# splice_DWSB20_2TH.py / splice_EMHeHZP.py each read their own).
 VARIANT="${1:-plain}"
 if [ "$VARIANT" = "DWSB20_2TH" ]; then
   DEFS="-DFIX_NEGATIVE_POWER"
   OUT="build/hooks_DWSB20_2TH"
+elif [ "$VARIANT" = "EMHeHZP" ]; then
+  DEFS="-DFIX_INT8_SIGN"
+  OUT="build/hooks_EMHeHZP"
 else
   DEFS=""
   OUT="build/hooks"
