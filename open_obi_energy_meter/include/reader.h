@@ -56,6 +56,10 @@ struct Reader {
   uint32_t mqttPubEnergyMs = 0;     // lastEnergyMs value at the last MQTT publish — drives event-driven publishing
                                     // (publish the moment a fresh energy frame differs from this). Owned by the
                                     // web/MQTT task only; lastEnergyMs is written by the LoRa task (atomic uint32).
+  int8_t   mqttAvail = -1;          // last per-reader availability published on <base>/<id>/status:
+                                    // 1 = online, 0 = offline, -1 = nothing published yet (also reset on each
+                                    // MQTT connect so the retained state is re-asserted). Only publishes on a
+                                    // change, so a quiet reader costs one message, not one per service pass.
   // Per-reader price override + optional day/night tariff (persisted in NVS ns "obiprice", see main.cpp).
   // -1 on either price field means "not set, use the global g_priceCent/g_exportCent" (gateway_web.cpp).
   // When nightTariffOn, energy is bucketed live into day/night sub-totals the moment it's recorded (see

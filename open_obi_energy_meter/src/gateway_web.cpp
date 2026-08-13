@@ -4208,7 +4208,10 @@ static void startServices() {
   }   // end one-time route registration
   server.begin();
   applyMqttClient();                // pick plain/TLS socket + set the broker address
-  mqtt.setBufferSize(768);          // HA discovery configs (with device block) exceed the 256B default
+  mqtt.setBufferSize(1024);         // HA discovery configs (device block + two-topic availability list) exceed
+                                    // the 256B default; the select/number configs sit ~800 B with a long base
+                                    // topic + a renamed reader, and PubSubClient silently DROPS an oversized
+                                    // publish. Heap-allocated (not static RAM), so the extra 256 B is cheap.
   mqtt.setCallback(mqttCallback);          // <base>/<id>/set_interval command topic
   bool sta = WiFi.status() == WL_CONNECTED;
   g_serverUp = true; g_wifiOk = sta;
@@ -4321,10 +4324,32 @@ static void runPortal() {
 //   <base>/gateway/<gwid>          -> gateway state JSON (temp, uptime, heap, rssi)
 //   <base>/gateway/<gwid>/status   -> availability (LWT online/offline)
 //   <base>/gateway/<gwid>/reboot   -> command topic (payload ignored) -> restart
+//   <base>/<id>                    -> reader state JSON
+//   <base>/<id>/status             -> PER-READER availability (online/offline, retained)
 static String gwStateTopic() { return String(g_mqttTopic) + "/gateway/" + gwId(); }
 static String avtTopic()     { return gwStateTopic() + "/status"; }
 static String rebootTopic()  { return gwStateTopic() + "/reboot"; }
 static String authTopic()    { return gwStateTopic() + "/auth"; }
+static String rdrAvtTopic(const String &id) { return String(g_mqttTopic) + "/" + id + "/status"; }
+
+// ---- per-reader availability ----------------------------------------------
+// A reader that stops transmitting (flat/loose batteries, out of range) simply stops producing energy
+// frames — the gateway then publishes nothing for it, so Home Assistant kept showing the LAST value
+// forever, and any frame that did arrive with n/a fields could land as a bogus reading in the energy
+// statistics. So each reader gets its own retained online/offline topic, driven by how long it has been
+// silent relative to its OWN configured upload interval: after READER_AVAIL_MISSES missed reports it is
+// declared offline and HA marks its entities unavailable (which HA excludes from history/statistics)
+// until it is heard from again.
+static const uint32_t READER_AVAIL_MISSES = 4;      // missed reports before "offline"
+static const uint32_t READER_AVAIL_MIN_S  = 120;    // floor: never flap on a 1 s ("Live") interval
+static const uint32_t READER_AVAIL_MAX_S  = 3600;   // ceiling: an absurd interval still can't hide a dead reader
+static bool readerOnline(const Reader &r) {
+  uint32_t iv = r.setInterval ? r.setInterval : 25;                 // s; 0 shouldn't happen (see addReader)
+  uint32_t to = iv * READER_AVAIL_MISSES;
+  if (to < READER_AVAIL_MIN_S) to = READER_AVAIL_MIN_S;
+  if (to > READER_AVAIL_MAX_S) to = READER_AVAIL_MAX_S;
+  return (millis() - r.lastSeenMs) < to * 1000UL;
+}
 
 // Emit a wrong-web-login event on <base>/gateway/<gwid>/auth. Not retained — it's a point-in-time
 // event (HA's `event` platform consumes it). Payload carries the attempted username, client IP and the
@@ -4371,7 +4396,11 @@ static void publishDiscovery(const Reader &r) {
   String uid = "obi_" + id;                            // device id / unique_id base
   String stt = String(g_mqttTopic) + "/" + id;         // state topic (the JSON)
   String cmd = stt + "/set_interval";                  // command topic (number -> interval)
-  String avt = avtTopic();                             // per-gateway LWT: online/offline
+  // Availability: BOTH the gateway's LWT and this reader's own status topic have to read "online"
+  // (avty_mode "all"). The gateway topic covers "the gateway itself died" (the broker publishes it for us),
+  // the reader topic covers "this one reader went quiet" — see readerOnline(). HA expands the `t`
+  // abbreviation inside the availability list just like the top-level ones.
+  String avty = ",\"avty\":[{\"t\":\"" + avtTopic() + "\"},{\"t\":\"" + rdrAvtTopic(id) + "\"}],\"avty_mode\":\"all\"";
   // device name: the user-set friendly name when present (Tasmota-style), else the technical default.
   // Safe to change later: entity ids/history hang off uniq_id + state topic, both stay untouched.
   String dev = "\"dev\":{\"ids\":[\"" + uid + "\"],\"name\":" +
@@ -4413,7 +4442,7 @@ static void publishDiscovery(const Reader &r) {
   for (const SDef &d : defs) {
     String topic = "homeassistant/sensor/" + uid + "/" + d.key + "/config";
     String p = "{\"name\":\"" + String(d.name) + "\",\"uniq_id\":\"" + uid + "_" + d.key + "\""
-               ",\"stat_t\":\"" + stt + "\",\"val_tpl\":\"" + d.tpl + "\",\"avty_t\":\"" + avt + "\"";
+               ",\"stat_t\":\"" + stt + "\",\"val_tpl\":\"" + d.tpl + "\"" + avty;
     if (d.dc)   p += ",\"dev_cla\":\"" + String(d.dc) + "\"";
     if (d.unit) p += ",\"unit_of_meas\":\"" + String(d.unit) + "\"";
     if (d.sc)   p += ",\"stat_cla\":\"" + String(d.sc) + "\"";
@@ -4434,7 +4463,7 @@ static void publishDiscovery(const Reader &r) {
     String topic = "homeassistant/binary_sensor/" + uid + "/" + b.key + "/config";
     String p = "{\"name\":\"" + String(b.name) + "\",\"uniq_id\":\"" + uid + "_" + b.key + "\""
                ",\"stat_t\":\"" + stt + "\",\"val_tpl\":\"{{ 'ON' if value_json['" + b.field + "'] else 'OFF' }}\""
-               ",\"avty_t\":\"" + avt + "\",\"ent_cat\":\"diagnostic\"," + dev + "}";
+               + avty + ",\"ent_cat\":\"diagnostic\"," + dev + "}";
     mqtt.publish(topic.c_str(), p.c_str(), true);
   }
 
@@ -4444,7 +4473,7 @@ static void publishDiscovery(const Reader &r) {
               ",\"stat_t\":\"" + stt + "\",\"cmd_t\":\"" + cmd + "\""
               ",\"val_tpl\":\"{% if value_json['interval'] %}{{ value_json['interval'] }}{% endif %}\""
               ",\"min\":1,\"max\":65535,\"step\":1,\"mode\":\"box\",\"unit_of_meas\":\"s\""
-              ",\"avty_t\":\"" + avt + "\",\"ent_cat\":\"config\"," + dev + "}";
+              + avty + ",\"ent_cat\":\"config\"," + dev + "}";
   mqtt.publish(ntopic.c_str(), np.c_str(), true);
 
   // --- select: interval presets (mirrors the web quick-select). Reuses the set_interval command topic:
@@ -4457,7 +4486,7 @@ static void publishDiscovery(const Reader &r) {
               ",\"options\":[\"Live\",\"10s\",\"30s\",\"60s\",\"120s\",\"300s\"]"
               ",\"cmd_tpl\":\"{% if value == 'Live' %}1{% else %}{{ value[:-1] }}{% endif %}\""
               ",\"val_tpl\":\"{% set i = value_json['interval'] %}{% if i == 1 %}Live{% elif i in [10,30,60,120,300] %}{{ i }}s{% endif %}\""
-              ",\"avty_t\":\"" + avt + "\",\"ent_cat\":\"config\",\"icon\":\"mdi:timer-outline\"," + dev + "}";
+              + avty + ",\"ent_cat\":\"config\",\"icon\":\"mdi:timer-outline\"," + dev + "}";
   mqtt.publish(stopic.c_str(), sp.c_str(), true);
 }
 
@@ -4538,15 +4567,18 @@ static void publishGatewayDiscovery() {
     mqtt.publish(t.c_str(), p.c_str(), true); }
 }
 
-// Remove a reader's discovery entities from HA by publishing empty retained configs.
+// Remove a reader's discovery entities from HA by publishing empty retained configs, and drop its retained
+// availability so a deleted reader leaves nothing behind on the broker.
 // Mirrors the topics created by publishDiscovery() — keep the two lists in sync.
-static void clearDiscovery(const String &uid) {
+static void clearDiscovery(const String &id) {
+  String uid = "obi_" + id;
   static const char *sensors[]  = {"import","export","power","power_calc","battery","rssi","snr","lastseen","id","uuid","type","firmware","hardware"};
   static const char *binaries[] = {"infrared","paired","legacy","bootloader"};
   for (const char *k : sensors)  { String t = "homeassistant/sensor/"        + uid + "/" + k + "/config"; mqtt.publish(t.c_str(), "", true); }
   for (const char *k : binaries) { String t = "homeassistant/binary_sensor/" + uid + "/" + k + "/config"; mqtt.publish(t.c_str(), "", true); }
   String t = "homeassistant/number/" + uid + "/interval/config"; mqtt.publish(t.c_str(), "", true);
   String ts = "homeassistant/select/" + uid + "/interval_preset/config"; mqtt.publish(ts.c_str(), "", true);
+  mqtt.publish(rdrAvtTopic(id).c_str(), "", true);   // clear the retained online/offline flag as well
 }
 
 // Web button: drop a (phantom) reader from the list. Not a permanent block — the next valid
@@ -4557,7 +4589,7 @@ static void handleDelete() {
   uint8_t h[3];
   for (int i = 0; i < 3; i++) h[i] = (uint8_t)strtol(id.substring(i * 2, i * 2 + 2).c_str(), nullptr, 16);
   bool ok = gw_delete_reader(h);
-  if (ok && mqtt.connected()) clearDiscovery("obi_" + id);
+  if (ok && mqtt.connected()) clearDiscovery(id);
   server.send(200, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false}");
 }
 
@@ -4569,8 +4601,10 @@ static void handleRediscover() {
   int n = 0;
   for (int i = 0; i < MAX_READERS; i++) {
     Reader &r = readers[i];
-    if (r.used && r.haveData) { publishDiscovery(r); r.mqttDiscovered = true; n++; }
+    if (r.used && r.haveData) { publishDiscovery(r); r.mqttDiscovered = true; r.mqttAvail = -1; n++; }
   }
+  // -1 above: mqttService() re-publishes each reader's current online/offline on its next pass, so the
+  // freshly (re)created entities immediately get an availability state instead of waiting for a change.
   server.send(200, "application/json", String("{\"ok\":true,\"count\":") + n + "}");
 }
 
@@ -4591,7 +4625,8 @@ static void mqttService() {
       mqtt.subscribe(rebootTopic().c_str());                    // <base>/gateway/<gwid>/reboot
       mqtt.publish(avt.c_str(), "online", true);
       publishGatewayDiscovery();
-      for (int i = 0; i < MAX_READERS; i++) readers[i].mqttDiscovered = false;  // re-announce after (re)connect
+      for (int i = 0; i < MAX_READERS; i++) { readers[i].mqttDiscovered = false;   // re-announce after (re)connect
+                                              readers[i].mqttAvail = -1; }         // ...and re-assert online/offline
       Serial.printf("[mqtt] connected as %s, subscribed %s + reboot\n", cid.c_str(), sub.c_str());
     }
     g_mqttState = mqtt.state();
@@ -4627,9 +4662,22 @@ static void mqttService() {
     for (int i = 0; i < MAX_READERS; i++) {
       Reader &r = readers[i];
       if (!r.used || !r.haveData) continue;
-      if (r.lastEnergyMs == r.mqttPubEnergyMs) continue;   // nothing new since the last publish
+      bool fresh = (r.lastEnergyMs != r.mqttPubEnergyMs);   // a new energy frame arrived since the last publish
+      if (!r.mqttDiscovered && !fresh) continue;            // never announced and nothing new -> nothing to do
+      if (!r.mqttDiscovered) { publishDiscovery(r); r.mqttDiscovered = true; r.mqttAvail = -1; }
+      // Availability BEFORE the state publish: a reader coming back does both in this same pass, and HA only
+      // shows a state it received while the entity was available. Costs nothing while unchanged (no String
+      // is built), so this can run on every service pass — that's also what makes going offline timely.
+      int8_t up = readerOnline(r) ? 1 : 0;
+      if (r.mqttAvail != up) {
+        String at = rdrAvtTopic(hex(r.handle, 3));
+        if (mqtt.publish(at.c_str(), up ? "online" : "offline", true)) { g_mqttPubCount++; g_mqttLastPubMs = now; }
+        r.mqttAvail = up;
+        Serial.printf("[mqtt] reader %02X%02X%02X -> %s (unseen %lus)\n", r.handle[0], r.handle[1], r.handle[2],
+                      up ? "online" : "offline", (unsigned long)((millis() - r.lastSeenMs) / 1000));
+      }
+      if (!fresh) continue;
       r.mqttPubEnergyMs = r.lastEnergyMs;
-      if (!r.mqttDiscovered) { publishDiscovery(r); r.mqttDiscovered = true; }
       String id = hex(r.handle, 3);
       String topic = String(g_mqttTopic) + "/" + id;
       String p = "{\"id\":\"" + id + "\",\"uuid\":" +

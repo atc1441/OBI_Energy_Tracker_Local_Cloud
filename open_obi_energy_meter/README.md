@@ -275,6 +275,11 @@ waits ~300 ms for after each report):
   ```
 - **Availability**: an LWT topic `‹base›/status` carries `online` / `offline` (the broker publishes
   `offline` if the gateway drops), so Home Assistant marks the entities *unavailable* automatically.
+- **Per-reader availability**: each reader additionally gets a retained `‹base›/‹id›/status` topic. A reader
+  that misses **4 reports in a row** (its own upload interval, floor 2 min / ceiling 1 h) is published as
+  `offline`, and `online` again on its next frame — so a reader with a flat battery or out of range shows up
+  as *unavailable* in HA instead of freezing on its last value or dropping a bogus reading into the
+  statistics. HA entities require **both** topics to be `online` (`availability_mode: all`).
 - **Subscribe**: `‹base›/+/set_interval` (see above).
 - **Status** is exposed on `/api/status` (`connected`, `state`, `pub_count`, `last_pub_s`) and shown in the
   dashboard MQTT panel.
@@ -652,6 +657,11 @@ Reader nach jedem Bericht ohnehin ~300 ms wartet):
   ```
 - **Verfügbarkeit**: ein LWT-Topic `‹base›/status` trägt `online` / `offline` (der Broker sendet `offline`,
   wenn das Gateway wegfällt), sodass Home Assistant die Entities automatisch als *nicht verfügbar* markiert.
+- **Verfügbarkeit pro Reader**: zusätzlich bekommt jeder Reader ein retained Topic `‹base›/‹id›/status`. Bleiben
+  **4 Meldungen in Folge** aus (gemessen am eigenen Upload-Intervall, min. 2 min, max. 1 h), wird `offline`
+  publiziert, beim nächsten Frame wieder `online` — ein Reader mit leerer Batterie oder außer Reichweite steht
+  in HA damit als *nicht verfügbar* da, statt auf dem letzten Wert einzufrieren oder einen falschen Wert in die
+  Statistik zu schreiben. HA-Entities brauchen **beide** Topics auf `online` (`availability_mode: all`).
 - **Subscribe**: `‹base›/+/set_interval` (siehe oben).
 - **Status** liegt auf `/api/status` (`connected`, `state`, `pub_count`, `last_pub_s`) und wird im
   MQTT-Panel angezeigt.
