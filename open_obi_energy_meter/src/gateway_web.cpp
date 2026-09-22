@@ -4361,10 +4361,19 @@ async function load(silent){
  // counters — which just accumulate — stay correct. calcArr[i] is null for i==0 or a non-positive gap.
  // Computed against the FULL S (not the windowed cutoff) so the delta at the window's left edge is still
  // correct -- only the resulting points get filtered to the display window, below and in the Watt table.
+ // Keep the calculation anchored at the last sample whose energy counters actually changed.
+ // Heartbeat samples with identical counters are not 0 W measurements; treating them as a new anchor
+ // would both render artificial zeroes and make the next whole-Wh counter tick look like a multi-kW spike.
+ let calcAnchor=0;
  let calcArr=S.map((s,i)=>{
   if(i===0)return null;
-  let dt=s[0]-S[i-1][0];if(dt<=0)return null;
-  return ((s[1]-S[i-1][1])-(s[2]-S[i-1][2]))*3600/dt;
+  const a=S[calcAnchor];
+  const dImp=s[1]-a[1],dExp=s[2]-a[2];
+  if(dImp===0&&dExp===0)return null;
+  const dt=s[0]-a[0];
+  calcAnchor=i;
+  if(dt<=0||dImp<0||dExp<0)return null;
+  return (dImp-dExp)*3600/dt;
  });
  let calcPts=calcArr.map((v,i)=>v==null?null:[S[i][0],v]).filter(p=>p&&p[0]>=rCutoff);
  if(powPts.length>=2||calcPts.length>=2){

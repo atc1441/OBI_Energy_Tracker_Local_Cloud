@@ -1159,6 +1159,11 @@ static void handleRx() {
           // frame-to-frame result by hundreds of W (see Unbenannt.png). Anchoring the window to a sample
           // that's actually old enough shrinks that quantization error relative to the real delta while
           // still reporting a true average over real counter movement, not a lagging/blended estimate.
+          //
+          // A zero counter delta is NOT a real 0 W measurement: with coarse whole-Wh counters it only means
+          // "the meter has not advanced yet". Do not emit 0 W and, crucially, do not move the anchor in that
+          // case. The next real counter tick is then averaged over the full elapsed time instead of over the
+          // short gap since a zero-delta sample, avoiding artificial multi-kW spikes in MQTT/Home Assistant.
           static const uint32_t CALC_POWER_WINDOW_MS = 60000UL;
           if (!r->haveCalcAnchor || obi_na(r->import_) || obi_na(r->export_)) {
             if (!obi_na(r->import_) && !obi_na(r->export_)) {
@@ -1176,13 +1181,13 @@ static void handleRx() {
               r->calcAnchorImport = r->import_; r->calcAnchorExport = r->export_;
               r->calcAnchorMs = nowMs;
               r->calcPower = 0x7FFFFFFF;
-            } else if (dtMs >= CALC_POWER_WINDOW_MS) {
+            } else if (dtMs >= CALC_POWER_WINDOW_MS && (dImp != 0 || dExp != 0)) {
               double w = (double)(dImp - dExp) * 3600000.0 / (double)dtMs;
               r->calcPower = (uint32_t)(int32_t)lround(w);
               r->calcAnchorImport = r->import_; r->calcAnchorExport = r->export_;
               r->calcAnchorMs = nowMs;
             }
-            // else: window not full yet -- keep the previous calcPower, don't slide the anchor
+            // else: window not full yet OR counters unchanged -- keep the previous calcPower and anchor
           }
         } else {
           Serial.print("  energy undecoded. raw: "); hexdump(d + 4, plen); Serial.println();
