@@ -26,11 +26,21 @@ try:
     from cryptography import x509
     from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
     from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.primitives.asymmetric import rsa, ec
 except ImportError:
     sys.exit("needs 'cryptography' -- pip install cryptography")
 
 UTC = datetime.timezone.utc
+
+# Key type used for every generated cert/key. EC (P-256) by default because the
+# permanent cert + key are handed back inside the AWS fleet-provisioning
+# `$aws/certificates/create/json/accepted` payload, and bridge firmware >= 1.8.1
+# rejects that payload if it is >= 4096 bytes ("cert ack too long, max:4096").
+# An RSA-2048 cert+key make that JSON ~3.4 KB (dangerously close, and larger certs
+# tip it over); a P-256 cert+key make it ~1.3 KB, well clear of the cap. P-256 is
+# supported by the device's mbedTLS on every firmware line, so it stays compatible
+# with the older (<=1.2.x) firmware too. Pass --rsa to force the old RSA-2048 keys.
+USE_EC = True
 
 
 def lan_ip() -> str:
@@ -45,6 +55,8 @@ def lan_ip() -> str:
 
 
 def _key():
+    if USE_EC:
+        return ec.generate_private_key(ec.SECP256R1())
     return rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
 
@@ -124,7 +136,14 @@ def main():
     ap.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "pki"))
     ap.add_argument("--template", default="TrustedUserProvTemplEnergyTracking")
     ap.add_argument("--thing-cn", default=None, help="CN for the claim cert (default: random 64-hex)")
+    ap.add_argument("--rsa", action="store_true",
+                    help="use RSA-2048 keys instead of EC P-256. NOT recommended: the RSA cert+key "
+                         "make the fleet-provisioning response ~3.4 KB, and bridge firmware >= 1.8.1 "
+                         "rejects a provisioning response >= 4096 bytes. Default (EC P-256) keeps it ~1.3 KB.")
     args = ap.parse_args()
+
+    global USE_EC
+    USE_EC = not args.rsa
 
     host = args.host or lan_ip()
     os.makedirs(args.out, exist_ok=True)

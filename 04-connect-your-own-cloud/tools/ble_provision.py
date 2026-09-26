@@ -308,10 +308,22 @@ async def wait_for_connection(link, cfg, timeout):
             d = {}
         cw = d.get("connected_wifi")
         if cw:
-            print(f"[+] device joined Wi-Fi (connected_wifi={cw!r}) -> now provisioning against "
-                  f"{target}. Watch the broker log for CONNECT -> register thing -> telemetry.")
-            show("StatusRequest (connected)", st)
-            return True
+            # Joined Wi-Fi -- but do NOT return yet. On bridge FW >= 1.8.1 the device stays in
+            # "config mode" (Wi-Fi + BLE both up) until it has fully provisioned; if we disconnect
+            # the BLE link now, the device leaves config mode and TEARS DOWN Wi-Fi (COM3 shows
+            # "wifi: run -> init" ~1 s after the BLE disconnect), aborting create-cert/register
+            # mid-flight. So keep the BLE link open (light Status polling) and wait for the device
+            # to actually finish: either persistent_cert_set flips true, or the device itself drops
+            # BLE (BleSwitch off = it went operational) -- both are success, and only then is it
+            # safe for us to disconnect.
+            if d.get("persistent_cert_set"):
+                print(f"[+] provisioning COMPLETE (persistent_cert_set=true, connected_wifi={cw!r}) "
+                      f"against {target}.")
+                show("StatusRequest (provisioned)", st)
+                return True
+            print(f"    joined Wi-Fi ({cw!r}); holding BLE open until provisioning completes "
+                  f"(persistent_cert_set still false)...")
+            continue
         print(f"    ...not connected yet (wifi_set={d.get('wifi_set')}, connected_wifi={cw})")
     print("[!] no Wi-Fi connection reported within the timeout. It may still connect -- check the "
           "broker log; otherwise re-check SSID/password and that the server IP matches the cert.")

@@ -382,7 +382,12 @@ def main():
 
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(os.path.join(args.pki, "server.crt"), os.path.join(args.pki, "server.key"))
-    ctx.verify_mode = ssl.CERT_OPTIONAL          # accept (and log) the device client cert, don't require
+    # CERT_NONE (not CERT_OPTIONAL): don't send a TLS CertificateRequest. Bridge FW >= 1.8.1 gives
+    # its create-cert connection only ~5 s to reach MQTT CONNECT; the extra round trip + P-256
+    # CertificateVerify from requesting the client cert push the Wi-Fi handshake past that, so the
+    # device drops right after CONNACK (issue #89). We don't need the client cert (local cloud); the
+    # device still verifies our server cert against the ble_config caPem.
+    ctx.verify_mode = ssl.CERT_NONE
     try:
         ctx.load_verify_locations(os.path.join(args.pki, "ca.pem"))
     except Exception:
@@ -393,23 +398,33 @@ def main():
     srv.bind((args.host, args.port))
     srv.listen(5)
     log(f"MQTTS server on {args.host}:{args.port}  (pki={args.pki})  -- waiting for the device")
+    def serve_conn(raw, addr):
+        # Do the TLS handshake in the per-connection thread (not the accept loop), with a timeout.
+        # Bridge FW >= 1.8.1 opens connections rapidly and can drop one mid-handshake during its
+        # provision->reconnect churn; handshaking in the accept loop would let one stalled/half-open
+        # handshake block the loop (or hang the server forever with no timeout). This keeps the
+        # server responsive to every attempt.
+        try:
+            raw.settimeout(15)                       # cap the handshake so a dead peer can't hang it
+            tls = ctx.wrap_socket(raw, server_side=True)
+            tls.settimeout(None)                     # blocking for the session (OTA streams for a while)
+        except (ssl.SSLError, OSError, socket.timeout) as e:
+            log(f"TLS handshake failed from {addr[0]}: {e}")
+            if "BAD_CERTIFICATE" in str(e) or "certificate" in str(e).lower():
+                log("  hint: the device rejected OUR server cert. Ensure gen_certs.py was run "
+                    "with --host = the IP the device connects to, AND re-push ble_config.json "
+                    "over BLE so the device has the matching caPem.")
+            try:
+                raw.close()
+            except Exception:
+                pass
+            return
+        handle(tls, addr, pki, args.push_shadow, set_interval, ota)
+
     try:
         while True:
             raw, addr = srv.accept()
-            try:
-                tls = ctx.wrap_socket(raw, server_side=True)
-            except (ssl.SSLError, OSError) as e:
-                log(f"TLS handshake failed from {addr[0]}: {e}")
-                if "BAD_CERTIFICATE" in str(e) or "certificate" in str(e).lower():
-                    log("  hint: the device rejected OUR server cert. Ensure gen_certs.py was run "
-                        "with --host = the IP the device connects to, AND re-push ble_config.json "
-                        "over BLE so the device has the matching caPem.")
-                try:
-                    raw.close()
-                except Exception:
-                    pass
-                continue
-            threading.Thread(target=handle, args=(tls, addr, pki, args.push_shadow, set_interval, ota), daemon=True).start()
+            threading.Thread(target=serve_conn, args=(raw, addr), daemon=True).start()
     except KeyboardInterrupt:
         log("shutting down")
     finally:
