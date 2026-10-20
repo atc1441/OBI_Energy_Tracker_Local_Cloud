@@ -158,6 +158,12 @@ static String g_ghLastError;
 // File-scope so statusJson() can report a countdown to the next check for the Settings page, alongside the
 // loop that actually owns/advances it.
 static uint32_t g_ghLastCheckMs = 0xFFFFFFFF;
+// Home Assistant MQTT update entity (see publishUpdateState()). g_ghLatestTag = newest release tag that has an
+// asset for this board, as last seen by ANY GitHub check (settings page, auto-update loop, or the release
+// check in mqttService()); empty = not checked yet. Only ever touched on webTask, like the PubSubClient.
+static String        g_ghLatestTag;
+static bool          g_updPubDirty  = true;    // republish <gw>/update on the next mqttService() pass
+static volatile bool g_ghInstallReq = false;   // set by the MQTT install command, consumed in mqttService()
 
 // Periodic FTP history backup: OFF by default. Every run uploads BOTH each reader's daily CSV (see
 // buildDailyCsv()) and its raw sample log (buildRawCsv() -- the same data the History page's "download raw
@@ -1048,6 +1054,7 @@ static void handleInterval() {
 
 static void publishDiscovery(const Reader &r);   // fwd: publish one reader's HA discovery config (immediate rename push)
 static void publishGatewayDiscovery();            // fwd: publish the gateway's own HA discovery config (immediate rename push)
+static void publishUpdateState(bool installing);  // fwd: HA update entity state on <gw>/update (ghStartOta)
 
 // Set (or clear, empty name) a reader's friendly display name. WebServer already url-decodes arg().
 static void handleName() {
@@ -1553,6 +1560,13 @@ static bool githubLatest(String &tag, String &url, int *codeOut = nullptr) {
   http.end();
   return tag.length() > 0;
 }
+// Remember a check's result for the HA update entity. Only releases that actually carry this board's asset
+// count -- otherwise HA would offer an install that ghOtaTask() can only fail ("no matching release asset").
+static void ghNoteLatest(const String &tag, const String &url) {
+  if (!tag.length() || !url.length() || tag == g_ghLatestTag) return;
+  g_ghLatestTag = tag;
+  g_updPubDirty = true;
+}
 static void handleGithubLatest() {
   String tag, url; int code = 0;
   bool got = githubLatest(tag, url, &code);
@@ -1562,6 +1576,7 @@ static void handleGithubLatest() {
   // Same reasoning as the retry ghOtaTask() applies to its own internal call to this function.
   if (got && tag.length() && !url.length()) got = githubLatest(tag, url, &code);
   if (!got) { server.send(200, "application/json", String("{\"ok\":false,\"code\":") + code + "}"); return; }
+  ghNoteLatest(tag, url);
   bool newer = verNewer(tag.c_str(), FW_VERSION);
   String j = "{\"ok\":true,\"version\":" + jstr(tag.c_str()) + ",\"current\":\"" + FW_VERSION +
              "\",\"asset\":" + String(url.length() ? "true" : "false") +
@@ -1738,17 +1753,27 @@ static void ghOtaTask(void *) {
   else otaHist_abortFlash();   // failed/rejected -- stay on current firmware, recover history right away
   vTaskDelete(nullptr);
 }
-static void handleGithubUpdate() {
-  if (g_ghState == 1) { server.send(200, "application/json", "{\"ok\":false,\"err\":\"busy\"}"); return; }
+// Start ghOtaTask() -- shared by the settings page, the auto-update loop and the HA update entity's install
+// command. Returns nullptr once the task is running, else a short error code. Must run on webTask: it
+// publishes the "in progress" update state on the shared PubSubClient right before ghOtaTask() drops MQTT.
+static const char *ghStartOta() {
+  if (g_ghState == 1) return "busy";
   // Mutual exclusion with FTP: both are heap/WiFi-heavy at the exact moment this device can least afford it
   // (see today's GitHub-OTA-reliability investigation -- a single TLS connection + Update.begin() already
   // needs ~65-70 KB of this board's ~320 KB RAM). An FTP backup happening to run at the same time would
   // compete for that same thin margin, so simply refuse to start until it's done rather than risk both.
-  if (g_ftpBusy) { server.send(200, "application/json", "{\"ok\":false,\"err\":\"ftpbusy\"}"); return; }
+  if (g_ftpBusy) return "ftpbusy";
+  publishUpdateState(true);
   g_ghState = 1; g_ghDone = 0; g_ghTotal = 0;
   if (xTaskCreate(ghOtaTask, "ghota", 10240, nullptr, 4, nullptr) != pdPASS) {
-    g_ghState = 0; server.send(200, "application/json", "{\"ok\":false,\"err\":\"task\"}"); return;
+    g_ghState = 0; g_updPubDirty = true;   // take the "in progress" back on the next mqttService() pass
+    return "task";
   }
+  return nullptr;
+}
+static void handleGithubUpdate() {
+  const char *err = ghStartOta();
+  if (err) { server.send(200, "application/json", String("{\"ok\":false,\"err\":\"") + err + "\"}"); return; }
   server.send(200, "application/json", "{\"ok\":true,\"started\":true}");
 }
 static void handleGithubProgress() {
@@ -4673,13 +4698,40 @@ static void runPortal() {
 //   <base>/gateway/<gwid>          -> gateway state JSON (temp, uptime, heap, rssi)
 //   <base>/gateway/<gwid>/status   -> availability (LWT online/offline)
 //   <base>/gateway/<gwid>/reboot   -> command topic (payload ignored) -> restart
+//   <base>/gateway/<gwid>/update   -> HA update entity state JSON (installed/latest version, retained)
+//   <base>/gateway/<gwid>/update/install -> command topic (payload "install") -> GitHub OTA
 //   <base>/<id>                    -> reader state JSON
 //   <base>/<id>/status             -> PER-READER availability (online/offline, retained)
 static String gwStateTopic() { return String(g_mqttTopic) + "/gateway/" + gwId(); }
 static String avtTopic()     { return gwStateTopic() + "/status"; }
 static String rebootTopic()  { return gwStateTopic() + "/reboot"; }
 static String authTopic()    { return gwStateTopic() + "/auth"; }
+static String updTopic()     { return gwStateTopic() + "/update"; }
+static String installTopic() { return updTopic() + "/install"; }
 static String rdrAvtTopic(const String &id) { return String(g_mqttTopic) + "/" + id + "/status"; }
+
+// State of the HA update entity, in the JSON format HA's MQTT update platform reads from its state topic.
+// latest_version is left out until a GitHub check has found a release for this board -- HA then keeps the
+// entity "unknown" instead of claiming up to date. ghOtaTask() drops MQTT for the whole download, so there is
+// no update_percentage: in_progress=true is sent once before the download, and the next publish after the
+// reconnect (failure) or reboot (success) clears it again.
+static void publishUpdateState(bool installing) {
+  if (!mqtt.connected()) return;
+  String j = "{\"installed_version\":\"" FW_VERSION "\"";
+  if (g_ghLatestTag.length()) {
+    String v = g_ghLatestTag;
+    while (v.startsWith("v") || v.startsWith("V")) v.remove(0, 1);   // tags are "v1.2.70", FW_VERSION "1.2.70"
+    j += ",\"latest_version\":" + jstr(v.c_str());
+    // HA validates release_url as a URL and drops the WHOLE message if it isn't one, so only send it for a
+    // plain "owner/repo" (the repo field is free text in the settings).
+    String repo = ghRepoNorm();
+    int s = repo.indexOf('/');
+    if (s > 0 && s == repo.lastIndexOf('/') && s < (int)repo.length() - 1 && repo.indexOf(' ') < 0 && repo.indexOf('"') < 0)
+      j += ",\"release_url\":" + jstr(("https://github.com/" + repo + "/releases/tag/" + g_ghLatestTag).c_str());
+  }
+  j += String(",\"in_progress\":") + (installing ? "true" : "false") + "}";
+  if (mqtt.publish(updTopic().c_str(), j.c_str(), true)) { g_mqttPubCount++; g_mqttLastPubMs = millis(); }
+}
 
 // ---- per-reader availability ----------------------------------------------
 // A reader that stops transmitting (flat/loose batteries, out of range) simply stops producing energy
@@ -4716,6 +4768,12 @@ static void publishAuthEvent(const String &user) {
 static void mqttCallback(char *topic, byte *payload, unsigned int len) {
   String t(topic);
   if (t == rebootTopic()) { Serial.println("[mqtt] rx reboot command"); delay(150); ESP.restart(); }
+  // HA update entity "Install". Only flagged here: ghOtaTask() disconnects this very PubSubClient, so it is
+  // started from mqttService() once mqtt.loop() has returned (see there), never from inside the callback.
+  if (t == installTopic()) {
+    if (len == 7 && !memcmp(payload, "install", 7)) g_ghInstallReq = true;
+    return;
+  }
   String base = String(g_mqttTopic) + "/";
   if (!t.startsWith(base)) return;
   String rest = t.substring(base.length());              // "<id>/set_interval"
@@ -4957,6 +5015,13 @@ static void publishGatewayDiscovery() {
     String p = "{\"name\":\"Original name\",\"uniq_id\":\"" + uid + "_orig_name\",\"stat_t\":\"" + stt +
                "\",\"val_tpl\":\"{{ value_json.gw_name }}\",\"icon\":\"mdi:factory\",\"ent_cat\":\"diagnostic\"" + availa + "," + dev + "}";
     mqtt.publish(t.c_str(), p.c_str(), true); }
+  // firmware update — HA's update platform: state JSON from publishUpdateState(), "Install" publishes
+  // "install" to the command topic, which pulls the newest GitHub release (same path as Settings -> Firmware)
+  { String t = "homeassistant/update/" + uid + "/firmware/config";
+    String p = "{\"name\":\"Firmware update\",\"uniq_id\":\"" + uid + "_fw_update\",\"stat_t\":\"" + updTopic() +
+               "\",\"cmd_t\":\"" + installTopic() + "\",\"pl_inst\":\"install\",\"dev_cla\":\"firmware\""
+               ",\"title\":\"Open OBI gateway firmware\",\"ent_cat\":\"config\"" + availa + "," + dev + "}";
+    mqtt.publish(t.c_str(), p.c_str(), true); }
 }
 
 // Remove a reader's discovery entities from HA by publishing empty retained configs, and drop its retained
@@ -5015,8 +5080,10 @@ static void mqttService() {
       String sub = String(g_mqttTopic) + "/+/set_interval";     // one wildcard level = reader id
       mqtt.subscribe(sub.c_str());
       mqtt.subscribe(rebootTopic().c_str());                    // <base>/gateway/<gwid>/reboot
+      mqtt.subscribe(installTopic().c_str());                   // <base>/gateway/<gwid>/update/install
       mqtt.publish(avt.c_str(), "online", true);
       publishGatewayDiscovery();
+      g_updPubDirty = true;                                     // (re)assert the update state, see below
       for (int i = 0; i < MAX_READERS; i++) { readers[i].mqttDiscovered = false;   // re-announce after (re)connect
                                               readers[i].mqttAvail = -1; }         // ...and re-assert online/offline
       Serial.printf("[mqtt] connected as %s, subscribed %s + reboot\n", cid.c_str(), sub.c_str());
@@ -5025,6 +5092,29 @@ static void mqttService() {
   }
   if (mqtt.connected()) {
     mqtt.loop();
+    // HA update entity: "Install" (flagged by mqttCallback). Ignored unless a newer release is actually known --
+    // HA itself only offers Install then, and this also keeps a stray retained "install" from re-flashing on
+    // every reconnect. On success ghOtaTask() takes MQTT down right away, so leave this pass immediately.
+    if (g_ghInstallReq) {
+      g_ghInstallReq = false;
+      if (g_ghLatestTag.length() && verNewer(g_ghLatestTag.c_str(), FW_VERSION)) {
+        const char *err = ghStartOta();
+        Serial.printf("[mqtt] rx update install -> %s\n", err ? err : "started");
+        if (!err) return;
+      } else Serial.println("[mqtt] rx update install ignored: no newer release known");
+    }
+    // Release check for the HA update entity's latest_version: one minute after the first connect, then every
+    // g_ghIntervalH hours (the auto-update interval). Only a lookup -- installing stays with the user (or with
+    // the auto-update loop, if they enabled it). A failed lookup retries after an hour.
+    { static uint32_t relDueMs = 0; static bool relArmed = false;
+      if (!relArmed) { relArmed = true; relDueMs = now + 60000UL; }
+      if (!g_ftpBusy && (int32_t)(now - relDueMs) >= 0) {
+        String tag, url;
+        bool ok = githubLatest(tag, url) && url.length();
+        relDueMs = millis() + (ok ? g_ghIntervalH * 3600000UL : 3600000UL);
+        if (ok) ghNoteLatest(tag, url);
+      } }
+    if (g_updPubDirty) { g_updPubDirty = false; publishUpdateState(false); }
     // Gateway state (retained) — temp, uptime, heap, wifi rssi, reader counts; keyed by MAC via the topic.
     // Slow-moving, so it stays on the fixed g_pubEvery cadence and does NOT need to track the reader rate.
     // Two reader counts: readers_all = every reader we've heard (bound or greyed), readers_bound = only the
@@ -5366,10 +5456,11 @@ static void webTask(void *) {
       if (nowMs - g_ghLastCheckMs >= g_ghIntervalH * 3600000UL) {
         g_ghLastCheckMs = nowMs;
         String tag, url;
-        if (githubLatest(tag, url) && url.length() && verNewer(tag.c_str(), FW_VERSION)) {
+        bool got = githubLatest(tag, url) && url.length();
+        if (got) ghNoteLatest(tag, url);
+        if (got && verNewer(tag.c_str(), FW_VERSION)) {
           Serial.printf("[gh] auto-update: %s -> %s (%s)\n", FW_VERSION, tag.c_str(), ghRepoNorm().c_str());
-          g_ghState = 1; g_ghDone = 0; g_ghTotal = 0;
-          xTaskCreate(ghOtaTask, "ghota", 10240, nullptr, 4, nullptr);
+          ghStartOta();
         } else Serial.println("[gh] auto-update: no newer release");
       }
     }

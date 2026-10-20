@@ -300,6 +300,15 @@ JSON above; each discovery entity just points a `value_template` at one of its f
   - **Binary sensors** (diagnostic): Optical sensor, Paired, Legacy protocol, Bootloader mode.
   - **Number — Upload interval**: writes seconds to `‹base›/‹id›/set_interval`, so you can change the interval
     straight from Home Assistant (1–65535 s).
+- The gateway itself shows up as its own device *"OBI Gateway ‹gwid›"* (diagnostics, Restart button, …) and
+  carries an **Update — Firmware update** entity: HA shows *installed* vs. *latest* release and an **Install**
+  button that pulls the newest GitHub release for this board — the same path as **Settings → Firmware**
+  (it honours the repo set there, e.g. your fork). The latest release is looked up one minute after MQTT
+  connects and then every auto-update interval (default 24 h); this is only a lookup, nothing is installed
+  unless you press Install (or turned on auto-update). State JSON is retained on
+  `‹base›/gateway/‹gwid›/update`, Install publishes `install` to `‹base›/gateway/‹gwid›/update/install`.
+  MQTT is paused while the image downloads, so HA shows the install as running (no %) until the gateway is
+  back on the new version.
 - Discovery is (re)sent automatically after every MQTT (re)connect and when a new reader first reports. The
   MQTT panel also has a **"Send discovery"** button next to *Save* to push all configs on demand.
 - Import/export are reported as raw **Wh** (`total_increasing`), matching the meter's native unit — divide by
@@ -729,6 +738,15 @@ bleibt die eine JSON oben; jede Discovery-Entity zeigt nur mit einem `value_temp
   - **Binärsensoren** (Diagnose): Optical sensor, Paired, Legacy protocol, Bootloader mode.
   - **Number — Upload interval**: schreibt Sekunden auf `‹base›/‹id›/set_interval`, sodass du das Intervall
     direkt aus Home Assistant ändern kannst (1–65535 s).
+- Das Gateway selbst erscheint als eigenes Gerät *„OBI Gateway ‹gwid›"* (Diagnose, Restart-Button, …) und hat
+  eine **Update-Entität „Firmware update"**: HA zeigt *installierte* und *neueste* Release-Version sowie einen
+  **Installieren**-Button, der das neueste GitHub-Release für dieses Board zieht — derselbe Weg wie
+  **Einstellungen → Firmware** (inkl. des dort eingestellten Repos, z. B. eines Forks). Das neueste Release
+  wird eine Minute nach dem MQTT-Connect und danach im Auto-Update-Intervall (Standard 24 h) abgefragt — nur
+  nachgeschaut, installiert wird erst nach Klick auf Installieren (oder mit aktiviertem Auto-Update). Der
+  Status liegt retained auf `‹base›/gateway/‹gwid›/update`, Installieren publiziert `install` auf
+  `‹base›/gateway/‹gwid›/update/install`. Während des Downloads ist MQTT pausiert, HA zeigt das Update daher
+  als laufend (ohne %), bis das Gateway mit der neuen Version zurück ist.
 - Discovery wird nach jedem MQTT-(Neu-)Connect und beim ersten Melden eines neuen Readers automatisch (neu)
   gesendet. Im MQTT-Panel gibt es neben *Speichern* zusätzlich einen **„Discovery senden"**-Button, um alle
   Configs auf Knopfdruck zu pushen.
