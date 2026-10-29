@@ -165,18 +165,29 @@ int main(int argc, char **argv) {
     bthome_configure(); assert(web.code == 503);
     statusContains("\"enabled\":true");
     testStorageFail = false;
-    bthome_init(&web);
+    bthome_init(&web);                 // a reboot that still finds BTHome on: the radio keeps its RAM
     capture(1);
-    assert(sequence() >= 4096 && sequence() > previous);
-    previous = sequence();
-    bthome_reset(); bthome_service();
-    assert(!testAdvertising.isAdvertising());
-    bthome_init(&web); configure(); capture(2);
-    assert(sequence() >= 8192 && sequence() > previous);
+    assert(sequence() >= 4096 && sequence() > previous);   // resumes at the next reserved block
     bthome_init(&web);
-    testStorageFail = true; capture(3);
+    testStorageFail = true; capture(2);
     assert(!testAdvertising.isAdvertising());
     statusContains("Counter persistence failed");
+    return 0;
+  }
+  // A factory reset drops the configuration, keeps the counter and hands the radio's RAM back, so like
+  // any other switch-off it can only start again after a reboot. That the counter then carries on at the
+  // next reserved block is what the "storage" scenario above checks.
+  if (!strcmp(argv[1], "factory_reset")) {
+    assert(testAdvertising.isAdvertising());
+    bthome_reset(); bthome_service();
+    assert(!testAdvertising.isAdvertising());
+    assert(testStorage["obible"].empty());
+    assert(testStorage["obiblecount"].count("high") == 1);
+    assert(testBleDeinitCalls == 1 && testBtReleases == 1);
+    bthome_init(&web); configure();
+    statusContains("\"reboot_required\":true");
+    capture(1);
+    assert(!testAdvertising.isAdvertising());
     return 0;
   }
   if (!strcmp(argv[1], "key_rotation")) {
