@@ -2,6 +2,7 @@
 // Runs on its own FreeRTOS task pinned to core 0 so the HTTP/MQTT work never stutters the
 // LoRa gateway (which runs on the Arduino loop, core 1).
 #include "gateway_web.h"
+#include "bthome_ble.h"
 #include "reader.h"
 #include "flash_dbg.h"
 #include <WiFi.h>
@@ -4577,6 +4578,10 @@ static void startServices() {
   // default, and answers 404 while disabled. The config endpoint stays behind the guard like the rest.
   server.on("/v1/json", HTTP_GET, eco_handle_v1json);
   server.on("/api/ecotracker", HTTP_POST, guard(eco_handle_cfg));
+#ifdef OBI_BTHOME
+  server.on("/api/bthome", HTTP_GET, guard(bthome_status));
+  server.on("/api/bthome", HTTP_POST, guard(bthome_configure));
+#endif
   static const char *collectHdrs[] = { "Cookie" };
   server.collectHeaders(collectHdrs, 1);   // needed so server.header("Cookie") works for the login session
   }   // end one-time route registration
@@ -5399,6 +5404,7 @@ static void webTask(void *) {
   g_fsOk = bootHistoryFS();          // OTA-tail store where supported, else a spare data partition (userdata/…)
   if (!g_fsOk) Serial.println("[web] history: no usable data partition — logging disabled");
   eco_init(&server);                 // load the EcoTracker-emulation config before its routes register
+  bthome_init(&server);
   startServices();                   // dashboard is ALWAYS up (connected STA or the setup AP)
 #ifdef OBI_HAS_EPD
   xTaskCreatePinnedToCore(epdTask, "epd", 4096, nullptr, 1, nullptr, 1);   // slow panel refresh off this loop
@@ -5406,6 +5412,7 @@ static void webTask(void *) {
 
   for (;;) {
     if (g_portalReq) { g_portalReq = false; runPortal(); }   // WiFi button pressed -> open the WM portal
+    bthome_service();
     // Watch WiFi transitions (e.g. after an in-dashboard connect): drop the setup AP once connected,
     // raise it again if WiFi is lost — so the dashboard is always reachable (STA IP or 192.168.4.1).
     bool conn = WiFi.status() == WL_CONNECTED;
@@ -5502,6 +5509,7 @@ bool web_night_mode() { return g_nightMode; }
 // case-button factory reset (main.cpp) — the only user input available on a closed, non-reflashable
 // unit. Clears WiFiManager's saved SSID/PSK and our MQTT settings; the caller reboots afterwards.
 void web_factory_reset() {
+  bthome_reset();
   wm.resetSettings();                 // erase saved WiFi credentials (WiFiManager NVS)
   prefs.begin("obigw", false);        // erase MQTT host/port/user/pass/topic + web login + tz + price
   prefs.clear();

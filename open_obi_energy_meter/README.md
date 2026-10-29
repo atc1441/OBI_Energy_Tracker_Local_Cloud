@@ -1,6 +1,10 @@
 <a name="english"></a>
 # Open OBI Energy Meter — ESP32 + SX1262 LoRa gateway
 
+Optional encrypted BLE power output for the original gateway:
+[BTHome build, configuration and validation](BTHOME.md).
+Experimental; physical OBI hardware validation is pending.
+
 A **standalone firmware** for any ESP32 + Semtech SX1262 that fully **replaces the OBI/heyOBI bridge**.
 It speaks the reader's proprietary LoRa protocol directly (pairing, ECDH, TEA decryption, energy decode),
 serves a **web dashboard + MQTT**, lets you **set each reader's upload interval**, and can **flash reader

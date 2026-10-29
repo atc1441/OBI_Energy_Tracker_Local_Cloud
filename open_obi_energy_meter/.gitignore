@@ -11,3 +11,4 @@ platformio.local.ini
 # CI staging dir for release binaries (.github/workflows/build.yml)
 dist/
 PROJECT_NOTES.md
+examples/bthome_c3/bench_secrets.h

@@ -28,6 +28,7 @@
 #include "gateway_web.h"
 #include "flash_dbg.h"
 #include "status_led.h"
+#include "bthome_ble.h"
 #include <Preferences.h>
 
 // ---- reversed OBI radio configuration --------------------------------------
@@ -392,6 +393,7 @@ bool gw_delete_reader(const uint8_t handle[3]) {
   bool found = false;
   for (auto &r : readers)
     if (r.used && !memcmp(r.handle, handle, 3)) { r.assigned = false; r.haveKey = false; r.used = false; found = true; }
+  bthome_forget(handle);
   return found;
 }
 // Accept (or drop) a reader onto this gateway. Persisted, so it auto-binds/keys on the next announce and
@@ -401,7 +403,7 @@ bool gw_assign_reader(const uint8_t handle[3], bool on) {
   for (auto &r : readers)
     if (r.used && !memcmp(r.handle, handle, 3)) {
       r.assigned = on;
-      if (!on) { r.haveKey = false; r.decoded = false; }
+      if (!on) { r.haveKey = false; r.decoded = false; bthome_forget(handle); }
       return true;
     }
   return true;   // persisted even if the reader isn't currently in the live list
@@ -1143,6 +1145,7 @@ static void handleRx() {
             r->lastEnergyMs = nowMs;
             r->softver = nSoftver; r->hardver = nHardver; r->battery_mV = nBattery_mV; r->flags = nFlags;
             r->import_ = nImport; r->export_ = nExport; r->power = powerSane ? nPower : 0x7FFFFFFF;
+            bthome_capture(*r);
             if (newBaseline) {   // don't let calcPower average across the jump -- restart its window here
               r->calcAnchorImport = nImport; r->calcAnchorExport = nExport;
               r->calcAnchorMs = nowMs; r->haveCalcAnchor = true;
