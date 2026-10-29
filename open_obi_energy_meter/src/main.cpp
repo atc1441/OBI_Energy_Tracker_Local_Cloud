@@ -283,7 +283,11 @@ struct Rlog { uint32_t seq, ms; char dir; uint8_t h[3]; int16_t cmd, len, rssi, 
               uint8_t rawLen; uint8_t raw[RAW_MAX];
               uint8_t decLen; uint8_t dec[DEC_MAX];      // dec: TEA-decrypted energy payload, if any (see gw_radio_log_dec)
               char decInfo[DECINFO_MAX]; };               // decInfo: byte-range-annotated field breakdown of dec, e.g. "[6:10]imp=..."
-static const int RLOG_N = 96;     // ~96 * ~310 B ≈ 29 KB RAM; client keeps its own 800-row history anyway
+#ifndef OBI_RADIO_LOG_ENTRIES
+#define OBI_RADIO_LOG_ENTRIES 32
+#endif
+static_assert(OBI_RADIO_LOG_ENTRIES > 0, "Radio log must retain entries");
+static const int RLOG_N = OBI_RADIO_LOG_ENTRIES;
 static Rlog g_rl[RLOG_N];
 static volatile uint32_t g_rlSeq = 0;
 static int g_rlHead = 0;

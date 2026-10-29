@@ -1,0 +1,267 @@
+<!doctype html><html><head><meta charset=utf-8><link rel=icon href=/favicon.svg>
+<meta name=viewport content='width=device-width,initial-scale=1'><title>Open OBI Energy Tracker — Flash Debug</title><style>
+:root{--bg:#0a0e14;--panel:#141a23;--panel2:#1b2430;--line:#232e3c;--txt:#eaf0f7;--dim:#7d8da0;--accent:#31d07a;--amber:#e3b341;--red:#f0616d;--blue:#5aa9ff;--purple:#b48cff;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+*{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:0;background:var(--bg);color:var(--txt)}
+header{display:flex;align-items:center;gap:12px;padding:11px 16px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+header b{font-size:15px}header a{color:var(--accent);text-decoration:none;font-size:13px}.sp{flex:1}
+.bar{display:flex;gap:7px;flex-wrap:wrap;align-items:center;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:47px;z-index:4}
+input,select,button{background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:7px 9px;font-family:var(--mono);font-size:13px}
+input:focus,select:focus{outline:1px solid var(--accent)}button{cursor:pointer}
+button.p{background:var(--accent);border-color:var(--accent);color:#052012;font-weight:700}
+button.d{background:#3a1414;border-color:#5c2020;color:#ffbcbc}button.d:hover{background:#521c1c}
+#addr{width:112px}.lbl{color:var(--dim);font-size:12px}
+.warn{color:#ffb4b4;font-size:12px;padding:8px 16px;background:#1c1210;border-bottom:1px solid #3a2320}
+.hexwrap{overflow:auto;max-height:calc(100vh - 210px)}
+table.hex{border-collapse:collapse;font-family:var(--mono);font-size:13px;white-space:nowrap}
+table.hex thead th{position:sticky;top:0;background:var(--panel);color:var(--dim);font-weight:600;padding:5px 4px;border-bottom:1px solid var(--line);text-align:center}
+table.hex td{padding:0 2px;text-align:center}td.off{color:var(--accent);padding:0 10px 0 14px;text-align:right;user-select:all}
+.hx{width:24px;text-align:center;background:transparent;border:1px solid transparent;border-radius:4px;color:var(--txt);font-family:inherit;font-size:13px;padding:2px 0}
+.hx:focus{outline:none;border-color:var(--accent)}.hx.ch{color:#052012;background:var(--amber);font-weight:700}
+.hx.z{color:#556}td.gap{padding:0 6px}.ascw{padding-left:12px;text-align:left!important;letter-spacing:1px}
+.ac{color:#9fb4a6}.ac.np{color:#4a5}.hi{background:#274!important;color:#fff!important;border-radius:3px}
+.hx.hi{background:#2b4a6b!important;color:#fff!important}
+#insp{display:flex;gap:16px;flex-wrap:wrap;padding:8px 16px;background:var(--panel);border-top:1px solid var(--line);font-family:var(--mono);font-size:12px;position:sticky;bottom:0}
+#insp b{color:var(--accent)}#insp span{color:var(--dim)}
+#efuse{display:none;padding:10px 16px;background:var(--panel2);border-bottom:1px solid var(--line);font-family:var(--mono);font-size:12.5px}
+#efuse.show{display:block}#efuse table{border-collapse:collapse}#efuse td{padding:2px 14px 2px 0}
+.ok{color:var(--accent)}.bad{color:var(--red);font-weight:700}
+#msg{color:#9fd;font-size:12px;margin-left:4px}
+.seg{display:flex;background:var(--panel2);border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.seg button{background:transparent;border:0;border-radius:0;color:var(--dim);padding:6px 10px;cursor:pointer;font-size:12px;font-weight:600}
+.seg button.act{background:var(--accent);color:#04140a}
+.mapwrap{padding:16px 18px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+.card h2{margin:0 0 3px;font-size:15px}.cap{color:var(--dim);font-size:12px;margin:0 0 12px}
+.mgrid{display:grid;grid-template-columns:repeat(64,1fr);gap:2px;margin-bottom:8px}
+.blk{height:11px;border-radius:1px;border:1px solid #0006;cursor:crosshair}
+.mapinfo{font-family:var(--mono);font-size:12.5px;color:var(--dim);background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 11px;margin-bottom:10px;min-height:17px}
+.mapinfo b{color:var(--txt)}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12.5px;color:var(--dim);margin-top:10px}
+.legend i{display:inline-block;width:13px;height:13px;border-radius:3px;margin-right:6px;vertical-align:-2px;border:1px solid #0006}
+.ptable{width:100%;border-collapse:collapse;font-size:13px;margin-top:4px}
+.ptable th,.ptable td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+.ptable th{color:var(--dim);font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.03em}
+.tag{display:inline-block;font-size:10.5px;padding:1px 6px;border-radius:5px;background:var(--panel2);color:var(--dim);margin-left:6px}
+.tag.on{background:#12351f;color:var(--accent)}
+.fwused{background:var(--accent)}.histused{background:var(--amber)}
+.histfree{background:#2a3f2a}.histidle{background:var(--purple);opacity:.45}.sys{background:#39465a}.gap{background:#050709}
+.tailused{background:#ff6fae}
+.sysnvs{background:var(--blue)}.sysota{background:#3ddbd9}.sysphy{background:#e08a4f}.syscore{background:var(--red)}
+.empty{color:var(--dim);padding:20px;text-align:center}
+@media (max-width:760px){
+ header,.bar{position:static}                    /* both scroll away → full height for the hex view */
+ header{flex-wrap:wrap;gap:8px;padding:11px 13px}.sp{display:none}
+ header a{flex:0 0 auto}
+ .bar{gap:7px;padding:10px 13px}
+ .bar input,.bar select,.bar button,header a{font-size:16px}  /* comfy taps + no iOS zoom (hex byte cells kept small) */
+ #addr{width:auto;flex:1 1 120px}
+ .bar button,.bar select{flex:1 1 auto}
+ .hexwrap{max-height:none}                        /* page scrolls vertically; hex table scrolls sideways in its box */
+ #insp{position:static}
+ .warn{font-size:11.5px;padding:8px 12px}
+ .mgrid{grid-template-columns:repeat(24,1fr)}
+}
+</style></head><body>
+<header><b>Open OBI Energy Tracker · 🐞 Flash Debug</b><span class=lbl id=chip></span><span class=sp></span>
+<span class=seg><button id=lde onclick="setL('de')">DE</button><button id=len onclick="setL('en')">EN</button></span>
+<a href="/update" id=lfw>firmware ⬆</a><a href="/" id=ldash>← dashboard</a></header>
+<div class=bar>
+<span class=lbl>addr</span><input id=addr value=0x0><button onclick=go()>Go</button>
+<button onclick=page(-1)>◀</button><button onclick=page(1)>▶</button>
+<select id=vlen><option>256<option selected>512<option>1024<option>2048<option>4096</select>
+<select id=parts onchange=jump()></select>
+<button class=p onclick=doWrite()>Write <span id=ec>0</span></button>
+<button class=d onclick=doErase()>Erase sector</button>
+<button onclick=doSave()>Save .bin</button><button class=p onclick=dumpAll()>Dump full flash</button><button onclick=efuse()>eFuses</button>
+<span id=msg></span></div>
+<div class=warn>⚠ Raw flash — writing the wrong offset (bootloader 0x0, partition table 0x8000, running app) can brick the device. Only edited (yellow) bytes are written: read-modify-erase-write per 4 KB sector.</div>
+<div id=efuse></div>
+<div class=hexwrap><table class=hex><thead><tr id=head></tr></thead><tbody id=body></tbody></table></div>
+<div id=insp><span>click a byte</span></div>
+<div class=mapwrap id=mapmain><div class=empty>…</div></div>
+<script>
+const $=i=>document.getElementById(i);
+const h2=n=>n.toString(16).toUpperCase().padStart(2,'0'),h8=n=>('00000000'+n.toString(16).toUpperCase()).slice(-8);
+let SIZE=0,base=0,vlen=512,data=new Uint8Array(0),edits={},hi=null;
+const api=(u,o)=>fetch(u,o).then(r=>r.json());
+function msg(t){$('msg').textContent=t;}
+function esc(v){if(v<32||v>126)return'.';return v===38?'&amp;':v===60?'&lt;':v===62?'&gt;':String.fromCharCode(v);}
+function ecount(){let n=Object.keys(edits).length;$('ec').textContent=n;}
+function getb(a){let v=edits[a];if(v!==undefined)return v;let i=a-base;return(i>=0&&i<data.length)?data[i]:undefined;}
+async function loadInfo(){let r=await api('/api/flash/info');SIZE=r.size;
+$('parts').innerHTML='<option value="">— partition —</option>'+r.parts.map(p=>`<option value="${p.off}:${p.size}">${p.label} @0x${p.off.toString(16)} · ${p.size/1024|0}K</option>`).join('');
+let hh='<th>OFFSET</th>';for(let i=0;i<16;i++)hh+=`<th class="${i==8?'gap':''}">${h2(i)}</th>`;hh+='<th class=ascw>ASCII</th>';$('head').innerHTML=hh;
+msg('flash '+(SIZE/1024|0)+'K');}
+async function read(){vlen=+$('vlen').value;data=new Uint8Array(vlen);
+for(let o=0;o<vlen;o+=4096){let n=Math.min(4096,vlen-o);let r=await api(`/api/flash/read?addr=${base+o}&len=${n}`);
+if(!r.ok){msg('read failed');return;}for(let i=0;i<n;i++)data[o+i]=parseInt(r.hex.substr(i*2,2),16);}
+render();msg(`@0x${base.toString(16)} · ${vlen} B`);}
+function render(){let rows='';for(let o=0;o<data.length;o+=16){let cells='',asc='';
+for(let i=0;i<16;i++){let a=base+o+i,v=getb(a),ed=edits[a]!==undefined;
+let cl='hx'+(ed?' ch':(v===0?' z':''));
+cells+=`<td class="${i==8?'gap':''}"><input class="${cl}" maxlength=2 data-a=${a} value=${h2(v)}></td>`;
+asc+=`<span class="ac${(v<32||v>126)?' np':''}" data-a=${a}>${esc(v)}</span>`;}
+rows+=`<tr><td class=off>${h8(base+o)}</td>${cells}<td class=ascw>${asc}</td></tr>`;}
+$('body').innerHTML=rows;ecount();}
+function go(){let a=parseInt($('addr').value)||0;base=Math.max(0,Math.min(a,SIZE-16))&~0xf;$('addr').value='0x'+base.toString(16);read();}
+function page(d){base=Math.max(0,Math.min(base+d*vlen,(SIZE-vlen)&~0xf));$('addr').value='0x'+base.toString(16);read();}
+function jump(){let v=$('parts').value;if(!v)return;base=+v.split(':')[0]&~0xf;$('addr').value='0x'+base.toString(16);read();}
+$('vlen').onchange=read;
+// edit + select + hover via delegation
+$('body').addEventListener('input',e=>{if(!e.target.classList.contains('hx'))return;
+let a=+e.target.dataset.a,v=parseInt(e.target.value,16);if(isNaN(v))return;v&=255;
+let base0=(a-base>=0&&a-base<data.length)?data[a-base]:0;
+if(v===base0)delete edits[a];else edits[a]=v;
+e.target.classList.toggle('ch',edits[a]!==undefined);
+let ac=$('body').querySelector(`.ac[data-a="${a}"]`);if(ac){ac.innerHTML=esc(v);ac.classList.toggle('np',v<32||v>126);}
+ecount();});
+$('body').addEventListener('focusin',e=>{if(e.target.dataset.a)inspect(+e.target.dataset.a);});
+$('body').addEventListener('mouseover',e=>{let a=e.target.dataset.a;if(!a||a===hi)return;paint(hi,false);paint(a,true);hi=a;});
+function paint(a,on){if(a==null)return;$('body').querySelectorAll(`[data-a="${a}"]`).forEach(x=>x.classList.toggle('hi',on));}
+function inspect(a){let v=getb(a);if(v===undefined){$('insp').innerHTML='<span>—</span>';return;}
+let v16=getb(a),v16b=getb(a+1),u16=(v16b<<8|v16)>>>0;
+let b=[getb(a),getb(a+1),getb(a+2),getb(a+3)],u32=b.some(x=>x===undefined)?null:((b[3]<<24|b[2]<<16|b[1]<<8|b[0])>>>0);
+$('insp').innerHTML=`<b>0x${h8(a)}</b><span>u8</span> 0x${h2(v)} · ${v} · ${v.toString(2).padStart(8,'0')} · '${esc(v)}'`+
+`<span>u16 LE</span> 0x${u16.toString(16).toUpperCase()} · ${u16}`+(u32!==null?`<span>u32 LE</span> 0x${u32.toString(16).toUpperCase()} · ${u32}`:'');}
+async function doWrite(){let ks=Object.keys(edits).map(Number).sort((a,b)=>a-b);if(!ks.length){msg('no edits');return;}
+if(!confirm('Write '+ks.length+' byte(s) to flash?'))return;
+let runs=[],cur=null;for(let k of ks){if(cur&&k===cur.off+cur.data.length)cur.data.push(edits[k]);else{cur={off:k,data:[edits[k]]};runs.push(cur);}}
+for(let r of runs){let hex=r.data.map(h2).join('');
+let j=await api('/api/flash/patch',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'addr='+r.off+'&data='+hex});
+if(!j.ok){msg('write FAILED @0x'+r.off.toString(16));return;}}
+edits={};msg('wrote '+ks.length+' byte(s)');read();}
+async function doErase(){let s=(parseInt($('addr').value)||base)&~0xfff;if(!confirm('Erase 4 KB sector @0x'+s.toString(16)+'?'))return;
+let j=await api('/api/flash/erase',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'addr='+s+'&len=4096'});
+msg(j.ok?'erased 0x'+s.toString(16):'erase failed');if(j.ok)read();}
+async function doSave(){let n=parseInt(prompt('Bytes to read & save from 0x'+base.toString(16),SIZE-base));if(!n)return;
+let out=new Uint8Array(n);for(let o=0;o<n;o+=4096){let m=Math.min(4096,n-o);let r=await api(`/api/flash/read?addr=${base+o}&len=${m}`);
+for(let i=0;i<m;i++)out[o+i]=parseInt(r.hex.substr(i*2,2),16);msg('reading '+(o+m)+'/'+n);}
+let a=document.createElement('a');a.href=URL.createObjectURL(new Blob([out]));a.download='flash_0x'+base.toString(16)+'_'+n+'.bin';a.click();msg('saved '+n+' B');}
+async function dumpAll(){if(!SIZE){msg('flash size unknown');return;}
+if(!confirm('Read the ENTIRE '+(SIZE/1024|0)+' KB flash (bootloader + partition table + all apps + NVS) and download it? This can take a while over WiFi.'))return;
+let out=new Uint8Array(SIZE);for(let o=0;o<SIZE;o+=4096){let m=Math.min(4096,SIZE-o);
+let r=await api(`/api/flash/read?addr=${o}&len=${m}`);if(!r.ok){msg('dump failed @0x'+o.toString(16));return;}
+for(let i=0;i<m;i++)out[o+i]=parseInt(r.hex.substr(i*2,2),16);
+if((o&0x3ffff)===0||o+m>=SIZE)msg('dumping '+((o+m)/1024|0)+'/'+(SIZE/1024|0)+' KB...');}
+let a=document.createElement('a');a.href=URL.createObjectURL(new Blob([out]));a.download='flash_full_'+(SIZE/1024|0)+'k.bin';a.click();msg('dumped full flash ('+SIZE+' bytes)');}
+async function efuse(){let e=$('efuse');if(e.classList.contains('show')){e.classList.remove('show');return;}
+let r=await api('/api/efuse');$('chip').textContent=r.chip+' rev'+r.rev+' · '+r.mac;
+let rows=Object.entries(r.fuses).map(([k,v])=>`<td>${k}</td><td class="${v?'bad':'ok'}">${v}</td>`);
+let dl=r.dl_locked?'<span class=bad>DISABLED (locked)</span>':'<span class=ok>available</span>';
+let html=`<b>${r.chip} rev${r.rev}</b> · MAC ${r.mac} · ROM download mode: ${dl}<table>`;
+for(let i=0;i<rows.length;i+=2)html+='<tr>'+rows[i]+(rows[i+1]||'')+'</tr>';
+e.innerHTML=html+'</table>';e.classList.add('show');}
+document.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'&&e.target.id!=='addr')return;
+if(e.key==='PageDown'){page(1);e.preventDefault();}else if(e.key==='PageUp'){page(-1);e.preventDefault();}});
+
+// ---- flash map ("defrag view"), merged into this page below the hex editor -----------------------------
+const MT={
+ de:{loading:'lädt…',loadErr:'Fehler beim Laden.',dash:'← Dashboard',fw:'Firmware ⬆',
+  title:n=>'Speicherkarte ('+n+' Flash gesamt)',
+  cap:n=>'Jeder Block ≈ '+n+'. Grün = Firmware-Bytes, Gelb = History-Daten, gedämpft-lila = History-Bereich der gerade inaktiven OTA-Bank (wird beim nächsten Update dorthin verschoben), die übrigen Farben = einzelne Systempartitionen (siehe Legende) statt einem grauen Block.',
+  legFwUsed:'Firmware (aktiv)',legHistUsed:'History belegt (bulk)',legHistFree:'History frei (bulk)',legHistIdle:'History (inaktive Bank, überschreibbar)',legTail:'Reserve — übersteht Updates',
+  legNvs:'NVS (WLAN/MQTT/Einstellungen)',legOtaData:'OTA-Data (Boot-Auswahl)',legPhy:'PHY-Init (Funk-Kalibrierung)',legCore:'Coredump (Absturz-Speicher)',legSys:'Sonstige Systempartition',
+  parts:'Partitionen',backend:'Rohdaten (Messpunkte) gerade gespeichert in:',beOta:'OTA-Bereich',beUser:'userdata (128 KB)',beNone:'keins',dailyNote:'Tageswerte liegen immer in userdata.',
+  label:'Label',addr:'Adresse',size:'Größe',details:'Details',idle:'(idle)',used:'belegt',
+  roleActive:'aktiv',roleInactive:'inaktiv',roleOther:'andere'},
+ en:{loading:'loading…',loadErr:'Failed to load.',dash:'← dashboard',fw:'firmware ⬆',
+  title:n=>'Flash map ('+n+' flash total)',
+  cap:n=>'Each block ≈ '+n+'. Green = firmware bytes, yellow = history data, dimmed purple = the history region on the currently INACTIVE OTA bank (moves there on the next update), the remaining colors are individual system partitions (see legend) instead of one gray block.',
+  legFwUsed:'Firmware (active)',legHistUsed:'History used (bulk)',legHistFree:'History free (bulk)',legHistIdle:'History (inactive bank, gets overwritten)',legTail:'Reserve — survives updates',
+  legNvs:'NVS (WiFi/MQTT/settings)',legOtaData:'OTA data (boot selector)',legPhy:'PHY init (radio calibration)',legCore:'Coredump (crash storage)',legSys:'Other system partition',
+  parts:'Partitions',backend:'Raw samples currently stored in:',beOta:'OTA region',beUser:'userdata (128 KB)',beNone:'none',dailyNote:'Daily summaries always live in userdata.',
+  label:'Label',addr:'Address',size:'Size',details:'Details',idle:'(idle)',used:'used',
+  roleActive:'active',roleInactive:'inactive',roleOther:'other'}
+};
+let mlang=localStorage.getItem('lang')||'de';
+function setL(x){localStorage.setItem('lang',x);location.reload();}
+function applyMapLang(){
+ $('lde').className=mlang==='de'?'act':'';$('len').className=mlang==='en'?'act':'';
+ $('lfw').textContent=MT[mlang].fw;$('ldash').textContent=MT[mlang].dash;
+}
+const mhex=n=>'0x'+n.toString(16).toUpperCase();
+const mkb=n=>(n/1024).toFixed(n<10240?1:0)+' KB';
+function mclassify(off,parts){
+ for(const p of parts){
+  if(off<p.addr||off>=p.addr+p.size)continue;
+  if(p.type===0){
+   if(p.bulk&&p.bulk.mounted){
+    // bulk is mounted starting at THIS partition's own address 0 -- there's no real firmware byte left
+    // here to show (mounting already overwrote/reformatted it), only raw-sample data.
+    if(p.tail&&off>=p.tail.addr)return{c:'tailused',p};
+    return off<p.bulk.addr+(p.bulk.used||0)?{c:'histused',p}:{c:'histfree',p};
+   }
+   // not mounted here (this is the ACTIVE partition, actually executing code -- or a genuinely idle one):
+   // show its real firmware, then whatever stale bulk/tail data is still physically sitting past it from
+   // an earlier stint as the inactive partition (superseded, gets overwritten on the next OTA into it).
+   const fwEnd=p.addr+(p.fw_used||0);
+   return off<fwEnd?{c:'fwused',p}:{c:'histidle',p};
+  }
+  if(p.label==='userdata'&&p.total){
+   return off<p.addr+(p.used||0)?{c:'histused',p}:{c:'histfree',p};
+  }
+  const sysCls={nvs:'sysnvs',otadata:'sysota',phy_init:'sysphy',coredump:'syscore'}[p.label];
+  return{c:sysCls||'sys',p};
+ }
+ return{c:'gap',p:null};
+}
+function mroleLabel(r){const t=MT[mlang];return r==='active'?t.roleActive:r==='inactive'?t.roleInactive:t.roleOther;}
+function mpartLine(p){
+ const t=MT[mlang];let extra='';
+ if(p.type===0){
+  const fwPct=(p.fw_used/p.size*100).toFixed(0);
+  extra=`<span class=tag${p.role==='active'?' on':''}>${mroleLabel(p.role)}</span><span class=tag>fw ${mkb(p.fw_used)} (${fwPct}%)</span>`;
+  if(p.bulk){const b=p.bulk;
+   extra+=`<span class=tag${b.mounted?' on':''}>raw bulk ${mkb(b.size)}${b.mounted?': '+mkb(b.used)+'/'+mkb(b.total)+' '+t.used:' '+t.idle}</span>`;}
+  if(p.tail){const tl=p.tail;
+   extra+=`<span class=tag${tl.mounted?' on':''}>raw tail ${mkb(tl.size)}${tl.mounted?' '+t.used:' '+t.idle}</span>`;}
+ } else if(p.label==='userdata'&&p.total){
+  extra=`<span class=tag on>daily: ${mkb(p.used)}/${mkb(p.total)} ${t.used}</span>`;
+ }
+ return `<tr><td>${p.label}</td><td class=mono>${mhex(p.addr)}</td><td class=mono>${mkb(p.size)}</td><td>${extra}</td></tr>`;
+}
+function mcatLabel(c,t){return{fwused:t.legFwUsed,histused:t.legHistUsed,histfree:t.legHistFree,histidle:t.legHistIdle,tailused:t.legTail,
+ sysnvs:t.legNvs,sysota:t.legOtaData,sysphy:t.legPhy,syscore:t.legCore,sys:t.legSys,gap:'—'}[c]||c;}
+async function loadMap(){
+ applyMapLang();
+ const t=MT[mlang],main=$('mapmain');
+ main.innerHTML='<div class=empty>'+t.loading+'</div>';
+ let d;try{d=await(await fetch('/api/flash/map')).json();}catch(e){main.innerHTML='<div class=card><div class=empty>'+t.loadErr+'</div></div>';return;}
+ const parts=d.parts;
+ // one continuous block grid across the WHOLE chip, in flash order -- classic "defrag" look. Small, fixed-
+ // size blocks (not stretched to fill a wide container) + a live readout on hover, not just a native
+ // tooltip, so it's actually legible at a glance which block is what.
+ const BLOCKS=1536, step=Math.ceil(d.chip_size/BLOCKS);
+ let grid='';
+ for(let off=0;off<d.chip_size;off+=step){const k=mclassify(off,parts);
+  grid+=`<div class="blk ${k.c}" data-off=${off} data-cat=${k.c} data-lbl="${k.p?k.p.label:''}"></div>`;}
+ let rows=parts.map(mpartLine).join('');
+ const be=d.hist_backend==='ota'?t.beOta:d.hist_backend==='userdata'?t.beUser:t.beNone;
+ main.innerHTML=`
+ <div class=card><h2>${t.title(mkb(d.chip_size))}</h2>
+ <p class=cap>${t.cap(mkb(step))}</p>
+ <div class=mapinfo id=mapinfo>&nbsp;</div>
+ <div class=mgrid id=mgrid>${grid}</div>
+ <div class=legend>
+  <span><i class=fwused></i>${t.legFwUsed}</span>
+  <span><i class=histused></i>${t.legHistUsed}</span>
+  <span><i class=histfree></i>${t.legHistFree}</span>
+  <span><i class=histidle></i>${t.legHistIdle}</span>
+  <span><i class=tailused></i>${t.legTail}</span>
+  <span><i class=sysnvs></i>${t.legNvs}</span>
+  <span><i class=sysota></i>${t.legOtaData}</span>
+  <span><i class=sysphy></i>${t.legPhy}</span>
+  <span><i class=syscore></i>${t.legCore}</span>
+  <span><i class=sys></i>${t.legSys}</span>
+ </div></div>
+ <div class=card><h2>${t.parts}</h2><p class=cap>${t.backend} <b>${be}</b> · ${t.dailyNote}</p>
+ <table class=ptable><thead><tr><th>${t.label}</th><th class=mono>${t.addr}</th><th class=mono>${t.size}</th><th>${t.details}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+ $('mgrid').addEventListener('mouseover',e=>{
+  if(!e.target.classList.contains('blk'))return;
+  const off=+e.target.dataset.off,cat=e.target.dataset.cat,lbl=e.target.dataset.lbl;
+  $('mapinfo').innerHTML=`<b>${mhex(off)}</b> · ${lbl||(mlang==='de'?'nicht zugewiesen':'unallocated')} · ${mcatLabel(cat,t)}`;
+ });
+}
+loadInfo().then(read);
+loadMap();
+</script></body></html>

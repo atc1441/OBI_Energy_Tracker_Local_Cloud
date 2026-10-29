@@ -50,9 +50,10 @@ class NimBLEAdvertising {
 };
 
 extern NimBLEAdvertising testAdvertising;
+extern unsigned testBleInitCalls;
 class NimBLEDevice {
  public:
-  static bool init(const char *) { return true; }
+  static bool init(const char *) { ++testBleInitCalls; return true; }
   static bool setOwnAddrType(int value) { return value == BLE_OWN_ADDR_PUBLIC; }
   static NimBLEAdvertising *getAdvertising() { return &testAdvertising; }
 };

@@ -1,0 +1,584 @@
+<!doctype html><html><head><meta charset=utf-8><link rel=icon href=/favicon.svg>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>OBI · History</title>
+<style>
+:root{--bg:#0a0e14;--panel:#141a23;--panel2:#1b2430;--line:#232e3c;--txt:#eaf0f7;--dim:#7d8da0;--accent:#31d07a;--accent2:#12a35a;--amber:#e3b341;--red:#f0616d;--blue:#5aa9ff;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;padding:12px 18px;background:#0c1219;border-bottom:1px solid var(--line)}
+header b{font-size:15px;white-space:nowrap}
+.sp{flex:1}
+select,button{font-size:14px;background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:9px;padding:8px 11px}
+button{cursor:pointer}
+header a{color:var(--accent);text-decoration:none;font-size:13px;white-space:nowrap}
+.wrap{max-width:920px;margin:0 auto;padding:16px 18px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+.card h2{margin:0 0 3px;font-size:15px}
+.cap{color:var(--dim);font-size:12px;margin:0 0 12px}
+.pricebox{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--dim);white-space:nowrap}
+.pricebox small{color:var(--dim)}
+#price,#eprice{width:76px;font-size:16px;text-align:right}
+#psaved,#esaved{color:var(--accent);font-size:12px}
+.dllabel{color:var(--dim);font-size:12px;white-space:nowrap}
+.langtog{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.langtog button{border:0;border-radius:0;padding:8px 10px;font-size:12px;font-weight:600;background:var(--panel2);color:var(--dim)}
+.langtog button.on{background:var(--accent2);color:#fff}
+#expTog{font-size:12px;font-weight:600;color:var(--dim)}
+#expTog.off{opacity:.55}
+.euro{color:var(--amber)}
+.chart{width:100%;height:auto;display:block;touch-action:pan-y}
+.legend{display:flex;flex-wrap:wrap;gap:16px;margin-top:9px;font-size:12px;color:var(--dim)}
+.legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.kpis{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px}
+.kpi{flex:1 1 130px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:11px 13px}
+.kpi .v{font-size:21px;font-weight:600;font-family:var(--mono)}
+.kpi .l{font-size:11px;color:var(--dim);margin-top:2px}
+.twrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:right;padding:6px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--dim);font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.03em}
+td.mono{font-family:var(--mono)}
+.pos{color:var(--accent)}.neg{color:var(--blue)}.na{color:var(--dim)}
+.empty{color:var(--dim);padding:26px 6px;text-align:center}
+.warn{background:#2a1e12;border:1px solid #4a3418;color:var(--amber);border-radius:11px;padding:10px 13px;font-size:12.5px;margin-bottom:16px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px}
+.msg{font-size:12.5px;color:var(--dim)}
+label{display:block;font-size:12px;color:var(--dim);margin:10px 0 4px}
+input[type=number]{font-size:14px;background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:9px;padding:8px 11px;width:100%}
+@media (max-width:760px){
+ header{position:static;flex-wrap:wrap;gap:9px;padding:11px 13px}
+ .sp{display:none}
+ header a{margin-left:auto}
+ #rsel{flex:1 1 100%}
+ .wrap{padding:13px 12px}
+ .card{padding:13px 12px;border-radius:13px}
+ .kpi{flex:1 1 calc(50% - 5px)}
+ .kpi .v{font-size:18px}
+}
+</style></head><body>
+<header><b>📈 OBI · History</b>
+<select id=rsel><option>…</option></select>
+<button id=rf>↻</button>
+<span id=rangebox class=pricebox>⏱<select id=rrange><option value=1>1 h</option><option value=6>6 h</option><option value=24>24 h</option></select></span>
+<span id=dllabel class=dllabel></span>
+<button id=dldaily>⬇ 📅</button>
+<button id=dlraw>⬇ raw</button>
+<button id=clr>🗑</button>
+<span class=langtog><button data-l=de>DE</button><button data-l=en>EN</button></span>
+<span class=sp></span>
+<span id=pbox class=pricebox>💶<input id=price type=number step=1 min=0><small>ct/kWh</small><span id=psaved></span></span>
+<span id=ebox class=pricebox>☀️<input id=eprice type=number step=1 min=0><small>ct/kWh</small><span id=esaved></span></span>
+<button id=expTog></button>
+<span id=fsstat class=dllabel></span>
+<a href="/">← dashboard</a>
+</header>
+<div class=wrap id=main><div class=empty>lädt…</div></div>
+<script>
+const $=id=>document.getElementById(id);
+const main=$('main'),sel=$('rsel'),rrangeSel=$('rrange');
+let readers=[],cur=null;
+// shared time window for every raw-sample-based view (Import/Export/Power charts + the Watt table) --
+// capped at 24h, default 1h. Time-based rather than a row/point count so it means the same thing
+// regardless of how often a reader reports, and one setting for all of them keeps the page predictable
+// instead of each chart picking its own amount to show. The full sample array is already fetched in one
+// /api/history call either way; this only limits what's rendered. Persisted per-browser.
+let rawHours=localStorage.getItem('obiRawHours')||'1';
+const C={imp:'#31d07a',exp:'#5aa9ff',day:'#e3b341',pow:'#f0616d',calc:'#3ddbd9',month:'#b48cff',year:'#e08a4f'};
+let lang=localStorage.getItem('obilang');if(lang!=='en'&&lang!=='de')lang=(navigator.language||'de').slice(0,2)==='de'?'de':'en';
+// number format for every kWh/W/€ value: independent of `lang` -- 0=auto (follow lang, historical
+// behavior), 1=force EU (1.234,56), 2=force US (1,234.56). Set from /api/status's num_fmt in boot() below
+// (a global gateway setting from the Settings page, not a per-page localStorage choice).
+let numFmt=0;
+const T={
+ de:{reload:'neu laden',dlLabel:'Export:',dlRawT:'Rohdaten (Messpunkte) als CSV herunterladen',dlDailyT:'Tageswerte als CSV herunterladen',clearT:'Historie dieses Readers löschen',fsFreeT:'Freier Speicher für die Verlaufsdaten aller Reader (siehe /debug für Details)',fsRaw:'Rohdaten',fsDaily:'Tageswerte',priceT:'Strompreis – gilt nur für den gerade gewählten Reader',priceTexp:'Einspeisevergütung – gilt nur für den gerade gewählten Reader',
+  loading:'lädt…',loadErr:'Fehler beim Laden.',
+  noReaders:'Noch keine Reader bekannt.<br>Sobald ein Zähler empfangen wird, erscheint hier seine Historie.',
+  offlineTag:'nicht in Reichweite',
+  noHist:r=>'Für <b>'+r+'</b> wurde noch keine Historie aufgezeichnet.<br>Die Werte werden fortlaufend gespeichert — schau in ein paar Minuten wieder vorbei.',
+  ntp:'⏱ Uhrzeit noch nicht per NTP synchronisiert — Tagesverbrauch wird erst nach dem Zeitabgleich korrekt zugeordnet.',
+  kImp:'Import · Bezug gesamt (kWh)',kExp:'Export · Einspeisung gesamt (kWh)',kToday:'Verbrauch heute – bisher (kWh)',
+  kCost:p=>'Kosten heute ('+p+' ct/kWh)',kTodayExp:'Einspeisung heute – bisher (kWh)',
+  kEarn:p=>'Erlös heute ('+p+' ct/kWh)',
+  cNight:'Zeitvariabler Tarif für diesen Reader',
+  lMode:'Modus',mOff:'Aus (fester Preis)',mNight:'Tag-/Nacht-Tarif (2 Zonen)',mHtNt:'§14a Modul 3 – HT/ST/NT (3 Zonen)',
+  lNightOn:'Tag-/Nacht-Tarif aktiv',capNight:'Wenn aktiv, wird der Verbrauch ab jetzt live nach Uhrzeit in Zonen aufgeteilt und getrennt bepreist. Gilt nur für neu erfasste Werte, nicht rückwirkend.',
+  capHtNt:'Hochlast (HT) und Niedriglast (NT) je bis zu 2 Zeitfenster (Std., 0–23, Ende exklusiv; über Mitternacht möglich, z. B. 22→6). Standardtarif (ST) gilt automatisch außerhalb dieser Fenster – kein eigenes Feld nötig. Ein Fenster mit gleichem Start/Ende ist deaktiviert. Preis oben rechts = ST-Preis.',
+  lHtPrice:'HT-Preis (ct/kWh)',lNtPrice:'NT-Preis (ct/kWh)',
+  lHtWin1:'HT-Fenster 1 (von/bis Std.)',lHtWin2:'HT-Fenster 2 (von/bis Std.)',
+  lNtWin1:'NT-Fenster 1 (von/bis Std.)',lNtWin2:'NT-Fenster 2 (von/bis Std.)',
+  lNightStart:'Nacht ab (Std.)',lNightEnd:'Nacht bis (Std.)',lNightPrice:'Nachtpreis (ct/kWh)',bSavePrice:'Speichern',
+  cDay:'Verbrauch pro Tag',capDay:'kWh/Tag aus den Änderungen des Zählerstands (zuverlässig, unabhängig vom Watt-Wert).',
+  cDayExp:'Einspeisung pro Tag',capDayExp:'kWh/Tag per Solar ins Netz eingespeist — aus den Änderungen des Export-Zählerstands.',
+  cMonth:'Verbrauch pro Monat',capMonth:'kWh/Monat aus den Änderungen des Zählerstands — Summe der Tageswerte je Kalendermonat.',
+  cMonthExp:'Einspeisung pro Monat',capMonthExp:'kWh/Monat per Solar ins Netz eingespeist — Summe der Tageswerte je Kalendermonat.',
+  cMonthTbl:'Monats-Tabelle',capMonthTbl:'Verbrauch (Import), Kosten, Einspeisung (Export) und Erlös je Monat.',thMonth:'Monat',
+  cYear:'Verbrauch pro Jahr',capYear:'kWh/Jahr aus den Änderungen des Zählerstands — Summe der Tageswerte je Kalenderjahr.',
+  cYearTbl:'Jahres-Tabelle',capYearTbl:'Verbrauch (Import), Kosten, Einspeisung (Export) und Erlös je Jahr.',thYear:'Jahr',
+  cImp:'Zählerstand-Verlauf · Import (Bezug)',capImp:'Kumuliert aus dem Netz bezogener Strom (kWh) — der Hauptwert.',
+  cExp:'Zählerstand-Verlauf · Export (Solar-Einspeisung)',capExp:'Kumuliert per Solar ins Netz eingespeister Strom (kWh) — eigene Skala.',
+  cPow:'Leistungsverlauf (W)',capPow:'Momentanleistung über die Zeit — negative Werte bedeuten Einspeisung ins Netz. Die gestrichelte Linie ist die aus den Zählerstand-Änderungen (Import/Export) berechnete Durchschnittsleistung — nützlich wenn der Zähler falsche/unplausible Watt-Werte liefert (z. B. fehlerhafte 24-Bit-Vorzeichenerweiterung bei negativer Leistung).',
+  legPow:'Leistung (Zähler)',legCalc:'Leistung berechnet (Import/Export)',
+  cTbl:'Tages-Tabelle',capTbl:'Verbrauch (Import), Kosten, Einspeisung (Export) und Erlös je Tag.',
+  thDay:'Tag',thCons:'Verbrauch kWh',thCost:'Kosten €',thExp:'Export kWh',thEarn:'Erlös €',
+  cHour:'Stundenwerte',capHour:'Verbrauch und Einspeisung je Stunde — die kWh-Menge in der jeweiligen Stunde aus den Zählerstand-Änderungen.',thHour:'Stunde',
+  cWatt:'Messwerte (Watt-Tabelle)',capWatt:'Rohwerte je Messpunkt. „Leistung W" kommt direkt vom Zähler und fehlt manchmal oder ist bei manchen Zählern im negativen Bereich fehlerhaft; „Ø Leistung W (berechnet)" ist stattdessen aus der Änderung von Import/Export zwischen zwei Messpunkten berechnet und damit zuverlässiger.',
+  rangeTip:'Zeitraum für Diagramme & Watt-Tabelle (max. 24 Std.)',
+  thTime:'Zeit',thPow:'Leistung W',thPowCalc:'Ø Leistung W (berechnet)',thImpK:'Import kWh',thDelta:'Δ Import kWh',thExpK:'Export kWh',thDeltaExp:'Δ Export kWh',
+  fewPts:'zu wenige Messpunkte für einen Verlauf',noDay:'noch keine Tageswerte — bitte etwas Zeit sammeln',
+  clearC:r=>'Gespeicherte Historie für '+r+' löschen?',
+  expTogOn:'📤 Export sichtbar',expTogOff:'📤 Export ausgeblendet',
+  expTogT:'Export-/Einspeisungsansichten für diesen Reader ein-/ausblenden — nur die Anzeige auf diesem Gerät, ändert nichts an der Erfassung oder anderen Anzeigen (z. B. MQTT).'},
+ en:{reload:'reload',dlLabel:'Export:',dlRawT:'Download raw samples as CSV',dlDailyT:'Download daily values as CSV',clearT:"clear this reader's history",fsFreeT:'Free space for all readers\' history data (see /debug for details)',fsRaw:'raw data',fsDaily:'daily values',priceT:'Electricity price – applies only to the currently selected reader',priceTexp:'Feed-in tariff – applies only to the currently selected reader',
+  loading:'loading…',loadErr:'Failed to load.',
+  noReaders:'No readers known yet.<br>As soon as a meter is received, its history appears here.',
+  offlineTag:'out of range',
+  noHist:r=>'No history recorded for <b>'+r+'</b> yet.<br>Values are stored continuously — check back in a few minutes.',
+  ntp:'⏱ Clock not yet synced via NTP — daily consumption is only attributed correctly after the time sync.',
+  kImp:'Import · consumed total (kWh)',kExp:'Export · fed-in total (kWh)',kToday:'Consumption today – so far (kWh)',
+  kCost:p=>'Cost today ('+p+' ct/kWh)',kTodayExp:'Feed-in today – so far (kWh)',
+  kEarn:p=>'Earnings today ('+p+' ct/kWh)',
+  cNight:'Time-variable tariff for this reader',
+  lMode:'Mode',mOff:'Off (flat price)',mNight:'Day/night tariff (2 zones)',mHtNt:'§14a Module 3 – HT/ST/NT (3 zones)',
+  lNightOn:'Day/night tariff active',capNight:'When on, consumption is split live by time of day into zones and billed separately from now on. Applies only to newly recorded values, not retroactively.',
+  capHtNt:'High-load (HT) and low-load (NT), each up to 2 time windows (hours, 0-23, end exclusive; can wrap past midnight, e.g. 22→6). Standard tariff (ST) automatically applies outside these windows -- no field of its own needed. A window with equal start/end is disabled. The price field top right is the ST price.',
+  lHtPrice:'HT price (ct/kWh)',lNtPrice:'NT price (ct/kWh)',
+  lHtWin1:'HT window 1 (from/to h)',lHtWin2:'HT window 2 (from/to h)',
+  lNtWin1:'NT window 1 (from/to h)',lNtWin2:'NT window 2 (from/to h)',
+  lNightStart:'Night from (h)',lNightEnd:'Night until (h)',lNightPrice:'Night price (ct/kWh)',bSavePrice:'Save',
+  cDay:'Consumption per day',capDay:'kWh/day from the meter-counter changes (reliable, independent of the Watt value).',
+  cDayExp:'Feed-in per day',capDayExp:'kWh/day fed into the grid (solar) — from the export-counter changes.',
+  cMonth:'Consumption per month',capMonth:'kWh/month from the meter-counter changes — sum of the daily values per calendar month.',
+  cMonthExp:'Feed-in per month',capMonthExp:'kWh/month fed into the grid (solar) — sum of the daily values per calendar month.',
+  cMonthTbl:'Monthly table',capMonthTbl:'Consumption (import), cost, feed-in (export) and earnings per month.',thMonth:'Month',
+  cYear:'Consumption per year',capYear:'kWh/year from the meter-counter changes — sum of the daily values per calendar year.',
+  cYearTbl:'Yearly table',capYearTbl:'Consumption (import), cost, feed-in (export) and earnings per year.',thYear:'Year',
+  cImp:'Meter reading history · Import (consumption)',capImp:'Cumulative energy drawn from the grid (kWh) — the main value.',
+  cExp:'Meter reading history · Export (solar feed-in)',capExp:'Cumulative solar energy fed into the grid (kWh) — own scale.',
+  cPow:'Power history (W)',capPow:'Instantaneous power over time — negative values mean feeding into the grid. The dashed line is the average power calculated from the import/export counter changes — useful when the meter reports wrong/implausible power values (e.g. broken 24-bit sign extension for negative power).',
+  legPow:'Power (meter)',legCalc:'Power calculated (import/export)',
+  cTbl:'Daily table',capTbl:'Consumption (import), cost, feed-in (export) and earnings per day.',
+  thDay:'Day',thCons:'Consumption kWh',thCost:'Cost €',thExp:'Export kWh',thEarn:'Earnings €',
+  cHour:'Hourly values',capHour:'Consumption and feed-in per hour — the kWh amount within each hour from the meter-counter changes.',thHour:'Hour',
+  cWatt:'Measurements (Watt table)',capWatt:'Raw values per sample. "Power W" comes directly from the meter and is sometimes missing or wrong in the negative range on some meters; "Avg power W (calc)" is instead computed from the import/export change between two samples and is therefore more reliable.',
+  rangeTip:'Time range for charts & Watt table (max 24 h)',
+  thTime:'Time',thPow:'Power W',thPowCalc:'Avg power W (calc)',thImpK:'Import kWh',thDelta:'Δ import kWh',thExpK:'Export kWh',thDeltaExp:'Δ export kWh',
+  fewPts:'too few samples for a trend',noDay:'no daily values yet — please let it collect data',
+  clearC:r=>'Delete stored history for '+r+'?',
+  expTogOn:'📤 Export shown',expTogOff:'📤 Export hidden',
+  expTogT:"Show/hide export & feed-in views for this reader — only changes this device's display, not data collection or other views (e.g. MQTT)."}
+};
+const t=k=>T[lang][k];
+const loc=()=>numFmt===1?'de-DE':numFmt===2?'en-GB':(lang==='de'?'de-DE':'en-GB');
+const nf=(v,d=2)=>Number(v).toLocaleString(loc(),{minimumFractionDigits:d,maximumFractionDigits:d});
+const p2=n=>n<10?'0'+n:''+n;
+const D=ep=>new Date(ep*1000);
+const hm=ep=>{const d=D(ep);return p2(d.getHours())+':'+p2(d.getMinutes());};
+const dm=ep=>{const d=D(ep);return lang==='de'?p2(d.getDate())+'.'+p2(d.getMonth()+1)+'.':p2(d.getDate())+'/'+p2(d.getMonth()+1);};
+const dmy=ep=>{const d=D(ep);return lang==='de'?p2(d.getDate())+'.'+p2(d.getMonth()+1)+'.'+d.getFullYear():p2(d.getDate())+'/'+p2(d.getMonth()+1)+'/'+d.getFullYear();};
+const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function applyLang(){document.documentElement.lang=lang;
+ $('rf').title=t('reload');$('dllabel').textContent=t('dlLabel');$('dlraw').title=t('dlRawT');$('dldaily').title=t('dlDailyT');$('clr').title=t('clearT');$('pbox').title=t('priceT');$('ebox').title=t('priceTexp');
+ $('rangebox').title=t('rangeTip');$('expTog').title=t('expTogT');
+ document.querySelectorAll('.langtog button').forEach(b=>b.classList.toggle('on',b.dataset.l===lang));
+ updateExpTog();}
+document.querySelectorAll('.langtog button').forEach(b=>b.onclick=()=>{lang=b.dataset.l;localStorage.setItem('obilang',lang);applyLang();if(cur)load();});
+// Purely a per-browser display preference for readers without feed-in (e.g. no PV) -- localStorage only, keyed
+// per reader so it travels with reader selection. Never touches the gateway: doesn't call any API, doesn't
+// affect data collection, MQTT, or any other page -- it only hides Export/feed-in KPIs, charts and table
+// columns on THIS page by folding into the existing anyExp gate that those already render behind (see load()).
+const expHideKey=id=>'obiHideExp_'+id;
+const isExpHidden=id=>!!id&&localStorage.getItem(expHideKey(id))==='1';
+function updateExpTog(){const h=isExpHidden(cur);$('expTog').textContent=t(h?'expTogOff':'expTogOn');$('expTog').classList.toggle('off',h);}
+$('expTog').onclick=()=>{if(!cur)return;
+ if(isExpHidden(cur))localStorage.removeItem(expHideKey(cur));else localStorage.setItem(expHideKey(cur),'1');
+ updateExpTog();load();};
+
+// ---- inline SVG line chart: series=[{name,color,pts:[[xEpoch,y]...]}] ----
+function lineChart(series,unit,zeroLine){
+ const W=760,H=300,pl=76,pr=16,pt=16,pb=34;   // wider left margin: labels can be e.g. "83,077.992"
+ let xs=[],ys=[];series.forEach(s=>s.pts.forEach(p=>{xs.push(p[0]);ys.push(p[1]);}));
+ if(xs.length<2)return '<div class=empty>'+t('fewPts')+'</div>';
+ let x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);
+ if(x1===x0)x1=x0+1;
+ // decimals + padding from the REAL data span (before padding). A cumulative meter reading is huge
+ // (~83000) but the change lives in the 3rd decimal; and a flat series (e.g. export that barely moves)
+ // must NOT be inflated to 5% of its absolute value — that hid the fine values behind 1 decimal.
+ const dr=y1-y0,ydec=dr>=100?0:dr>=10?1:dr>=1?2:3;
+ let pad=dr>0?dr*0.08:0.002;y0-=pad;y1+=pad;if(Math.min(...ys)>=0&&y0<0)y0=0;if(y1===y0)y1=y0+1;
+ const X=v=>pl+(v-x0)/(x1-x0)*(W-pl-pr),Y=v=>pt+(1-(v-y0)/(y1-y0))*(H-pt-pb);
+ let g='';const ny=4;
+ for(let i=0;i<=ny;i++){const yv=y0+(y1-y0)*i/ny,yy=Y(yv);
+  g+=`<line x1=${pl} y1=${yy.toFixed(1)} x2=${W-pr} y2=${yy.toFixed(1)} stroke="#232e3c"/>`;
+  g+=`<text x=${pl-8} y=${(yy+4).toFixed(1)} text-anchor=end fill="#7d8da0" font-size=11>${nf(yv,ydec)}</text>`;}
+ const span=x1-x0,useDay=span>2*86400,nx=4;
+ for(let i=0;i<=nx;i++){const xv=x0+span*i/nx,xx=X(xv);
+  g+=`<text x=${xx.toFixed(1)} y=${H-12} text-anchor=middle fill="#7d8da0" font-size=11>${useDay?dm(xv):hm(xv)}</text>`;}
+ // explicit zero line — separate from the regular grid (which rarely lands exactly on 0) so the
+ // import/export crossover is instantly visible on charts that legitimately go negative (power).
+ // NOTE: self-closing tags below always keep a literal space before "/>". Without it, an HTML5 parser
+ // (unlike a strict XML/SVG parser) reads an unquoted final attribute value as CONTINUING through the "/"
+ // (e.g. stroke-width=1.5/> tokenizes as value "1.5/", not value "1.5" + self-close) -- the tag then never
+ // actually self-closes, and every following sibling (both polylines, the unit label) gets parsed as a
+ // child of it instead, which shape elements like <line>/<polyline> don't render. Cost a debugging session
+ // to track down: everything downstream of the zero-line silently vanished with no console error anywhere.
+ if(zeroLine&&y0<0&&y1>0){const yz=Y(0);
+  g+=`<line x1=${pl} y1=${yz.toFixed(1)} x2=${W-pr} y2=${yz.toFixed(1)} stroke="#7d8da0" stroke-width=1.5 />`;}
+ series.forEach(s=>{if(!s.pts.length)return;
+  const d=s.pts.map(p=>X(p[0]).toFixed(1)+','+Y(p[1]).toFixed(1)).join(' ');
+  g+=`<polyline points="${d}" fill=none stroke="${s.color}" stroke-width=2 stroke-linejoin=round stroke-linecap=round${s.dash?` stroke-dasharray="${s.dash}"`:''} />`;});
+ g+=`<text x=${pl-8} y=11 text-anchor=end fill="#7d8da0" font-size=10>${unit}</text>`;
+ return `<svg class=chart viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${g}</svg>`;
+}
+// ---- inline SVG bar chart: bars=[{label,value}] ----
+function barChart(bars,unit,color){
+ const W=760,H=300,pl=58,pr=16,pt=16,pb=42;
+ if(!bars.length)return '<div class=empty>'+t('noDay')+'</div>';
+ let vmax=Math.max(...bars.map(b=>b.value),0.001),vmin=Math.min(...bars.map(b=>b.value),0);
+ if(bars.some(b=>b.vlab))vmax*=1.16;   // headroom above the tallest bar for its two-line value label
+ if(vmax===vmin)vmax=vmin+1;
+ const Y=v=>pt+(1-(v-vmin)/(vmax-vmin))*(H-pt-pb),n=bars.length,bw=(W-pl-pr)/n;
+ let g='';const ny=4;
+ for(let i=0;i<=ny;i++){const yv=vmin+(vmax-vmin)*i/ny,yy=Y(yv);
+  g+=`<line x1=${pl} y1=${yy.toFixed(1)} x2=${W-pr} y2=${yy.toFixed(1)} stroke="#232e3c"/>`;
+  g+=`<text x=${pl-8} y=${(yy+4).toFixed(1)} text-anchor=end fill="#7d8da0" font-size=11>${nf(yv,vmax>=10?1:2)}</text>`;}
+ const yz=Y(0),step=Math.ceil(n/12);
+ bars.forEach((b,i)=>{const x=pl+i*bw+bw*0.16,w=bw*0.68,yv=Y(b.value),top=Math.min(yv,yz),h=Math.max(Math.abs(yv-yz),0.6);
+  g+=`<rect x=${x.toFixed(1)} y=${top.toFixed(1)} width=${w.toFixed(1)} height=${h.toFixed(1)} rx=2 fill="${color}"/>`;
+  // per-bar value printed HORIZONTALLY above the bar: kWh on top, € below it (nearest the bar). vlab is a
+  // 1–2 element array — the € line is omitted when its price is 0, so the money acts as an on/off switch.
+  // Font shrinks as the bars get narrower; vmax headroom (above) keeps the top line inside the chart.
+  if(b.vlab&&b.vlab.length){const cx=x+w/2,fs=n>20?8:(n>12?9:10.5),gap=fs+1,m=b.vlab.length;
+   b.vlab.forEach((s,k)=>{const ly=top-4-(m-1-k)*gap,euroLine=(m>1&&k===m-1);
+    g+=`<text x=${cx.toFixed(1)} y=${ly.toFixed(1)} text-anchor=middle fill="${euroLine?'#9aa7b8':'#eaf0f7'}" font-size=${fs}${euroLine?'':' font-weight=600'}>${s}</text>`;});}
+  if(i%step===0)g+=`<text x=${(x+w/2).toFixed(1)} y=${H-16} text-anchor=middle fill="#7d8da0" font-size=10>${b.label}</text>`;});
+ g+=`<text x=${pl-8} y=11 text-anchor=end fill="#7d8da0" font-size=10>${unit}</text>`;
+ return `<svg class=chart viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${g}</svg>`;
+}
+
+async function boot(){
+ applyLang();main.innerHTML='<div class=empty>'+t('loading')+'</div>';
+ // no global price fetch -- the header boxes are per-reader now, filled in by load() once a reader is picked
+ $('price').onchange=savePrice;$('eprice').onchange=saveEprice;
+ try{let s=await (await fetch('/api/status')).json();numFmt=s.num_fmt||0;const hf=s.hist_fs;
+  if(hf&&hf.ok){const kb=n=>(n/1024).toFixed(0)+' KB';
+   $('fsstat').textContent='💾 '+t('fsRaw')+' '+kb(hf.total-hf.used)+'/'+kb(hf.total)+(hf.backend==='ota'?' (OTA)':'')+
+    ' · '+t('fsDaily')+' '+kb(hf.daily_total-hf.daily_used)+'/'+kb(hf.daily_total);
+   $('fsstat').title=t('fsFreeT');}
+ }catch(e){}
+ try{let d=await (await fetch('/api/readers')).json();readers=Array.isArray(d)?d:(d.readers||[]);}catch(e){readers=[];}
+ readers=readers.filter(r=>r.id);
+ // readers with stored history but no live RAM slot (out of range since boot, or removed) -- still need to
+ // be selectable, or their old data can never be viewed or cleared once they've gone quiet.
+ try{let known={};readers.forEach(r=>known[r.id]=1);
+  let arc=await (await fetch('/api/history/readers')).json();
+  (arc||[]).forEach(id=>{if(!known[id])readers.push({id,name:'',archived:true});});
+ }catch(e){}
+ if(!readers.length){main.innerHTML='<div class=card><div class=empty>'+t('noReaders')+'</div></div>';sel.innerHTML='<option>—</option>';return;}
+ sel.innerHTML=readers.map(r=>`<option value="${r.id}">${esc(r.name||r.type||'reader')} · ${r.id}${r.archived?' ('+t('offlineTag')+')':''}</option>`).join('');
+ let saved=localStorage.getItem('obihist');
+ cur=readers.some(r=>r.id===saved)?saved:readers[0].id;
+ sel.value=cur;
+ load();
+}
+async function savePrice(){if(!cur)return;let v=parseFloat($('price').value);if(isNaN(v)||v<0)return;
+ $('psaved').textContent='…';
+ try{await fetch('/api/reader/price?id='+cur+'&cent='+v,{method:'POST'});}catch(e){}
+ $('psaved').textContent='✓';setTimeout(()=>{$('psaved').textContent='';},1500);
+ load();}                                    // refresh the cost columns for the current reader
+async function saveEprice(){if(!cur)return;let v=parseFloat($('eprice').value);if(isNaN(v)||v<0)return;
+ $('esaved').textContent='…';
+ try{await fetch('/api/reader/price?id='+cur+'&ecent='+v,{method:'POST'});}catch(e){}
+ $('esaved').textContent='✓';setTimeout(()=>{$('esaved').textContent='';},1500);
+ load();}                                    // refresh the earnings columns for the current reader
+// mode 0 = off, 1 = day/night (existing 2-zone fields), 2 = §14a HT/ST/NT (new 3-zone fields) -- see
+// tariffMode in reader.h/gw_set_reader_price(). Only one scheme's fields are ever shown/editable at once
+// (tariffModeUi() below), but ALL of them are sent together every save: the OTHER scheme's fields are simply
+// echoed back from whatever this reader already had saved (server-side default in handleReaderPrice()), so
+// switching modes back and forth never loses a previously-entered config.
+function tariffModeUi(){
+ const m=$('rmode').value;
+ $('rnightbox').hidden=m!=='1';
+ $('rhtntbox').hidden=m!=='2';
+}
+async function saveReaderPrice(){
+ // the base/export price lives in the header boxes and saves separately (savePrice()/saveEprice()), thanks
+ // to /api/reader/price's partial-update semantics
+ if(!cur)return;
+ const b=new URLSearchParams();
+ b.set('id',cur);
+ b.set('mode',$('rmode').value);
+ b.set('nstart',$('rnstart').value||22);
+ b.set('nend',$('rnend').value||6);
+ if($('rnprice').value)b.set('nprice',$('rnprice').value);
+ if($('rhtp').value)b.set('htp',$('rhtp').value);
+ if($('rntp').value)b.set('ntp',$('rntp').value);
+ b.set('ht0s',$('rht0s').value||0);b.set('ht0e',$('rht0e').value||0);
+ b.set('ht1s',$('rht1s').value||0);b.set('ht1e',$('rht1e').value||0);
+ b.set('nt0s',$('rnt0s').value||0);b.set('nt0e',$('rnt0e').value||0);
+ b.set('nt1s',$('rnt1s').value||0);b.set('nt1e',$('rnt1e').value||0);
+ $('rpricemsg').textContent='…';
+ try{await fetch('/api/reader/price',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b});}catch(e){}
+ try{let d=await(await fetch('/api/readers')).json();readers=Array.isArray(d)?d:(d.readers||[]);}catch(e){}
+ $('rpricemsg').textContent='✓';setTimeout(()=>{$('rpricemsg').textContent='';},1500);
+ load();
+}
+sel.onchange=()=>{cur=sel.value;localStorage.setItem('obihist',cur);load();};
+$('rf').onclick=()=>load();
+rrangeSel.value=rawHours;
+rrangeSel.onchange=()=>{rawHours=rrangeSel.value;localStorage.setItem('obiRawHours',rawHours);if(cur)load();};
+$('dlraw').onclick=()=>{if(cur)location.href='/api/history/csv?id='+cur+'&kind=raw';};
+$('dldaily').onclick=()=>{if(cur)location.href='/api/history/csv?id='+cur+'&kind=daily';};
+$('clr').onclick=async()=>{if(!cur||!confirm(t('clearC')(cur)))return;
+ await fetch('/api/history/clear?id='+cur,{method:'POST'});load();};
+// silent auto-refresh every 60 s so the history stays current — no flicker, skipped while hidden or editing the price
+setInterval(()=>{if(cur&&!document.hidden&&document.activeElement!==$('price')&&document.activeElement!==$('eprice'))load(true);},60000);
+
+async function load(silent){
+ if(!cur)return;
+ updateExpTog();
+ if(!silent)main.innerHTML='<div class=empty>'+t('loading')+'</div>';
+ let h;try{h=await (await fetch('/api/history?id='+cur)).json();}catch(e){if(!silent)main.innerHTML='<div class=card><div class=empty>'+t('loadErr')+'</div></div>';return;}
+ const S=h.samples||[],days=(h.daily||[]).map(d=>({ep:d[0],imp:d[1],exp:d[2],dayWh:d[3]||0,nightWh:d[4]||0,htWh:d[5]||0,stWh:d[6]||0,ntWh:d[7]||0}));
+ // shared time window (header select, default 1h, capped at 24h) for every raw-sample view below --
+ // Import/Export/Power charts and the Watt table all use the SAME cutoff, so the page stays predictable
+ // instead of each one picking its own amount to show. KPIs further down intentionally keep using the
+ // full S (latest reading, today's total, ...), not this windowed subset.
+ const rHrs=Math.min(24,parseInt(rawHours)||1);
+ const rNowEp=h.tvalid&&h.now?h.now:(S.length?S[S.length-1][0]:Math.floor(Date.now()/1000));
+ const rCutoff=rNowEp-rHrs*3600;
+ const price=(h.price!=null?h.price:31),eur=price/100;      // ct/kWh and €/kWh -- always THIS reader's own
+                                                              // price now, no global setting exists any more
+ const eprice=(h.eprice!=null?h.eprice:0),eeur=eprice/100;  // feed-in tariff ct/kWh and €/kWh (export earnings)
+ // header price boxes are per-reader -- fill them with THIS reader's resolved values every load(), unless
+ // the user is actively editing one (the silent 60s auto-refresh already skips load() while focused; an
+ // explicit reload, e.g. switching readers, should still show the newly-selected reader's own price)
+ if(document.activeElement!==$('price'))$('price').value=price;
+ if(document.activeElement!==$('eprice'))$('eprice').value=eprice;
+ // day/night tariff: when on, cost is blended from the day_wh/night_wh split the gateway accumulates live
+ // (see historyService()/isNightNow() in gateway_web.cpp) instead of one flat rate for the whole day. That
+ // split only exists going forward from when it was enabled -- there's nothing to backfill it from.
+ const nightOn=!!h.night_on;
+ const nightPrice=(h.night_price!=null?h.night_price:price),neur=nightPrice/100;
+ // §14a HT/ST/NT 3-zone tariff: same idea, blended from the ht_wh/st_wh/nt_wh split instead -- see
+ // tariffZoneNow()/historyService() in gateway_web.cpp. Mutually exclusive with the day/night tariff above
+ // (tariffMode picks at most one of the two schemes; see the settings card at the bottom of this page).
+ const tariffMode=h.tariff_mode||0;
+ const htPrice=(h.ht_price!=null?h.ht_price:price),hteur=htPrice/100;
+ const ntPrice=(h.nt_price!=null?h.nt_price:price),nteur=ntPrice/100;
+ // per-day consumption from the kWh-counter deltas (import can only rise), plus each day's cost -- blended
+ // HT/ST/NT, or day/night, or the plain flat-rate calc, whichever tariff is active.
+ let cons=[];
+ for(let i=1;i<days.length;i++){let di=(days[i].imp-days[i-1].imp)/1000,de=(days[i].exp-days[i-1].exp)/1000;
+  di=di<0?0:di; de=de<0?0:de;
+  let cost=tariffMode===2?(days[i].htWh||0)/1000*hteur+(days[i].stWh||0)/1000*eur+(days[i].ntWh||0)/1000*nteur
+           :nightOn?(days[i].dayWh||0)/1000*eur+(days[i].nightWh||0)/1000*neur:di*eur;
+  cons.push({ep:days[i].ep,imp:di,exp:de,cost});}
+ let html='';
+ if(!h.tvalid)html+='<div class=warn>'+t('ntp')+'</div>';
+ if(!S.length&&!days.length){
+  main.innerHTML=html+'<div class=card><div class=empty>'+t('noHist')(cur)+'</div></div>';return;}
+ // KPIs
+ let last=S.length?S[S.length-1]:null;
+ let totImp=last?last[1]/1000:(days.length?days[days.length-1].imp/1000:0);
+ let totExp=last?last[2]/1000:(days.length?days[days.length-1].exp/1000:0);
+ // "today so far": PRIMARY source is the kWh-counter baseline — previous day's closing reading up to the
+ // latest reading. This matches the daily chart and, crucially, does NOT depend on how far back the sample
+ // ring buffer still reaches: that file is capped (~8 KB), so on a busy meter it only spans the last few
+ // hours, which made the old sample-delta "today" far too small (e.g. 0.3 kWh instead of 3 kWh). The samples
+ // are only a fallback for the very first day, before any previous daily row exists.
+ const dayKey=ep=>{let d=D(ep);return d.getFullYear()+'-'+d.getMonth()+'-'+d.getDate();};
+ // anyExp already gates every Export/feed-in KPI, chart and table column below -- folding the manual
+ // per-reader hide toggle in here (rather than threading it through each call site separately) makes it
+ // behave exactly like "this reader has no feed-in data", with zero effect on the underlying data/API calls.
+ let anyExp=(S.some(s=>s[2]>0)||days.some(d=>d.exp>0))&&!isExpHidden(cur);
+ let today=null,todayExp=null,todayCost=null;
+ if(days.length>=2&&dayKey(days[days.length-1].ep)===dayKey(h.now)){
+  const base=days[days.length-2];                               // counter at the start of today (yesterday's close)
+  const curImp=last?last[1]:days[days.length-1].imp,curExp=last?last[2]:days[days.length-1].exp;
+  today=Math.max(0,(curImp-base.imp)/1000);todayExp=Math.max(0,(curExp-base.exp)/1000);
+  const t=days[days.length-1];   // today's RAM-merged row already carries the live day/night (or HT/ST/NT) split
+  todayCost=tariffMode===2?Math.max(0,t.htWh||0)/1000*hteur+Math.max(0,t.stWh||0)/1000*eur+Math.max(0,t.ntWh||0)/1000*nteur
+            :nightOn?Math.max(0,t.dayWh||0)/1000*eur+Math.max(0,t.nightWh||0)/1000*neur:today*eur;}
+ if(today==null&&S.length){let tk=dayKey(h.now),td=S.filter(s=>dayKey(s[0])===tk);   // first-day fallback
+  if(td.length>=2){today=Math.max(0,(td[td.length-1][1]-td[0][1])/1000);todayExp=Math.max(0,(td[td.length-1][2]-td[0][2])/1000);todayCost=today*eur;}}
+ html+='<div class=kpis>'+
+  `<div class=kpi><div class=v>${nf(totImp,2)}</div><div class=l>${t('kImp')}</div></div>`+
+  (isExpHidden(cur)?'':`<div class=kpi><div class="v neg">${nf(totExp,2)}</div><div class=l>${t('kExp')}</div></div>`)+
+  `<div class=kpi><div class=v>${today==null?'—':nf(today,2)}</div><div class=l>${t('kToday')}</div></div>`+
+  (eur>0?`<div class=kpi><div class="v euro">${todayCost==null?'—':nf(todayCost,2)+' €'}</div><div class=l>${t('kCost')(tariffMode===2?nf(htPrice,2)+'/'+nf(price,2)+'/'+nf(ntPrice,2):nightOn?nf(price,2)+'/'+nf(nightPrice,2):nf(price,2))}</div></div>`:'')+
+  (anyExp?`<div class=kpi><div class="v neg">${todayExp==null?'—':nf(todayExp,2)}</div><div class=l>${t('kTodayExp')}</div></div>`:'')+
+  (anyExp&&eeur>0?`<div class=kpi><div class="v euro">${todayExp==null?'—':nf(todayExp*eeur,2)+' €'}</div><div class=l>${t('kEarn')(nf(eprice,2))}</div></div>`:'')+
+ '</div>';
+ const fmtK=v=>nf(v,v>=10?1:2);
+ // Coarsest-to-finest overview first: year, then month, then (below) the existing day-level charts/table --
+ // bucket the SAME per-day counter-delta array (`cons`) the day view already computes; the daily rollup
+ // (`/api/history`'s `daily` field) already retains a long history on-device (years, not just the few hours
+ // the raw sample ring buffer spans, see the comment above `today`), so no extra storage or API call is
+ // needed here, just grouping the existing days by calendar month/year.
+ const my=ep=>{const d=D(ep);return lang==='de'?p2(d.getMonth()+1)+'.'+d.getFullYear():p2(d.getMonth()+1)+'/'+d.getFullYear();};
+ const yr=ep=>D(ep).getFullYear();
+ function bucketBy(keyFn){
+  let map=new Map();
+  cons.forEach(c=>{const k=keyFn(c.ep);let b=map.get(k);if(!b){b={ep:c.ep,imp:0,exp:0,cost:0};map.set(k,b);}b.imp+=c.imp;b.exp+=c.exp;b.cost+=c.cost;b.ep=c.ep;});
+  return [...map.values()];
+ }
+ // months capped to the most recent 36 (3 years) so the chart/table stay legible on a device with many
+ // years of history; years are left uncapped since there will realistically only ever be a handful.
+ function periodTable(rows,labelFn,titleKey,capKey,thKey){
+  if(!rows.length)return '';
+  const showCost=eur>0,showExp=anyExp,showEarn=anyExp&&eeur>0;
+  let head='<th>'+t(thKey)+'</th><th>'+t('thCons')+'</th>'+(showCost?'<th>'+t('thCost')+'</th>':'')+(showExp?'<th>'+t('thExp')+'</th>':'')+(showEarn?'<th>'+t('thEarn')+'</th>':'');
+  let trows=rows.slice().reverse().map(r=>'<tr><td>'+labelFn(r.ep)+'</td><td class="mono pos">'+nf(r.imp,2)+'</td>'+(showCost?'<td class="mono euro">'+nf(r.cost,2)+' €</td>':'')+(showExp?'<td class="mono neg">'+nf(r.exp,2)+'</td>':'')+(showEarn?'<td class="mono euro">'+nf(r.exp*eeur,2)+' €</td>':'')+'</tr>').join('');
+  return '<div class=card><h2>'+t(titleKey)+'</h2><p class=cap>'+t(capKey)+'</p><div class=twrap><table><thead><tr>'+head+'</tr></thead><tbody>'+trows+'</tbody></table></div></div>';
+ }
+ // field: 'imp' or 'exp' -- price: the matching €/kWh rate (eur for import, eeur for export) so the value
+ // label under each bar shows cost/earnings just like the day chart's does. costField: for 'imp', the
+ // already-blended (day/night-aware) €.cost field on each row; 'exp' has no day/night split, so it's left
+ // null and the value label is derived with a plain value*price like before.
+ function periodChart(rows,labelFn,titleKey,capKey,color,field,price,costField){
+  if(!rows.length)return '';
+  const bars=rows.map(r=>{const v=r[field],cost=costField?r[costField]:v*price;
+   return {label:labelFn(r.ep),value:v,vlab:price>0?[fmtK(v),nf(cost,2)+' €']:[fmtK(v)]};});
+  return '<div class=card><h2>'+t(titleKey)+'</h2><p class=cap>'+t(capKey)+'</p>'+barChart(bars,'kWh',color)+'</div>';
+ }
+ let yearRows=bucketBy(yr);
+ let monthRows=bucketBy(ep=>{const d=D(ep);return d.getFullYear()*12+d.getMonth();}).slice(-36);
+ // year: too few data points for a bar chart to add anything -- the table alone is enough
+ html+=periodTable(yearRows,yr,'cYear','capYear','thYear');
+ html+=periodChart(monthRows,my,'cMonth','capMonth',C.month,'imp',eur,'cost');
+ if(anyExp)html+=periodChart(monthRows,my,'cMonthExp','capMonthExp',C.exp,'exp',eeur,null);
+ html+=periodTable(monthRows,my,'cMonthTbl','capMonthTbl','thMonth');
+ // daily consumption bar chart — each bar labelled with its kWh amount; the € cost line (blended day/night
+ // when that tariff is on) only when a price is set
+ let barsC=cons.slice(-31).map(c=>({label:dm(c.ep),value:c.imp,vlab:eur>0?[fmtK(c.imp),nf(c.cost,2)+' €']:[fmtK(c.imp)]}));
+ html+='<div class=card><h2>'+t('cDay')+'</h2><p class=cap>'+t('capDay')+'</p>'+barChart(barsC,'kWh',C.day)+'</div>';
+ // feed-in per day (own chart + scale, only when there is any solar export) — € earnings line only when a feed-in tariff is set
+ if(anyExp&&cons.some(c=>c.exp>0)){let barsE=cons.slice(-31).map(c=>({label:dm(c.ep),value:c.exp,vlab:eeur>0?[fmtK(c.exp),nf(c.exp*eeur,2)+' €']:[fmtK(c.exp)]}));
+  html+='<div class=card><h2>'+t('cDayExp')+'</h2><p class=cap>'+t('capDayExp')+'</p>'+barChart(barsE,'kWh',C.exp)+'</div>';}
+ // cumulative kWh — two separate charts, each with its own scale (export is far smaller than import,
+ // so a shared axis would flatten it to the baseline). Import = grid draw (main value), Export = solar feed-in.
+ let sImp={name:'Import',color:C.imp,pts:S.filter(s=>s[0]>=rCutoff).map(s=>[s[0],s[1]/1000])};
+ html+='<div class=card><h2>'+t('cImp')+'</h2><p class=cap>'+t('capImp')+'</p>'+lineChart([sImp],'kWh')+
+  '<div class=legend><span><i style="background:'+C.imp+'"></i>Import kWh</span></div></div>';
+ if(anyExp){
+  let sExp={name:'Export',color:C.exp,pts:S.filter(s=>s[0]>=rCutoff).map(s=>[s[0],s[2]/1000])};
+  html+='<div class=card><h2>'+t('cExp')+'</h2><p class=cap>'+t('capExp')+'</p>'+lineChart([sExp],'kWh')+
+   '<div class=legend><span><i style="background:'+C.exp+'"></i>Export kWh</span></div></div>';
+ }
+ // instantaneous power — its own chart, NOT cumulative, and unlike import/export it legitimately goes
+ // negative on feed-in. lineChart() already lets the y-axis dip below zero (it only clamps to 0 when
+ // every value in the series is already >=0), so a feed-in dip just renders correctly with no extra work.
+ let powPts=S.filter(s=>s[3]!=null&&s[0]>=rCutoff).map(s=>[s[0],s[3]]);
+ // calculated power: average W between two consecutive samples, derived purely from the import/export
+ // kWh-counter deltas (Wh*3600/seconds). Some meters (e.g. certain DWSB20-2TH units) don't sign-extend
+ // the 24-bit power field correctly on feed-in, so the meter's own Watt reading can be garbage while the
+ // counters — which just accumulate — stay correct. calcArr[i] is null for i==0 or a non-positive gap.
+ // Computed against the FULL S (not the windowed cutoff) so the delta at the window's left edge is still
+ // correct -- only the resulting points get filtered to the display window, below and in the Watt table.
+ // Keep the calculation anchored at the last sample whose energy counters actually changed.
+ // Heartbeat samples with identical counters are not 0 W measurements; treating them as a new anchor
+ // would both render artificial zeroes and make the next whole-Wh counter tick look like a multi-kW spike.
+ let calcAnchor=0;
+ let calcArr=S.map((s,i)=>{
+  if(i===0)return null;
+  const a=S[calcAnchor];
+  const dImp=s[1]-a[1],dExp=s[2]-a[2];
+  if(dImp===0&&dExp===0)return null;
+  const dt=s[0]-a[0];
+  calcAnchor=i;
+  if(dt<=0||dImp<0||dExp<0)return null;
+  return (dImp-dExp)*3600/dt;
+ });
+ let calcPts=calcArr.map((v,i)=>v==null?null:[S[i][0],v]).filter(p=>p&&p[0]>=rCutoff);
+ if(powPts.length>=2||calcPts.length>=2){
+  let series=[];
+  if(calcPts.length>=2)series.push({name:'CalcPower',color:C.calc,pts:calcPts,dash:'6,4'});
+  if(powPts.length>=2)series.push({name:'Power',color:C.pow,pts:powPts});
+  let legend='<div class=legend>'+
+   (powPts.length>=2?'<span><i style="background:'+C.pow+'"></i>'+t('legPow')+'</span>':'')+
+   (calcPts.length>=2?'<span><i style="background:'+C.calc+'"></i>'+t('legCalc')+'</span>':'')+
+   '</div>';
+  html+='<div class=card><h2>'+t('cPow')+'</h2><p class=cap>'+t('capPow')+'</p>'+lineChart(series,'W',true)+legend+'</div>';
+ }
+ // daily table
+ if(cons.length){
+  const showCost=eur>0,showExp=anyExp,showEarn=anyExp&&eeur>0;   // € columns only when their price is set
+  let head='<th>'+t('thDay')+'</th><th>'+t('thCons')+'</th>'+(showCost?'<th>'+t('thCost')+'</th>':'')+(showExp?'<th>'+t('thExp')+'</th>':'')+(showEarn?'<th>'+t('thEarn')+'</th>':'');
+  let rows=cons.slice(-31).reverse().map(c=>'<tr><td>'+dmy(c.ep)+'</td><td class="mono pos">'+nf(c.imp,2)+'</td>'+(showCost?'<td class="mono euro">'+nf(c.cost,2)+' €</td>':'')+(showExp?'<td class="mono neg">'+nf(c.exp,2)+'</td>':'')+(showEarn?'<td class="mono euro">'+nf(c.exp*eeur,2)+' €</td>':'')+'</tr>').join('');
+  html+='<div class=card><h2>'+t('cTbl')+'</h2><p class=cap>'+t('capTbl')+'</p><div class=twrap><table><thead><tr>'+head+'</tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+ }
+ // hourly values: kWh consumed / fed-in within each local clock hour (from the counter deltas)
+ if(S.length>1){
+  let hmap={},horder=[];
+  for(const s of S){let d=D(s[0]),key=d.getFullYear()+'-'+d.getMonth()+'-'+d.getDate()+'-'+d.getHours();
+   if(!(key in hmap))horder.push(key);hmap[key]={ep:s[0],imp:s[1],exp:s[2]};}   // last sample per hour wins
+  let hours=[];
+  for(let i=1;i<horder.length;i++){let a=hmap[horder[i-1]],b=hmap[horder[i]],dd=D(b.ep);
+   hours.push({label:dm(b.ep)+' '+p2(dd.getHours())+':00',imp:Math.max(0,(b.imp-a.imp)/1000),exp:Math.max(0,(b.exp-a.exp)/1000)});}
+  if(hours.length){
+   let head='<th>'+t('thHour')+'</th><th>'+t('thCons')+'</th>'+(anyExp?'<th>'+t('thExp')+'</th>':'');
+   let rows=hours.slice(-48).reverse().map(x=>`<tr><td>${x.label}</td><td class="mono pos">${nf(x.imp,2)}</td>`+(anyExp?`<td class="mono neg">${nf(x.exp,2)}</td>`:'')+`</tr>`).join('');
+   html+='<div class=card><h2>'+t('cHour')+'</h2><p class=cap>'+t('capHour')+'</p><div class=twrap><table><thead><tr>'+head+'</tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+  }
+ }
+ // watt / raw sample table
+ if(S.length){
+  const fmtD=d=>d==null?'<span class=na>—</span>':(d>0?'<span class=pos>+'+nf(d,2)+'</span>':(d<0?'<span class=neg>'+nf(d,2)+'</span>':'<span class=na>0</span>'));
+  const fmtW=w=>w==null?'<span class=na>—</span>':(w<0?'<span class=neg>'+nf(w,0)+'</span>':nf(w,0));
+  let all=S.map((s,i)=>({s,di:i>0?(s[1]-S[i-1][1])/1000:null,de:i>0?(s[2]-S[i-1][2])/1000:null,cw:calcArr[i]}));
+  let shown=all.filter(o=>o.s[0]>=rCutoff);   // same shared window as the charts above (header ⏱ select)
+  let rows=shown.reverse().map(o=>{
+   let s=o.s,pw=s[3]==null?'<span class=na>—</span>':nf(s[3],0);
+   return `<tr><td>${dmy(s[0])} ${hm(s[0])}</td><td class="mono">${pw}</td><td class="mono">${fmtW(o.cw)}</td><td class="mono">${nf(s[1]/1000,2)}</td><td class="mono">${fmtD(o.di)}</td>`+
+    (anyExp?`<td class="mono">${nf(s[2]/1000,2)}</td><td class="mono">${fmtD(o.de)}</td>`:'')+`</tr>`;}).join('');
+  html+='<div class=card><h2>'+t('cWatt')+'</h2><p class=cap>'+t('capWatt')+' ('+shown.length+'/'+all.length+')</p><div class=twrap><table><thead><tr><th>'+t('thTime')+'</th><th>'+t('thPow')+'</th><th>'+t('thPowCalc')+'</th><th>'+t('thImpK')+'</th><th>'+t('thDelta')+'</th>'+(anyExp?'<th>'+t('thExpK')+'</th><th>'+t('thDeltaExp')+'</th>':'')+'</tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+ }
+ // day/night tariff settings for this reader -- deliberately the LAST section on the page (a settings
+ // block, not something to read regularly like the charts/tables above). Base/export price lives in the
+ // header boxes instead (per-reader now, no global setting) -- see savePrice()/saveEprice(). Raw (not
+ // gateway-resolved) override state comes from the `readers` array boot() already fetched, since
+ // /api/history only returns the resolved price.
+ { const rdr=readers.find(x=>x.id===cur);
+   if(rdr){
+    const mode=rdr.tariff_mode||0;
+    const hw=rdr.ht_win||[0,0,0,0],nw=rdr.nt_win||[0,0,0,0];
+    const hi=(id,v)=>'<input id="'+id+'" type=number min=0 max=23 value="'+v+'">';
+    html+='<div class=card><h2>'+t('cNight')+'</h2>'+
+     '<div><label>'+t('lMode')+'</label><select id=rmode onchange=tariffModeUi()>'+
+      '<option value=0'+(mode===0?' selected':'')+'>'+t('mOff')+'</option>'+
+      '<option value=1'+(mode===1?' selected':'')+'>'+t('mNight')+'</option>'+
+      '<option value=2'+(mode===2?' selected':'')+'>'+t('mHtNt')+'</option>'+
+     '</select></div>'+
+     '<p class=cap>'+t('capNight')+'</p>'+
+     '<div id=rnightbox'+(mode!==1?' hidden':'')+'>'+
+      '<div class=grid>'+
+       '<div><label>'+t('lNightStart')+'</label><input id=rnstart type=number min=0 max=23 value="'+(rdr.night_start!=null?rdr.night_start:22)+'"></div>'+
+       '<div><label>'+t('lNightEnd')+'</label><input id=rnend type=number min=0 max=23 value="'+(rdr.night_end!=null?rdr.night_end:6)+'"></div>'+
+       '<div><label>'+t('lNightPrice')+'</label><input id=rnprice type=number step=1 min=0'+(rdr.night_price_cent!=null?' value="'+rdr.night_price_cent+'"':'')+'></div>'+
+      '</div>'+
+     '</div>'+
+     '<div id=rhtntbox'+(mode!==2?' hidden':'')+'>'+
+      '<p class=cap>'+t('capHtNt')+'</p>'+
+      '<div class=grid>'+
+       '<div><label>'+t('lHtPrice')+'</label><input id=rhtp type=number step=1 min=0'+(rdr.ht_price_cent!=null?' value="'+rdr.ht_price_cent+'"':'')+'></div>'+
+       '<div><label>'+t('lNtPrice')+'</label><input id=rntp type=number step=1 min=0'+(rdr.nt_price_cent!=null?' value="'+rdr.nt_price_cent+'"':'')+'></div>'+
+      '</div>'+
+      '<div class=grid>'+
+       '<div><label>'+t('lHtWin1')+'</label>'+hi('rht0s',hw[0])+hi('rht0e',hw[1])+'</div>'+
+       '<div><label>'+t('lHtWin2')+'</label>'+hi('rht1s',hw[2])+hi('rht1e',hw[3])+'</div>'+
+      '</div>'+
+      '<div class=grid>'+
+       '<div><label>'+t('lNtWin1')+'</label>'+hi('rnt0s',nw[0])+hi('rnt0e',nw[1])+'</div>'+
+       '<div><label>'+t('lNtWin2')+'</label>'+hi('rnt1s',nw[2])+hi('rnt1e',nw[3])+'</div>'+
+      '</div>'+
+     '</div>'+
+     '<div class=row><button onclick=saveReaderPrice()>'+t('bSavePrice')+'</button><span class=msg id=rpricemsg></span></div>'+
+    '</div>';
+   }
+ }
+ main.innerHTML=html;
+}
+boot();
+</script></body></html>

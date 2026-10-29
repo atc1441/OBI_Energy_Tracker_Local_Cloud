@@ -1,9 +1,9 @@
 # BTHome BLE power output
 
-The optional `obi_gateway_c3_bthome` build receives the existing OBI meter reader
-over LoRa and advertises its instantaneous power using encrypted BTHome v2. The
-original reader stays unchanged. This build uses the ESP32-C3's Bluetooth radio;
-it does not add Zigbee support.
+All normal gateway builds include optional encrypted BTHome v2 output, disabled
+by default. Once enabled, the gateway advertises the selected LoRa reader's
+instantaneous power using its ESP32 Bluetooth radio. The original reader stays
+unchanged. This does not add Zigbee support.
 
 **Status: compiled, host-tested and radio-tested on a generic ESP32-C3;
 physical OBI hardware validation pending.**
@@ -22,10 +22,10 @@ network traffic, reader compatibility or operation on an unknown OBI revision.
 From this directory:
 
 ```sh
-pio run -e obi_gateway_c3_bthome
+pio run -e obi_gateway_c3
 ```
 
-The OTA application image is `.pio/build/obi_gateway_c3_bthome/firmware.bin`.
+The OTA application image is `.pio/build/obi_gateway_c3/firmware.bin`.
 Use the original gateway's documented [OTA installation](README.md#stock-c3)
 procedure. Check the actual device's inactive app partition before installing:
 the build's `min_spiffs.csv` uses 1,966,080-byte slots, but OTA does not replace
@@ -33,10 +33,20 @@ the device's partition table. Leave the existing 256 KiB history tail reserve
 intact when updating an open gateway. Never send a merged factory image through
 the application updater.
 
-The ordinary `obi_gateway_c3` build does not link NimBLE or expose the BLE API.
+Use your board's normal build target; no separate BLE firmware is needed.
 NimBLE is pinned, with central, observer and peripheral roles disabled; only
-advertising is used. Keep the BTHome build target when installing later updates.
-Upstream releases without this target do not contain this extension.
+advertising is used. Bluetooth initializes lazily after enabling the feature
+and receiving a valid reading. Disabled installations never initialize it.
+
+To preserve flash headroom, `embed_web.py` compresses the pages in `web/` during
+each build. The generated header lives inside the environment's build directory.
+Pages stream from flash with `Content-Encoding: gzip`; the browser decompresses
+them. Page contents are unchanged, and no device-side decompressor is needed.
+CI checks the normal C3 image against both OTA slots and the history reserve.
+The radio diagnostics ring retains 32 packets by default, saving 30 KiB of
+static RAM compared with 96 entries. The browser still keeps its own history.
+`OBI_RADIO_LOG_ENTRIES` can override this at build time where RAM permits;
+larger rings may prevent classic ESP32 builds from linking with Bluetooth.
 
 ## Configure
 
@@ -130,7 +140,8 @@ On a host with Python 3.11+, a C++ compiler and OpenSSL development headers:
 ```sh
 python -m pip install -r tests/requirements.txt
 python -m pytest tests -q
-pio run -e obi_gateway_c3 -e obi_gateway_c3_bthome
+pio run -e obi_gateway_c3
+python tests/verify_bthome_image.py .pio/build/obi_gateway_c3
 ```
 
 The native tests compile the actual packet builder and runtime module. Hardware
@@ -150,7 +161,7 @@ Undefined-behaviour checks run with traps enabled in the native binaries.
    actual partition sizes and recovery/backup procedure before flashing.
 2. Run the baseline firmware, pair the reader and compare signed watts against
    the existing ESPHome reader under import and export.
-3. Install the BTHome build, configure one reader and a fresh key, and confirm
+3. Enable BTHome, configure one reader and a fresh key, and confirm
    discovery/decryption at the intended receiver location.
 4. Compare the BLE value and timing with dashboard power. Test zero, import,
    export and the desired LoRa interval, with USB reader power if needed.
@@ -165,8 +176,9 @@ Undefined-behaviour checks run with traps enabled in the native binaries.
 
 ## Deutsch
 
-Build `obi_gateway_c3_bthome` ergänzt die originale Bridge um verschlüsseltes
-BTHome. Der Lesekopf sendet weiterhin LoRa. Übertragen wird die aktuelle
+Alle normalen Gateway-Builds enthalten verschlüsseltes BTHome, standardmäßig
+ausgeschaltet. Für die originale Bridge bleibt der Build `obi_gateway_c3`.
+Der Lesekopf sendet weiterhin LoRa. Übertragen wird die aktuelle
 vorzeichenbehaftete Leistung, entsprechend `power_sint32` in ESPHome.
 
 Die Erweiterung ist zunächst ausgeschaltet. Konfiguration erfolgt über

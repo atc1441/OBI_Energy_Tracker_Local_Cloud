@@ -1,0 +1,34 @@
+<!doctype html><html><head><meta charset=utf-8><link rel=icon href=/favicon.svg>
+<meta name=viewport content='width=device-width,initial-scale=1'><title>Open OBI Energy Tracker — Firmware Update</title><style>
+:root{--bg:#0a0e14;--panel:#141a23;--panel2:#1b2430;--line:#232e3c;--txt:#eaf0f7;--dim:#7d8da0;--accent:#31d07a;--mono:ui-monospace,Menlo,Consolas,monospace}
+*{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:0;background:var(--bg);color:var(--txt)}
+header{display:flex;align-items:center;gap:12px;padding:11px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+header b{font-size:15px}header a{color:var(--accent);text-decoration:none;font-size:13px;margin-left:auto}
+.card{max-width:34rem;margin:26px auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
+h3{margin:0 0 4px}.dim{color:var(--dim);font-size:13px;line-height:1.5}
+input[type=file]{width:100%;margin:14px 0;background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:10px;font-family:var(--mono);font-size:13px}
+button{background:var(--accent);border:0;color:#052012;font-weight:700;border-radius:9px;padding:10px 18px;cursor:pointer;font-size:14px}
+button:disabled{opacity:.5;cursor:default}
+.bar{height:10px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;overflow:hidden;margin:16px 0 6px;display:none}
+.bar.on{display:block}.fill{height:100%;width:0;background:var(--accent);transition:width .15s}
+#st{font-family:var(--mono);font-size:13px;min-height:18px}code{color:var(--accent)}
+</style></head><body>
+<header><b>Open OBI Energy Tracker · ⬆ Firmware Update</b><a href="/">← dashboard</a></header>
+<div class=card><h3>Flash a new firmware</h3>
+<p class=dim>Upload this board's <code>firmware.bin</code>. It is written to the inactive OTA slot and the device reboots into it; a bad image is rejected and the current firmware keeps running.</p>
+<input type=file id=f accept=.bin>
+<div class=bar id=bar><div class=fill id=fill></div></div>
+<div id=st></div>
+<p><button id=go onclick=up()>Flash &amp; reboot</button></p></div>
+<script>
+const $=i=>document.getElementById(i);
+function up(){let f=$('f').files[0];if(!f){$('st').textContent='pick a .bin first';return;}
+$('go').disabled=true;$('bar').classList.add('on');$('st').textContent='uploading '+f.name+' ('+(f.size/1024|0)+' KB)...';
+let fd=new FormData();fd.append('firmware',f);let x=new XMLHttpRequest();x.open('POST','/api/selfupdate');
+x.upload.onprogress=e=>{if(e.lengthComputable){let p=e.loaded/e.total*100;$('fill').style.width=p+'%';$('st').textContent='uploading '+(p|0)+'%';}};
+x.onload=()=>{let ok=false;try{ok=JSON.parse(x.responseText).ok;}catch(e){}
+$('fill').style.width='100%';$('st').textContent=ok?'written - device is rebooting into the new firmware...':'update failed (image rejected). Current firmware kept.';
+if(ok)setTimeout(()=>location.href='/',9000);else $('go').disabled=false;};
+x.onerror=()=>{$('st').textContent='connection lost (device may be rebooting)';setTimeout(()=>location.href='/',9000);};
+x.send(fd);}
+</script></body></html>

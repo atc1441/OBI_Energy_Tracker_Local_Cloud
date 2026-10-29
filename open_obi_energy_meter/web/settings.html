@@ -1,0 +1,528 @@
+<!doctype html><html><head><meta charset=utf-8><link rel=icon href=/favicon.svg>
+<meta name=viewport content='width=device-width,initial-scale=1'><title>Open OBI Energy Tracker — Settings</title><style>
+:root{--bg:#0a0e14;--panel:#141a23;--panel2:#1b2430;--line:#232e3c;--txt:#eaf0f7;--dim:#7d8da0;--accent:#31d07a;--amber:#e3b341;--red:#f0616d;--mono:ui-monospace,Menlo,Consolas,monospace}
+*{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:0;background:var(--bg);color:var(--txt)}
+header{display:flex;align-items:center;gap:12px;padding:11px 16px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:2}
+header b{font-size:15px}header a{color:var(--accent);text-decoration:none;font-size:13px;margin-left:12px}
+.seg{margin-left:auto;display:flex;background:var(--panel2);border:1px solid var(--line);border-radius:9px;overflow:hidden}.seg button{background:transparent;border:0;border-radius:0;color:var(--dim);padding:7px 12px;cursor:pointer;font-size:13px;font-weight:600}.seg button.act{background:var(--accent);color:#04140a}
+.wrap{max-width:44rem;margin:22px auto;padding:0 14px;display:flex;flex-direction:column;gap:18px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 20px}
+h3{margin:0 0 10px;font-size:16px}
+label{display:block;font-size:12px;color:var(--dim);margin:10px 0 4px}
+input,select{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 10px;font-size:14px;font-family:inherit}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px}
+button{background:var(--accent);border:0;color:#052012;font-weight:700;border-radius:9px;padding:9px 16px;cursor:pointer;font-size:14px}
+button.g{background:var(--panel2);color:var(--txt);border:1px solid var(--line);font-weight:600}
+button:disabled{opacity:.5;cursor:default}
+.stat{font-size:13px;color:var(--dim);margin-bottom:6px}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.on{background:var(--accent)}.off{background:var(--red)}.idle{background:#5b6b60}
+.msg{font-size:12.5px;color:var(--dim)}hr{border:0;border-top:1px solid var(--line);margin:16px 0}
+.bar{height:9px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;overflow:hidden;margin:12px 0 6px;display:none}
+.bar.on{display:block}.fill{height:100%;width:0;background:var(--accent);transition:width .15s}
+.upd{background:linear-gradient(90deg,rgba(49,208,122,.16),rgba(49,208,122,.04));border:1px solid var(--accent);border-radius:11px;padding:14px;margin:6px 0 2px}
+.upd b{color:var(--accent);font-size:15px}.upd button{margin-top:10px;width:100%;padding:12px;font-size:15px}
+.okrow{color:var(--accent)}code{color:var(--accent);font-family:var(--mono)}
+</style></head><body>
+<header><b>Open OBI Energy Tracker · ⚙ Settings</b><span class=seg><button id=lde onclick="setL('de')">DE</button><button id=len onclick="setL('en')">EN</button></span><a href="/">← Dashboard</a></header>
+<div class=wrap>
+
+ <div class=card id=cwifi>
+  <h3>📶 WiFi</h3>
+  <div class=stat id=wfstat>…</div>
+  <label id=lnet>Netzwerk (Scan)</label>
+  <div style="display:flex;gap:8px"><select id=ssid style="flex:1"><option value="">— scan —</option></select>
+   <button class=g id=bscan onclick=scan()>Scan</button></div>
+  <label id=lman>…oder SSID eingeben</label><input id=man placeholder=MyNetwork>
+  <label id=lwpass>Passwort</label><input id=wpass type=password placeholder=••••>
+  <div class=row><button onclick=connect()><span id=bconn>Verbinden &amp; speichern</span></button>
+   <button class=g onclick=portal()><span id=bportal>Setup-Portal (AP)</span></button>
+   <span class=msg id=wfmsg></span></div>
+  <hr>
+  <div class=stat id=apstat>…</div>
+  <label id=lappass>Hotspot-Passwort (leer = offen)</label><input id=appass type=password autocomplete=new-password placeholder=•••••••• minlength=8>
+  <div class=row><button onclick=saveApPass()><span id=bapsave>Speichern</span></button><span class=msg id=apmsg></span></div>
+ </div>
+
+ <div class=card>
+  <h3>🌐 <span id=hstip>Statische IP</span></h3>
+  <div class=stat id=stipstat>…</div>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
+   <input type=checkbox id=stipon style="width:auto;margin:0"><span id=lstipon>Statische IP statt DHCP verwenden</span></label>
+  <div class=grid>
+   <div><label id=lstipip>IP-Adresse</label><input id=stipip placeholder=192.168.1.50></div>
+   <div><label id=lstipsn>Subnetzmaske</label><input id=stipsn placeholder=255.255.255.0></div>
+   <div><label id=lstipgw>Gateway</label><input id=stipgw placeholder=192.168.1.1></div>
+   <div><label id=lstipd1>DNS 1</label><input id=stipd1 placeholder=192.168.1.1></div>
+  </div>
+  <label id=lstipd2>DNS 2 (optional)</label><input id=stipd2 placeholder="8.8.8.8">
+  <p class=cap id=stipwarn style="color:var(--red)"></p>
+  <div class=row><button onclick=saveStaticIp()><span id=bstip>Speichern</span></button><span class=msg id=stipmsg></span></div>
+ </div>
+
+ <div class=card>
+  <h3>⚙ MQTT</h3>
+  <div class=stat id=mqstat>…</div>
+  <div class=grid>
+   <div><label id=lhost>Server</label><input id=mh placeholder=192.168.1.10></div>
+   <div><label>Port</label><input id=mp type=number placeholder=1883></div>
+   <div><label id=luser>Benutzer</label><input id=mu></div>
+   <div><label id=lpass>Passwort</label><input id=mpw type=password placeholder=••••></div>
+  </div>
+  <label id=ltopic>Basis-Topic</label><input id=mt placeholder=obi/gateway>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
+   <input type=checkbox id=mtls style="width:auto;margin:0"><span id=ltls>MQTTS (TLS-Verschlüsselung)</span></label>
+  <label id=lca>CA-Zertifikat (PEM, optional)</label>
+  <textarea id=mca rows=3 placeholder="-----BEGIN CERTIFICATE-----" style="width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 10px;font-family:var(--mono);font-size:12px"></textarea>
+  <div class=row><button onclick=saveMqtt()><span id=bmsave>Speichern</span></button>
+   <button class=g onclick=disc()><span id=bdisc>Discovery senden</span></button>
+   <span class=msg id=mqmsg></span></div>
+ </div>
+
+ <div class=card>
+  <h3>🏷 <span id=hgwname>Gateway-Name</span></h3>
+  <div class=stat id=gwnstat>…</div>
+  <label id=lgwname>Anzeigename (leer = Standard, auch in Home Assistant)</label>
+  <input id=gwname placeholder="OBI Gateway …">
+  <div class=row><button onclick=saveGwName()><span id=bgwname>Speichern</span></button><span class=msg id=gwnmsg></span></div>
+ </div>
+
+ <div class=card>
+  <h3>🔒 <span id=hauth>Web-Zugang</span></h3>
+  <div class=stat id=austat>…</div>
+  <div class=grid>
+   <div><label id=lauser>Benutzer (leer = offen)</label><input id=au autocomplete=username></div>
+   <div><label id=lapass>Passwort</label><input id=ap type=password autocomplete=new-password placeholder=••••></div>
+  </div>
+  <div class=row><button onclick=saveAuth()><span id=basave>Speichern</span></button>
+   <button class=g onclick=logout()><span id=blogout>Abmelden</span></button>
+   <span class=msg id=aumsg></span></div>
+ </div>
+
+ <div class=card>
+  <h3>🕐 <span id=htime>Zeit</span></h3>
+  <div class=stat id=tzstat>…</div>
+  <label id=ltz>Zeitzone</label>
+  <select id=tzsel onchange=tzPick()>
+   <option value="CET-1CEST,M3.5.0,M10.5.0/3">Europa – Berlin/Paris/Wien (CET/CEST)</option>
+   <option value="GMT0BST,M3.5.0/1,M10.5.0">UK – London (GMT/BST)</option>
+   <option value="WET0WEST,M3.5.0/1,M10.5.0">Portugal/Irland (WET/WEST)</option>
+   <option value="EET-2EEST,M3.5.0/3,M10.5.0/4">Osteuropa – Athen/Helsinki (EET/EEST)</option>
+   <option value="EST5EDT,M3.2.0,M11.1.0">USA – Eastern</option>
+   <option value="CST6CDT,M3.2.0,M11.1.0">USA – Central</option>
+   <option value="MST7MDT,M3.2.0,M11.1.0">USA – Mountain</option>
+   <option value="PST8PDT,M3.2.0,M11.1.0">USA – Pacific</option>
+   <option value="UTC0">UTC</option>
+   <option value="">— custom / POSIX —</option>
+  </select>
+  <label>POSIX TZ</label><input id=tztext placeholder="CET-1CEST,M3.5.0,M10.5.0/3">
+  <label id=lntp>NTP-Server</label><input id=ntptext placeholder="pool.ntp.org">
+  <div class=row><button onclick=saveTz()><span id=btz>Speichern</span></button><span class=msg id=tzmsg></span></div>
+ </div>
+
+ <div class=card>
+  <h3>⚙ <span id=hmisc>Sonstiges</span></h3>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
+   <input type=checkbox id=night style="width:auto;margin:0"><span id=lnight>Nachtmodus: normale LED-Aktivität aus</span></label>
+  <div class=row><button type=button onclick=saveNightMode()><span id=bnsave>Speichern</span></button><span class=msg id=nmsg></span></div>
+  <label id=lnumfmt style="margin-top:14px;display:block">Zahlenformat</label>
+  <select id=numfmt><option value=0>Automatisch (nach Sprache)</option><option value=1>1.234,56 (EU)</option><option value=2>1,234.56 (US)</option></select>
+  <div class=row><button type=button onclick=saveNumFmt()><span id=bnumfmt>Speichern</span></button><span class=msg id=numfmtmsg></span></div>
+ </div>
+
+ <div class=card>
+  <h3>🔋 <span id=heco>EcoFlow STREAM (EcoTracker-Emulation)</span></h3>
+  <div class=stat id=ecostat>…</div>
+  <div class=msg id=econote style="margin:2px 0 8px"></div>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
+   <input type=checkbox id=ecoon style="width:auto;margin:0"><span id=lecoon>Aktiviert</span></label>
+  <div class=grid>
+   <div><label id=lecordr>Reader</label><select id=ecordr><option value=auto id=oecoauto>Automatisch</option></select></div>
+   <div><label id=lecosrc>Leistungswert</label><select id=ecosrc>
+    <option value=0 id=oecosrc0>Automatisch</option><option value=1 id=oecosrc1>Nur gemessen</option><option value=2 id=oecosrc2>Nur berechnet</option></select></div>
+   <div><label id=lecoph>Phase</label><select id=ecoph>
+    <option value=0>L1</option><option value=1>L2</option><option value=2>L3</option></select></div>
+  </div>
+  <label id=lecostale>Fehler melden, wenn Messwert älter als (Sekunden, 0 = nie)</label><input id=ecostale type=number min=0 max=65535 placeholder=300>
+  <label id=lecoallow>Erlaubte Clients für /v1/json (leer = alle)</label><input id=ecoallow maxlength=127 placeholder="192.168.1.50, 10.0.0.0/8">
+  <div class=msg id=ecoallowhint style="margin:2px 0 8px"></div>
+  <div class=msg id=ecoid style="margin-top:10px"></div>
+  <div class=row><button onclick=saveEco()><span id=beco>Speichern</span></button><button onclick=ecoPair()><span id=becopair>Kopplungsmodus</span></button><span class=msg id=ecomsg></span></div>
+  <div class=msg id=ecopairhint style="margin-top:6px"></div>
+ </div>
+
+ <div class=card>
+  <h3>📤 <span id=hftp>FTP-Backup der Historie</span></h3>
+  <div class=stat id=ftpstat>…</div>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
+   <input type=checkbox id=ftpen style="width:auto;margin:0"><span id=lftpen>Aktiviert</span></label>
+  <div class=grid>
+   <div><label id=lftphost>Server</label><input id=ftphost placeholder=192.168.1.20></div>
+   <div><label>Port</label><input id=ftpport type=number placeholder=21></div>
+   <div><label id=lftpuser>Benutzer</label><input id=ftpuser></div>
+   <div><label id=lftppass>Passwort</label><input id=ftppass type=password placeholder=••••></div>
+  </div>
+  <label id=lftppath>Zielordner (leer = Login-Verzeichnis)</label><input id=ftppath placeholder="backups/obi">
+  <label style="display:flex;align-items:center;gap:8px;margin-top:14px;cursor:pointer">
+   <input type=checkbox id=ftpuseiv style="width:auto;margin:0"><span id=lftpuseiv>Nach Intervall hochladen</span></label>
+  <div style="display:flex;gap:6px;margin-top:6px"><input id=ftpivln type=number min=1 value=24 style="flex:1">
+   <select id=ftpivlu style="flex:1"><option value=1 id=oftpM>Minuten</option><option value=60 selected id=oftpH>Stunden</option></select></div>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:14px;cursor:pointer">
+   <input type=checkbox id=ftpusetm style="width:auto;margin:0"><span id=lftpusetm>Zu fester Uhrzeit hochladen</span></label>
+  <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+   <input id=ftphh type=number min=0 max=23 value=2 style="flex:1">
+   <span style="color:var(--dim)">:</span>
+   <input id=ftpmm type=number min=0 max=59 value=0 style="flex:1">
+  </div>
+  <label id=lftpwin style="margin-top:14px;display:block">Datenfenster (Zeitraum je Export)</label>
+  <select id=ftpwin>
+   <option value=0 id=owinall>Alle gespeicherten Daten</option>
+   <option value=1 id=owin24h>Letzte 24 Stunden</option>
+   <option value=2 id=owinprevday>Voriger Kalendertag</option>
+   <option value=3 id=owin7d>Letzte 7 Tage</option>
+   <option value=4 id=owin30d>Letzte 30 Tage</option>
+  </select>
+  <p class=cap id=ftpwarn style="color:var(--red)"></p>
+  <div class=msg id=ftpnote style="margin:8px 0 0"></div>
+  <div class=row><button onclick=saveFtp()><span id=bftp>Speichern</span></button>
+   <button class=g onclick=ftpRunNow()><span id=bftprun>Jetzt hochladen</span></button>
+   <button class=g onclick=ftpShowLog()><span id=bftplog>Log anzeigen</span></button>
+   <span class=msg id=ftpmsg></span></div>
+  <pre id=ftplogbox style="display:none;margin-top:10px;max-height:280px;overflow:auto;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:9px 10px;font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;word-break:break-word"></pre>
+ </div>
+
+ <div class=card>
+  <h3>📡 <span id=hlora>LoRa-Reichweite</span></h3>
+  <div class=stat id=lorastat>…</div>
+  <label id=llorasf>Spreizfaktor (Spreading Factor)</label>
+  <select id=lorasf onchange=loraSfChanged()><option value=7>SF7 (Standard)</option><option value=9>SF9 (mehr Reichweite, langsamer)</option></select>
+  <p class=cap id=lorawarn style="color:var(--amber)"></p>
+  <p class=cap id=lorawarn9 style="color:var(--red);display:none"></p>
+  <div class=row><button type=button onclick=saveLoraSf()><span id=blorasave>Speichern</span></button><span class=msg id=lorasfmsg></span></div>
+ </div>
+
+ <div class=card>
+  <h3>⬆ Firmware</h3>
+  <div class=stat id=fwcur>…</div>
+  <div class=row style="margin-top:2px"><button class=g id=ghbtn onclick=ghCheck()>Auf Updates prüfen</button><button class=g id=ghdl onclick=ghUpdate()>Neueste neu laden</button></div>
+  <div id=ghbox class=msg>GitHub wird geprüft…</div>
+  <hr>
+  <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+   <input type=checkbox id=ghauto style="width:auto;margin:0"><span id=lghauto>Automatisches Update (Standard: aus)</span></label>
+  <div class=grid>
+   <div><label id=lghrepo>Git-Repo (owner/repo oder GitHub-URL)</label><input id=ghrepo placeholder="atc1441/OBI_Energy_Tracker_Local_Cloud"></div>
+   <div><label id=lghivl>Prüfintervall</label>
+    <div style="display:flex;gap:6px"><input id=ghivln type=number min=1 value=24 style="flex:1">
+     <select id=ghivlu style="flex:1"><option value=1 id=oghH>Stunden</option><option value=24 selected id=oghD>Tage</option></select></div></div>
+  </div>
+  <div class=msg id=ghautonote style="margin:8px 0 0"></div>
+  <div class=row><button onclick=saveGhAuto()><span id=bghauto>Speichern</span></button><span class=msg id=ghautomsg></span></div>
+  <hr>
+  <label id=lman2>Manuell flashen (.bin dieses Boards)</label>
+  <input type=file id=file accept=.bin>
+  <div class=bar id=bar><div class=fill id=fill></div></div>
+  <div class=msg id=upmsg></div>
+  <div class=row><button id=upbtn onclick=upload()><span id=bflash>Flashen &amp; neustart</span></button></div>
+  <hr>
+  <label id=lfr>Werkseinstellungen</label>
+  <div class=msg id=frnote style="margin:2px 0 8px">Löscht WLAN, MQTT und Login-Daten, dann Neustart ins Setup-Portal.</div>
+  <div class=row><button class=g id=frbtn onclick=factoryReset() style="border-color:var(--red);color:var(--red)"><span id=bfr>Auf Werkseinstellungen zurücksetzen</span></button><span class=msg id=frmsg></span></div>
+ </div>
+
+</div>
+<script>
+const $=i=>document.getElementById(i);
+const _f=window.fetch;window.fetch=(...a)=>_f(...a).then(r=>{if(r.status==401)location.href='/login';return r;});  // session lost -> login
+const de=(localStorage.getItem('lang')||'de')=='de';
+const t=(d,e)=>de?d:e;
+const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function setL(x){localStorage.setItem('lang',x);location.reload();}   // switch language + re-render
+$('l'+(de?'de':'en')).className='act';                                // mark the active language button
+// h:mm:ss (or m:ss under an hour) countdown text -- re-derived from the server's next_check_s on every
+// 5 s status poll, so it stays accurate without a separate client-side ticking timer.
+function fmtDur(s){s=Math.max(0,s|0);const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;
+ return h>0?`${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`:`${m}:${String(sec).padStart(2,'0')}`;}
+// localise the few static labels for EN users
+$('lnet').textContent=t('Netzwerk (Scan)','Network (scan)');$('bscan').textContent=t('Scan','Scan');
+$('lman').textContent=t('…oder SSID eingeben','…or type SSID');$('lwpass').textContent=t('Passwort','Password');
+$('bconn').textContent=t('Verbinden & speichern','Connect & save');$('bportal').textContent=t('Setup-Portal (AP)','Setup portal (AP)');
+$('lappass').textContent=t('Hotspot-Passwort (leer = offen)','Hotspot password (blank = open)');$('bapsave').textContent=t('Speichern','Save');
+$('hstip').textContent=t('Statische IP','Static IP');$('lstipon').textContent=t('Statische IP statt DHCP verwenden','Use a static IP instead of DHCP');
+$('lstipip').textContent=t('IP-Adresse','IP address');$('lstipsn').textContent=t('Subnetzmaske','Subnet mask');$('lstipgw').textContent=t('Gateway','Gateway');
+$('lstipd1').textContent=t('DNS 1','DNS 1');$('lstipd2').textContent=t('DNS 2 (optional)','DNS 2 (optional)');$('bstip').textContent=t('Speichern','Save');
+$('stipwarn').textContent=t('⚠️ Eine falsche IP/Gateway/Subnetzmaske kann das Dashboard über das Netzwerk unerreichbar machen — Wiederherstellung dann nur über den Werksreset-Taster am Gerät (setzt WLAN + alle Einstellungen zurück).','⚠️ A wrong IP/gateway/subnet mask can make the dashboard unreachable over the network — recovery then only via the device\'s factory-reset button (resets WiFi + all settings).');
+$('lhost').textContent=t('Server','Server');$('luser').textContent=t('Benutzer','User');$('lpass').textContent=t('Passwort','Password');
+$('ltopic').textContent=t('Basis-Topic','Base topic');$('bmsave').textContent=t('Speichern','Save');$('bdisc').textContent=t('Discovery senden','Send discovery');
+$('ltls').textContent=t('MQTTS (TLS-Verschlüsselung)','MQTTS (TLS encryption)');$('lca').textContent=t('CA-Zertifikat (PEM, optional)','CA certificate (PEM, optional)');
+$('hgwname').textContent=t('Gateway-Name','Gateway name');$('lgwname').textContent=t('Anzeigename (leer = Standard, auch in Home Assistant)','Display name (blank = default, also used in Home Assistant)');$('bgwname').textContent=t('Speichern','Save');
+$('hauth').textContent=t('Web-Zugang','Web access');$('lauser').textContent=t('Benutzer (leer = offen)','User (blank = open)');$('lapass').textContent=t('Passwort','Password');$('basave').textContent=t('Speichern','Save');$('blogout').textContent=t('Abmelden','Log out');
+$('lman2').textContent=t('Manuell flashen (.bin dieses Boards)','Manual flash (.bin for this board)');$('bflash').textContent=t('Flashen & neustart','Flash & reboot');
+$('lfr').textContent=t('Werkseinstellungen','Factory reset');$('bfr').textContent=t('Auf Werkseinstellungen zurücksetzen','Reset to factory settings');
+$('frnote').textContent=t('Löscht WLAN, MQTT, Login, gebundene Reader und den Verlauf — dann Neustart ins Setup-Portal.','Erases WiFi, MQTT, login, bound readers and history — then reboots into the setup portal.');
+$('ghbtn').textContent=t('Auf Updates prüfen','Check for updates');$('ghdl').textContent=t('Neueste neu laden','Redownload latest');
+$('lghauto').textContent=t('Automatisches Update (Standard: aus)','Automatic update (default: off)');$('lghrepo').textContent=t('Git-Repo (owner/repo oder GitHub-URL)','Git repo (owner/repo or GitHub URL)');
+$('lghivl').textContent=t('Prüfintervall','Check interval');$('oghH').textContent=t('Stunden','hours');$('oghD').textContent=t('Tage','days');$('bghauto').textContent=t('Speichern','Save');
+$('htime').textContent=t('Zeit','Time');$('ltz').textContent=t('Zeitzone','Timezone');$('lntp').textContent=t('NTP-Server','NTP server');$('btz').textContent=t('Speichern','Save');
+$('hmisc').textContent=t('Sonstiges','Misc');$('lnight').textContent=t('Nachtmodus (normale LED-Aktivität aus)','Night mode (mute normal LED activity)');
+$('bnsave').textContent=t('Speichern','Save');
+$('lnumfmt').textContent=t('Zahlenformat (kWh/W/€ im gesamten Web-UI)','Number format (kWh/W/€ across the whole web UI)');
+$('numfmt').options[0].textContent=t('Automatisch (nach Sprache)','Automatic (follows the text language)');
+$('numfmt').options[1].textContent=t('1.234,56 (europäisch)','1.234,56 (European)');
+$('numfmt').options[2].textContent=t('1,234.56 (US)','1,234.56 (US)');
+$('bnumfmt').textContent=t('Speichern','Save');
+$('heco').textContent=t('EcoFlow STREAM (EcoTracker-Emulation)','EcoFlow STREAM (EcoTracker emulation)');
+$('lecoon').textContent=t('Aktiviert — als everHome EcoTracker im Netzwerk ankündigen','Enabled — advertise as an everHome EcoTracker on the network');
+$('econote').textContent=t('Macht einen Reader für einen EcoFlow STREAM (Ultra / Ultra X / AC Pro) als lokales Netzanschluss-Messgerät sichtbar: in der EcoFlow-App als externes Strommessgerät vom Typ „ECOTRACKER IR" hinzufügen — komplett lokal, ohne Cloud und ohne Zusatzgerät. GET /v1/json ist dann ohne Login erreichbar (nur die Messwerte dieses Readers).','Exposes one reader to an EcoFlow STREAM (Ultra / Ultra X / AC Pro) as its local grid meter: add it in the EcoFlow app as an external power meter of type "ECOTRACKER IR" — fully local, no cloud, no extra hardware. GET /v1/json is then reachable without login (readings of that one reader only).');
+$('lecordr').textContent=t('Reader (Netzanschluss-Zähler)','Reader (grid meter)');
+$('oecoauto').textContent=t('Automatisch (erster gebundener Reader)','Automatic (first bound reader)');
+$('lecosrc').textContent=t('Leistungswert','Power value');
+$('oecosrc0').textContent=t('Automatisch (gemessen, sonst berechnet)','Automatic (reported, else calculated)');
+$('oecosrc1').textContent=t('Nur gemessen','Reported only');
+$('oecosrc2').textContent=t('Nur berechnet (aus Zählerständen)','Calculated only (from the Wh counters)');
+$('lecoph').textContent=t('Phase (powerPhase1–3 im Payload)','Phase (powerPhase1–3 in the payload)');
+$('lecostale').textContent=t('Fehler melden, wenn Messwert älter als (Sekunden, 0 = nie)','Report an error once the reading is older than (seconds, 0 = never)');
+$('lecoallow').textContent=t('Erlaubte Clients für /v1/json (leer = alle im Netz)','Allowed clients for /v1/json (empty = anyone on the LAN)');
+$('ecoallowhint').textContent=t('Optional: IPv4-Adressen und/oder CIDR-Bereiche, kommagetrennt — z. B. die IP des STREAM. Andere Anfragen erhalten 403. Vorsicht bei DHCP: wechselt die IP des STREAM, wird er ausgesperrt — am besten eine feste Adresse im Router vergeben.','Optional: IPv4 addresses and/or CIDR ranges, comma-separated — e.g. the STREAM\'s IP. Other clients get 403. Mind DHCP: if the STREAM\'s IP changes it gets locked out — best give it a fixed address in the router.');
+$('beco').textContent=t('Speichern','Save');
+$('becopair').textContent=t('Kopplungsmodus (15 min)','Pairing mode (15 min)');
+$('hftp').textContent=t('FTP-Backup der Historie','FTP history backup');$('lftpen').textContent=t('Aktiviert','Enabled');
+$('lftphost').textContent=t('Server','Server');$('lftpuser').textContent=t('Benutzer','User');$('lftppass').textContent=t('Passwort','Password');
+$('lftppath').textContent=t('Zielordner (leer = Login-Verzeichnis)','Target folder (blank = login directory)');
+$('lftpuseiv').textContent=t('Nach Intervall hochladen','Upload on an interval');$('oftpM').textContent=t('Minuten','minutes');$('oftpH').textContent=t('Stunden','hours');
+$('lftpusetm').textContent=t('Zu fester Uhrzeit hochladen','Upload at a fixed time');
+$('lftpwin').textContent=t('Datenfenster (Zeitraum je Export)','Data window (time span per export)');
+$('owinall').textContent=t('Alle gespeicherten Daten','All stored data');$('owin24h').textContent=t('Letzte 24 Stunden','Last 24 hours');
+$('owinprevday').textContent=t('Voriger Kalendertag','Previous calendar day');$('owin7d').textContent=t('Letzte 7 Tage','Last 7 days');$('owin30d').textContent=t('Letzte 30 Tage','Last 30 days');
+$('ftpwarn').textContent=t('⚠️ Reines FTP überträgt Zugangsdaten und Dateien unverschlüsselt — nur im vertrauenswürdigen lokalen Netzwerk verwenden, niemals über das offene Internet.','⚠️ Plain FTP transmits credentials and files unencrypted — only use this on a trusted local network, never across the open internet.');
+$('bftp').textContent=t('Speichern','Save');$('bftprun').textContent=t('Jetzt hochladen','Upload now');
+$('bftplog').textContent=t('Log anzeigen','Show log');
+$('hlora').textContent=t('LoRa-Reichweite','LoRa range');$('llorasf').textContent=t('Spreizfaktor (Spreading Factor)','Spreading factor');
+$('lorasf').options[0].textContent=t('SF7 (Standard)','SF7 (default)');$('lorasf').options[1].textContent=t('SF9 (mehr Reichweite, langsamer)','SF9 (more range, slower)');
+$('lorawarn').textContent=t('Nur ändern, wenn ALLE Reader bereits mit der passenden SF-Firmware geflasht sind — sonst verlieren sie sofort nach dem Neustart die Verbindung. Änderung wirkt erst nach einem Neustart des Gateways.','Only change this once ALL readers are already flashed with matching-SF firmware — otherwise they lose the connection the moment this reboots. Takes effect after a gateway reboot.');
+$('lorawarn9').textContent=t('⚠️ SF9 kostet deutlich mehr Sendezeit pro Übertragung (grob das 3,4-Fache) und damit spürbar mehr Akku beim Reader als SF7 — nur für Reader mit schwachem Empfang sinnvoll. Inoffizielle, ungetestete Anpassung der Reader-Firmware: Nutzung auf eigenes Risiko.','⚠️ SF9 costs noticeably more airtime per transmission (roughly 3.4×) and therefore meaningfully more reader battery than SF7 — only worth it for readers with a weak signal. An unofficial, off-label reader firmware patch: use at your own risk.');
+$('blorasave').textContent=t('Speichern','Save');
+let cfg=false,tzc=false,ghc=false,loraSfc=false,ftpc=false,ghBusy=false,ecoc=false,ecoSel='auto',ecoPairing=false;
+function loraSfChanged(){$('lorawarn9').style.display=$('lorasf').value==='9'?'':'none';}
+async function load(){try{
+  const s=await(await fetch('/api/status')).json();
+  $('wfstat').innerHTML=s.wifi?`<span class="dot on"></span>${t('Verbunden','Connected')} · ${s.ip} · ${s.wifi_rssi} dBm`:`<span class="dot off"></span>${t('nicht verbunden','offline')}`;
+  if(s.ap)$('apstat').innerHTML=`<code>${s.ap.ssid}</code> — `+(s.ap.pass_set?`<span class="dot on"></span>${t('passwortgeschützt','password-protected')}`:`<span class="dot idle"></span>${t('offen — kein Passwort','open — no password')}`);
+  const q=s.mqtt;
+  const tls=q.tls?' · 🔒TLS':'';
+  $('mqstat').innerHTML=!q.enabled?`<span class="dot idle"></span>${t('deaktiviert','disabled')}`:q.connected?`<span class="dot on"></span>${t('verbunden','connected')} · ${q.host}${tls}`:`<span class="dot off"></span>${t('getrennt','disconnected')} — ${q.state}${tls}`;
+  if(!cfg){cfg=true;$('mh').value=q.host||'';$('mp').value=q.port||1883;$('mu').value=q.user||'';$('mt').value=q.topic||'';
+   $('mtls').checked=!!q.tls;if(q.ca_set)$('mca').placeholder=t('Zertifikat gespeichert — leer lassen zum Beibehalten','certificate saved — leave blank to keep');
+   $('au').value=(s.auth&&s.auth.user)||'';$('night').checked=!!s.night_mode;$('numfmt').value=s.num_fmt||0;
+   $('gwname').value=s.gw_custom_name||'';
+   const si=s.static_ip||{};$('stipon').checked=!!si.on;
+   // Off (no custom values saved yet): prefill with whatever DHCP actually handed out right now, so turning
+   // this on starts from "what already works" instead of blank fields the user has to look up themselves.
+   $('stipip').value=si.on?si.ip:(si.cur_ip||'');$('stipsn').value=si.on?(si.sn||'255.255.255.0'):(si.cur_sn||'255.255.255.0');
+   $('stipgw').value=si.on?si.gw:(si.cur_gw||'');$('stipd1').value=si.on?si.dns1:(si.cur_dns1||'');$('stipd2').value=si.on?si.dns2:(si.cur_dns2||'');}
+  { const orig='OBI Gateway '+s.gw;
+    $('gwnstat').innerHTML=s.gw_custom_name?`${t('aktiv als','active as')} <code>${esc(s.gw_custom_name)}</code> · ${t('original','original')}: <code>${orig}</code>`:`${t('Standardname aktiv','using the default name')}: <code>${orig}</code>`; }
+  { const si=s.static_ip||{};
+    $('stipstat').innerHTML=(si.on?`<span class="dot on"></span>${t('statisch konfiguriert','static configured')}: <code>${esc(si.ip)}</code>`:`<span class="dot idle"></span>${t('DHCP (automatisch)','DHCP (automatic)')}`)+
+     ` · ${t('aktuell aktiv','currently active')}: <code>${s.ip}</code>`; }
+  $('austat').innerHTML=(s.auth&&s.auth.enabled)?`<span class="dot on"></span>${t('geschützt als','protected as')} <code>${s.auth.user}</code>`:`<span class="dot idle"></span>${t('offen — kein Passwort','open — no password')}`;
+  $('fwcur').innerHTML=`${t('Aktuell','Current')}: <code>${s.fw?s.fw.version:'?'}</code> (${s.fw?s.fw.target:''})`;
+  if(s.lora_sf&&!loraSfc){loraSfc=true;$('lorasf').value=s.lora_sf;loraSfChanged();}
+  if(s.lora_sf)$('lorastat').innerHTML=`${t('Aktiv seit letztem Neustart','Active since last reboot')}: <code>SF${s.lora_sf}</code>`;
+  if(s.gh_auto&&!ghc){ghc=true;$('ghauto').checked=!!s.gh_auto.enabled;$('ghrepo').value=s.gh_auto.repo||'';
+   let h=s.gh_auto.interval_h||24;
+   if(h>=24&&h%24===0){$('ghivlu').value=24;$('ghivln').value=h/24;}else{$('ghivlu').value=1;$('ghivln').value=h;}}
+  if(s.gh_auto){$('ghautonote').textContent=s.gh_auto.enabled?t('aktiv — prüft alle ','on — checking every ')+s.gh_auto.interval_h+t(' Std. auf ',' h against ')+(s.gh_auto.repo||'atc1441/OBI_Energy_Tracker_Local_Cloud')+t(' · nächster Check in ',' · next check in ')+fmtDur(s.gh_auto.next_check_s):t('deaktiviert — Firmware ändert sich nur manuell','off — firmware only changes manually');
+   if(s.gh_auto.state===3&&s.gh_auto.last_err)$('ghautonote').textContent+=' · '+t('letzter Versuch fehlgeschlagen: ','last attempt failed: ')+s.gh_auto.last_err;}
+  if(s.ftp&&!ftpc){ftpc=true;$('ftpen').checked=!!s.ftp.enabled;$('ftphost').value=s.ftp.host||'';$('ftpport').value=s.ftp.port||21;
+   $('ftpuser').value=s.ftp.user||'';$('ftppath').value=s.ftp.path||'';
+   let m=s.ftp.interval_min||1440;
+   if(m>=60&&m%60===0){$('ftpivlu').value=60;$('ftpivln').value=m/60;}else{$('ftpivlu').value=1;$('ftpivln').value=m;}
+   $('ftpuseiv').checked=s.ftp.use_interval!==false;$('ftpusetm').checked=!!s.ftp.use_time;
+   $('ftphh').value=s.ftp.hh??2;$('ftpmm').value=s.ftp.mm??0;$('ftpwin').value=s.ftp.window||0;}
+  if(s.ftp){const f=s.ftp;
+   const lastTxt=f.last_run_s?(f.last_result===1?t('letzter Upload ok','last upload ok'):t('letzter Upload fehlgeschlagen','last upload failed')):t('noch nie ausgeführt','never run yet');
+   const errTxt=(f.last_result===2&&f.last_err)?' — '+f.last_err:'';
+   const schedTxt=f.use_interval&&f.use_time?t(' · Intervall + feste Uhrzeit',' · interval + fixed time'):f.use_time?t(' · feste Uhrzeit','· fixed time'):'';
+   $('ftpstat').innerHTML=!f.enabled?`<span class="dot idle"></span>${t('deaktiviert','disabled')}`
+    :f.busy?`<span class="dot on"></span>${t('Upload läuft…','uploading…')}`
+    :`<span class="${f.last_result===2?'dot off':'dot on'}"></span>${lastTxt}${esc(errTxt)}`+(f.enabled&&f.use_interval?' · '+t('nächster Upload in ','next upload in ')+fmtDur(f.next_check_s):'')+esc(schedTxt);}
+  if(s.ecotracker){const ec=s.ecotracker;
+   if(!ecoc){ecoc=true;$('ecoon').checked=!!ec.enabled;$('ecosrc').value=ec.src||0;$('ecostale').value=ec.stale_s??300;$('ecoallow').value=ec.allow||'';$('ecoph').value=ec.phase||0;
+    ecoSel=(ec.reader&&ec.reader!=='000000')?ec.reader:'auto';const o=$('ecordr');if(o.dataset.filled){o.value=ecoSel;if(!o.value)o.value='auto';}}
+   const lp=ec.last_poll_s;
+   $('ecostat').innerHTML=!ec.enabled?`<span class="dot idle"></span>${t('deaktiviert','disabled')}`
+    :!ec.advertised?`<span class="dot off"></span>${t('aktiv, aber nicht angekündigt (kein WLAN?)','enabled, but not advertised (no WiFi?)')}`
+    :(lp>=0&&lp<60)?`<span class="dot on"></span>${t('wird abgefragt — letzte Abfrage vor '+lp+' s','being polled — last request '+lp+' s ago')}${ec.active_reader?' · Reader <code>'+ec.active_reader+'</code>':''}`
+    :`<span class="dot on"></span>${t('angekündigt — noch keine Abfrage vom EcoFlow','advertised — no poll from the EcoFlow yet')}`;
+   $('ecoid').innerHTML=ec.enabled?`mDNS <code>${ec.host}</code> · ${t('Seriennr.','serial')} <code>${ec.serial}</code> · <code>http://${s.ip}/v1/json</code>`+(ec.allow?` · ${t('Allowlist aktiv','allowlist active')}${ec.denied?` (${ec.denied} ${t('abgewiesen','denied')})`:''}`:''):'';
+   ecoPairing=!!ec.pairing;
+   $('becopair').textContent=ecoPairing?t('Kopplungsmodus beenden','Stop pairing mode'):t('Kopplungsmodus (15 min)','Pairing mode (15 min)');
+   $('ecopairhint').textContent=ecoPairing
+    ?t('Kopplungsmodus aktiv — /v1/json antwortet mit 0 statt mit Fehlern, solange kein echter Messwert vorliegt (noch '+Math.max(1,Math.ceil((ec.pairing_left_s||0)/60))+' min, endet automatisch). Jetzt in der EcoFlow-App koppeln.',
+       'Pairing mode active — /v1/json answers 0 instead of errors while no real reading is available ('+Math.max(1,Math.ceil((ec.pairing_left_s||0)/60))+' min left, ends automatically). Pair in the EcoFlow app now.')
+    :'';}
+  $('tzstat').innerHTML=(s.time_valid?'<span class="dot on"></span>':'<span class="dot idle"></span>')+`${t('Gerätezeit','Device time')}: <code>${s.time||'?'}</code>`+(s.time_valid?'':` · ${t('noch nicht per NTP synchronisiert','not NTP-synced yet')}`);
+  if(!tzc){tzc=true;$('tztext').value=s.tz||'';$('ntptext').value=s.ntp||'';$('tzsel').value=s.tz||'';if($('tzsel').value!==(s.tz||''))$('tzsel').value='';}
+}catch(e){}}
+function tzPick(){const v=$('tzsel').value;if(v)$('tztext').value=v;}
+async function saveNightMode(){const m=$('nmsg');m.textContent='…';try{const r=await(await fetch('/api/night_mode',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'enabled='+($('night').checked?'1':'0')})).json();if(!r.ok)throw Error();m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);}catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
+async function saveNumFmt(){const m=$('numfmtmsg');m.textContent='…';try{const r=await(await fetch('/api/numfmt',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'fmt='+$('numfmt').value})).json();if(!r.ok)throw Error();m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);}catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
+async function loadEcoReaders(){try{const rs=await(await fetch('/api/readers')).json();const o=$('ecordr');
+ rs.filter(r=>r.assigned).forEach(r=>{const op=document.createElement('option');op.value=r.id;op.textContent=r.id+(r.name?' — '+r.name:'');o.appendChild(op);});
+ o.dataset.filled=1;o.value=ecoSel;if(!o.value)o.value='auto';}catch(e){}}
+async function saveEco(){const m=$('ecomsg');m.textContent='…';
+ const b=new URLSearchParams();b.set('on',$('ecoon').checked?'1':'0');b.set('reader',$('ecordr').value||'auto');
+ b.set('src',$('ecosrc').value);b.set('stale',$('ecostale').value===''?300:$('ecostale').value);b.set('allow',$('ecoallow').value.trim());b.set('phase',$('ecoph').value);
+ try{const r=await(await fetch('/api/ecotracker',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b})).json();
+  if(r.err==='allow'){m.textContent=t('Allowlist ungültig — nur IPv4-Adressen / CIDR, kommagetrennt','invalid allowlist — IPv4 addresses / CIDR only, comma-separated');return;}
+  if(typeof r.enabled==='undefined')throw Error();m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);ecoc=false;load();}
+ catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
+async function ecoPair(){const m=$('ecomsg');m.textContent='…';
+ try{const r=await(await fetch('/api/ecotracker',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'pairing='+(ecoPairing?'0':'1')})).json();
+  if(typeof r.pairing==='undefined')throw Error();m.textContent='';ecoc=false;load();}
+ catch(e){m.textContent=t('Fehlgeschlagen','failed');}}
+async function saveGwName(){const m=$('gwnmsg');m.textContent='…';
+ try{const r=await(await fetch('/api/gwname',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'name='+encodeURIComponent($('gwname').value.trim())})).json();if(!r.ok)throw Error();
+  m.textContent=t('gespeichert ✓ — Discovery gesendet','saved ✓ — discovery sent');setTimeout(()=>m.textContent='',3000);load();}
+ catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
+async function saveFtp(){const b=new URLSearchParams();b.set('host',$('ftphost').value);b.set('port',$('ftpport').value||21);
+ b.set('user',$('ftpuser').value);b.set('path',$('ftppath').value);b.set('enabled',$('ftpen').checked?'1':'0');
+ if($('ftppass').value)b.set('pass',$('ftppass').value);
+ const mult=parseInt($('ftpivlu').value)||60,n=Math.max(1,parseInt($('ftpivln').value)||24);
+ b.set('interval_min',n*mult);
+ b.set('use_interval',$('ftpuseiv').checked?'1':'0');b.set('use_time',$('ftpusetm').checked?'1':'0');
+ b.set('hh',$('ftphh').value||0);b.set('mm',$('ftpmm').value||0);b.set('window',$('ftpwin').value||0);
+ const m=$('ftpmsg');m.textContent='…';
+ try{const r=await(await fetch('/api/ftp',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b})).json();if(!r.ok)throw Error();
+  $('ftppass').value='';m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);ftpc=false;load();}
+ catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
+async function ftpRunNow(){const m=$('ftpmsg');m.textContent='…';
+ try{const r=await(await fetch('/api/ftp/run',{method:'POST'})).json();
+  m.textContent=r.ok?t('Upload gestartet…','upload started…'):t('fehlgeschlagen: ','failed: ')+(r.err||'?');
+  setTimeout(()=>m.textContent='',4000);setTimeout(load,1500);}
+ catch(e){m.textContent=t('fehlgeschlagen','failed');}}
+// step-by-step trace of the last upload attempt -- the OBI gateway has no exposed serial port, so this (and
+// the short reason next to the status line above) is the only diagnostic available on a deployed device.
+async function ftpShowLog(){
+ const box=$('ftplogbox'),btn=$('bftplog');
+ if(box.style.display==='block'){box.style.display='none';btn.textContent=t('Log anzeigen','Show log');return;}   // toggle: click again to hide
+ box.style.display='block';btn.textContent=t('Log ausblenden','Hide log');box.textContent='…';
+ try{
+  const log=await(await fetch('/api/ftp/log')).json();
+  if(!log.length){box.textContent=t('Noch kein Log vorhanden.','No log yet.');return;}
+  const st=await(await fetch('/api/status')).json();
+  const upS=st.uptime_s||0;
+  box.textContent=log.map(e=>{
+   const ageS=Math.max(0,upS-Math.floor(e.ms/1000));
+   const ageTxt=de?('vor '+fmtDur(ageS)):(fmtDur(ageS)+' ago');
+   return '['+ageTxt+'] '+e.t;
+  }).join('\n');
+  box.scrollTop=box.scrollHeight;
+ }catch(e){box.textContent=t('Log konnte nicht geladen werden.','Failed to load log.');}
+}
+async function saveLoraSf(){const sf=$('lorasf').value;
+ const risk9=sf==='9'?t(' SF9 verbraucht außerdem spürbar mehr Akku pro Reader (grob das 3,4-Fache an Sendezeit) und ist eine inoffizielle, ungetestete Anpassung — Nutzung auf eigenes Risiko.',' SF9 also uses meaningfully more reader battery (roughly 3.4× the airtime) and is an unofficial, off-label patch — use at your own risk.'):'';
+ if(!confirm(t('SF'+sf+' speichern? Erst NACH dem manuellen Neustart aktiv. Alle Reader müssen dann bereits auf SF'+sf+' geflasht sein, sonst sind sie nach dem Neustart nicht mehr erreichbar.','Save SF'+sf+'? Only takes effect after a manual reboot. Every reader must already be flashed to SF'+sf+' by then, or it becomes unreachable the moment this reboots.')+risk9))return;
+ const m=$('lorasfmsg');m.textContent='…';
+ try{const r=await(await fetch('/api/lora/sf',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'sf='+sf})).json();if(!r.ok)throw Error();
+  m.textContent=t('gespeichert — wirkt erst nach Neustart (Firmware-Bereich oben)','saved — takes effect after a reboot (Firmware section above)');}
+ catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
+async function saveTz(){const z=$('tztext').value.trim();if(!z){$('tzmsg').textContent=t('TZ eingeben','enter a TZ');return;}
+ const n=$('ntptext').value.trim();if(!n){$('tzmsg').textContent=t('NTP-Server eingeben','enter an NTP server');return;}
+ $('tzmsg').textContent='…';try{await fetch('/api/tz',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'tz='+encodeURIComponent(z)+'&ntp='+encodeURIComponent(n)});}catch(e){}
+ $('tzmsg').textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>$('tzmsg').textContent='',3000);load();}
+async function scan(){$('wfmsg').textContent=t('suche…','scanning…');$('bscan').disabled=true;
+ try{let n=await(await fetch('/api/wifi/scan')).json();n.sort((a,b)=>b.rssi-a.rssi);let seen={},o=`<option value="">${t('— Netzwerk wählen —','— pick a network —')}</option>`;
+  for(let x of n){if(!x.ssid||seen[x.ssid])continue;seen[x.ssid]=1;o+=`<option>${x.ssid} (${x.rssi} dBm)${x.enc?' 🔒':''}</option>`;}
+  $('ssid').innerHTML=o;
+  if($('ssid').options.length>1){$('ssid').selectedIndex=1;$('ssid').onchange();}  // auto-pick the strongest so fresh results are obvious
+  $('wfmsg').textContent=Object.keys(seen).length+t(' Netzwerke',' networks');}
+ catch(e){$('wfmsg').textContent=t('Scan fehlgeschlagen','scan failed');}$('bscan').disabled=false;}
+$('ssid').onchange=()=>{let v=$('ssid').value.replace(/ \(.*/,'');if(v)$('man').value=v;};
+async function connect(){let s=$('man').value.trim()||$('ssid').value.replace(/ \(.*/,'');if(!s){$('wfmsg').textContent=t('SSID wählen','pick an SSID');return;}
+ $('wfmsg').textContent=t('verbinde mit ','connecting to ')+s+'…';
+ try{await fetch('/api/wifi/connect',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'ssid='+encodeURIComponent(s)+'&pass='+encodeURIComponent($('wpass').value)});}catch(e){}
+ $('wfmsg').textContent=t('verbinde… ändert sich die IP, öffne das Dashboard unter der neuen IP.','connecting… if the IP changes, reopen at the new IP.');}
+function portal(){fetch('/api/wifi',{method:'POST'}).then(r=>r.json()).then(d=>{alert((de?'Portal gestartet auf WLAN: ':'Portal on WiFi: ')+d.ssid+'\nhttp://192.168.4.1/');}).catch(()=>{});}
+async function saveApPass(){const p=$('appass').value;
+ if(p&&p.length<8){$('apmsg').textContent=t('mind. 8 Zeichen (oder leer lassen)','8+ chars (or leave blank)');return;}
+ $('apmsg').textContent='…';const r=await(await fetch('/api/appass',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'pass='+encodeURIComponent(p)})).json();
+ if(!r.ok){$('apmsg').textContent=t('mind. 8 Zeichen (oder leer lassen)','8+ chars (or leave blank)');return;}
+ $('appass').value='';$('apmsg').textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>$('apmsg').textContent='',3000);load();}
+function validIp4(v){return /^(\d{1,3}\.){3}\d{1,3}$/.test(v)&&v.split('.').every(o=>+o>=0&&+o<=255);}
+async function saveStaticIp(){const on=$('stipon').checked;
+ if(on){
+  const ip=$('stipip').value.trim(),sn=$('stipsn').value.trim(),gw=$('stipgw').value.trim(),d1=$('stipd1').value.trim(),d2=$('stipd2').value.trim();
+  if(!validIp4(ip)){$('stipmsg').textContent=t('ungültige IP-Adresse','invalid IP address');return;}
+  if(!validIp4(sn)){$('stipmsg').textContent=t('ungültige Subnetzmaske','invalid subnet mask');return;}
+  if(!validIp4(gw)){$('stipmsg').textContent=t('ungültiges Gateway','invalid gateway');return;}
+  if(d1&&!validIp4(d1)){$('stipmsg').textContent=t('ungültiger DNS 1','invalid DNS 1');return;}
+  if(d2&&!validIp4(d2)){$('stipmsg').textContent=t('ungültiger DNS 2','invalid DNS 2');return;}
+  if(!confirm(t('Statische IP speichern? Das Gateway startet danach sofort neu. Bei falschen Werten ist das Dashboard über das Netzwerk evtl. nicht mehr erreichbar (Wiederherstellung dann nur per Werksreset-Taster).','Save static IP? The gateway restarts immediately afterward. Wrong values may make the dashboard unreachable over the network (recovery then only via the factory-reset button).')))return;
+ } else if(!confirm(t('Zurück auf DHCP wechseln? Das Gateway startet danach sofort neu.','Switch back to DHCP? The gateway restarts immediately afterward.'))) return;
+ const b=new URLSearchParams();b.set('on',on?'1':'0');
+ if(on){b.set('ip',$('stipip').value.trim());b.set('sn',$('stipsn').value.trim());b.set('gw',$('stipgw').value.trim());b.set('dns1',$('stipd1').value.trim());b.set('dns2',$('stipd2').value.trim());}
+ $('stipmsg').textContent='…';
+ try{
+  const r=await(await fetch('/api/staticip',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b})).json();
+  if(!r.ok){$('stipmsg').textContent=t('Speichern fehlgeschlagen: ','save failed: ')+(r.err||'?');return;}
+ }catch(e){}   // the gateway reboots right after answering -- a dropped connection here is expected, not a failure
+ $('stipmsg').textContent=t('gespeichert ✓ — Gateway startet neu… Dashboard ggf. unter neuer IP erneut öffnen.','saved ✓ — gateway restarting… reopen the dashboard at the new IP if it changed.');}
+async function saveMqtt(){const b=new URLSearchParams();b.set('host',$('mh').value);b.set('port',$('mp').value||1883);b.set('user',$('mu').value);b.set('topic',$('mt').value);if($('mpw').value)b.set('pass',$('mpw').value);
+ b.set('tls',$('mtls').checked?'1':'0');if($('mca').value.trim())b.set('ca',$('mca').value.trim());  // blank CA = keep existing / encrypt-only
+ $('mqmsg').textContent='…';await fetch('/api/mqtt',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b});$('mpw').value='';$('mqmsg').textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>$('mqmsg').textContent='',3000);load();}
+async function saveAuth(){const u=$('au').value.trim(),p=$('ap').value;
+ if(u&&!p){$('aumsg').textContent=t('Benutzer und Passwort nötig','user and password required');return;}   // no user-without-password
+ const b=new URLSearchParams();b.set('user',u);if(p)b.set('pass',p);
+ $('aumsg').textContent='…';const r=await(await fetch('/api/auth',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b})).json();$('ap').value='';
+ if(!r.ok){$('aumsg').textContent=t('Benutzer und Passwort nötig','user and password required');return;}
+ if(u){location.href='/login';return;}   // auth on -> (re)login with the new credentials
+ $('aumsg').textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>$('aumsg').textContent='',4000);load();}
+async function logout(){await fetch('/api/logout',{method:'POST'});location.href='/login';}
+async function disc(){$('mqmsg').textContent='…';try{const r=await(await fetch('/api/rediscover',{method:'POST'})).json();$('mqmsg').textContent=r.ok?t('Discovery gesendet ✓','discovery sent ✓')+' ('+r.count+')':t('MQTT nicht verbunden','MQTT not connected');}catch(e){$('mqmsg').textContent='error';}setTimeout(()=>$('mqmsg').textContent='',4000);}
+async function ghCheck(){const box=$('ghbox');box.className='msg';box.textContent=t('GitHub wird geprüft…','checking GitHub…');
+ try{const r=await(await fetch('/api/github/latest')).json();
+  if(r.version&&r.asset)$('ghdl').textContent=t('Neueste neu laden','Redownload latest')+': '+r.version;
+  if(!r.ok){box.textContent=t('Keine Release-Info von GitHub (evtl. noch kein Release veröffentlicht).','No release info from GitHub (maybe no release published yet).');return;}
+  if(r.newer&&r.asset){box.className='upd';box.innerHTML=`<b>⬆ ${t('Update verfügbar','Update available')}: ${r.version}</b><br><span class=msg>${t('Aktuell','current')}: ${r.current}</span><button onclick=ghUpdate()>${t('Jetzt aktualisieren','Update now')}</button>`;}
+  else if(r.newer&&!r.asset){box.textContent=`${t('Release','Release')} ${r.version} ${t('gefunden, aber kein Build für dieses Board im Release.','found, but no build for this board in the release.')}`;}
+  else{box.className='msg okrow';box.innerHTML=`✓ ${t('Aktuell','Up to date')} (${r.current}) — ${t('neuestes Release','latest release')}: ${r.version}`;}
+ }catch(e){box.textContent=t('GitHub-Prüfung fehlgeschlagen','GitHub check failed');}}
+async function ghUpdate(){if(!confirm(t('Firmware von GitHub laden und flashen? Das Gerät startet danach neu.','Download & flash firmware from GitHub? The device reboots afterwards.')))return;
+ const box=$('ghbox');box.className='msg';
+ box.innerHTML='⏳ '+t('lade & flashe von GitHub… (nicht trennen)','downloading & flashing from GitHub… (do not disconnect)')
+   +'<div class="bar on" style="margin:10px 0 4px"><div class=fill id=ghfill></div></div><div id=ghp class=msg>0%</div>';
+ // Pause the 5s /api/status poll (load()) for the duration -- it's a big JSON build on a device with only
+ // ~320 KB RAM, and competing with it for heap is a real contributor to OTA download stalls on this board.
+ ghBusy=true;
+ try{const r=await(await fetch('/api/github/update',{method:'POST'})).json();
+  if(!r.ok){box.className='msg';box.textContent=t('Start fehlgeschlagen','failed to start')+' ('+(r.err||'?')+')';ghBusy=false;return;}
+  ghPoll();
+ }catch(e){box.className='msg';box.textContent=t('Fehler beim Start','error starting');ghBusy=false;}}
+async function ghPoll(){try{const p=await(await fetch('/api/github/progress')).json();
+  const f=$('ghfill'),info=$('ghp');
+  if(f)f.style.width=(p.pct||0)+'%';
+  if(info)info.textContent=(p.pct||0)+'%'+(p.total?' · '+Math.round((p.done||0)/1024)+'/'+Math.round(p.total/1024)+' KB':'');
+  if(p.state==2){ghBusy=false;if(info)info.textContent='✓ '+t('fertig — Neustart läuft…','done — rebooting…');setTimeout(()=>location.href='/',10000);return;}
+  if(p.state==3){ghBusy=false;$('ghbox').className='msg';$('ghbox').textContent=t('Update fehlgeschlagen','Update failed')+(p.err?' — '+p.err:'')+' — '+t('aktuelle Firmware bleibt.','current firmware kept.');return;}
+  setTimeout(ghPoll,700);
+ }catch(e){setTimeout(()=>location.href='/',10000);}}  // a failing poll usually means it's rebooting
+async function saveGhAuto(){const en=$('ghauto').checked;
+ const mult=parseInt($('ghivlu').value)||1,n=Math.max(1,parseInt($('ghivln').value)||24),hours=n*mult;
+ const b=new URLSearchParams();b.set('enabled',en?'1':'0');b.set('repo',$('ghrepo').value.trim());b.set('interval_h',hours);
+ $('ghautomsg').textContent='…';await fetch('/api/github/auto',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b});
+ $('ghautomsg').textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>$('ghautomsg').textContent='',3000);ghc=false;load();}
+function upload(){let f=$('file').files[0];if(!f){$('upmsg').textContent=t('erst eine .bin wählen','pick a .bin first');return;}
+ $('upbtn').disabled=true;$('bar').classList.add('on');$('upmsg').textContent=t('lade hoch','uploading')+' '+f.name+'…';
+ let fd=new FormData();fd.append('firmware',f);let x=new XMLHttpRequest();x.open('POST','/api/selfupdate');
+ x.upload.onprogress=e=>{if(e.lengthComputable){let p=e.loaded/e.total*100;$('fill').style.width=p+'%';$('upmsg').textContent=t('lade hoch ','uploading ')+(p|0)+'%';}};
+ x.onload=()=>{let ok=false;try{ok=JSON.parse(x.responseText).ok;}catch(e){}$('fill').style.width='100%';$('upmsg').textContent=ok?t('geschrieben — Neustart…','written — rebooting…'):t('Update fehlgeschlagen (Image abgelehnt).','update failed (image rejected).');if(ok)setTimeout(()=>location.href='/',9000);else $('upbtn').disabled=false;};
+ x.onerror=()=>{$('upmsg').textContent=t('Verbindung verloren (evtl. Neustart)','connection lost (maybe rebooting)');setTimeout(()=>location.href='/',9000);};
+ x.send(fd);}
+async function factoryReset(){
+ if(!confirm(t('Wirklich auf Werkseinstellungen zurücksetzen?\n\nWLAN, MQTT, Login, alle gebundenen Reader und der komplette Verlauf werden gelöscht. Das Gerät startet danach im Setup-Portal (WLAN „OpenOBI-…", http://192.168.4.1/).','Really reset to factory settings?\n\nWiFi, MQTT, login, all bound readers and the entire history will be erased. The device then boots into the setup portal (WiFi "OpenOBI-…", http://192.168.4.1/).')))return;
+ $('frbtn').disabled=true;$('frmsg').textContent=t('setze zurück…','resetting…');
+ try{await fetch('/api/factory_reset',{method:'POST'});}catch(e){}
+ $('frmsg').textContent=t('zurückgesetzt — Neustart ins Setup-Portal…','reset — rebooting into setup portal…');}
+load().then(loadEcoReaders);ghCheck();setInterval(()=>{if(!ghBusy)load();},5000);   // keep WiFi/MQTT status + the device clock fresh -- but not while a GitHub OTA is running, see ghUpdate()
+</script></body></html>

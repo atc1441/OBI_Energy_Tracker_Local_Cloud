@@ -86,7 +86,6 @@ jobs:
       matrix:
         variant:
           - obi_gateway_c3
-          - obi_gateway_c3_bthome
           - vision_master_e290
           - ttgo_tbeam_sx1262
           - generic_esp32s3
@@ -119,9 +118,9 @@ jobs:
         run: pio run -e ${{ matrix.variant }}
 
       - name: Check BLE image and history reserve
-        if: matrix.variant == 'obi_gateway_c3_bthome'
+        if: matrix.variant == 'obi_gateway_c3'
         working-directory: open_obi_energy_meter
-        run: python tests/verify_bthome_image.py .pio/build/obi_gateway_c3_bthome
+        run: python tests/verify_bthome_image.py .pio/build/obi_gateway_c3
 
       - name: Stage binary
         working-directory: open_obi_energy_meter

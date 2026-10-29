@@ -11,6 +11,7 @@ FakeSerial Serial;
 FakeStorage testStorage;
 bool testStorageFail = false;
 NimBLEAdvertising testAdvertising;
+unsigned testBleInitCalls = 0;
 const int MAX_READERS = 2;
 Reader readers[MAX_READERS];
 WebServer web;
@@ -52,6 +53,7 @@ int main(int argc, char **argv) {
   statusContains("\"enabled\":false");
   capture(100);
   assert(!testAdvertising.isAdvertising());
+  assert(testBleInitCalls == 0);
 
   if (!strcmp(argv[1], "validation")) {
     web.params = {{"enabled", "1"}, {"reader", "010203"}};
@@ -75,10 +77,12 @@ int main(int argc, char **argv) {
 
   configure();
   statusContains("\"key_set\":true");
+  assert(testBleInitCalls == 0);
   capture(-850, 1);
   assert(!testAdvertising.isAdvertising());
   capture(-850);
   assert(testAdvertising.isAdvertising());
+  assert(testBleInitCalls == 1);
   assert(!testAdvertising.scanResponse && testAdvertising.mode == BLE_GAP_CONN_MODE_NON);
   assert(testAdvertising.minInterval == 160 && testAdvertising.maxInterval == 240);
   assert(testAdvertising.duration == 2000);

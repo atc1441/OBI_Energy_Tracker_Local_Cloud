@@ -1,7 +1,7 @@
 <a name="english"></a>
 # Open OBI Energy Meter — ESP32 + SX1262 LoRa gateway
 
-Optional encrypted BLE power output for the original gateway:
+Optional encrypted BLE power output in normal gateway builds (disabled by default):
 [BTHome build, configuration and validation](BTHOME.md).
 Experimental; physical OBI hardware validation is pending.
 
