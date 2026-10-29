@@ -2626,8 +2626,10 @@ static void startServices() {
   server.on("/api/bthome", HTTP_GET, guard(bthome_status));
   server.on("/api/bthome", HTTP_POST, guard(bthome_configure));
 #endif
-  static const char *collectHdrs[] = { "Cookie" };
-  server.collectHeaders(collectHdrs, 1);   // needed so server.header("Cookie") works for the login session
+  static const char *collectHdrs[] = { "Cookie", "Accept-Encoding" };
+  // Cookie: so server.header("Cookie") works for the login session.
+  // Accept-Encoding: so sendGzipHtml() can tell a client that refuses gzip instead of sending it anyway.
+  server.collectHeaders(collectHdrs, 2);
   }   // end one-time route registration
   server.begin();
   applyMqttClient();                // pick plain/TLS socket + set the broker address

@@ -1,10 +1,12 @@
 #include "Arduino.h"
 #include "NimBLEDevice.h"
+#include "esp_bt.h"
 #include "Preferences.h"
 #include "WebServer.h"
 #include "bthome_ble.h"
 #include "reader.h"
 #include <assert.h>
+#include <stdlib.h>
 
 uint32_t testMillis = 10000;
 FakeSerial Serial;
@@ -12,6 +14,8 @@ FakeStorage testStorage;
 bool testStorageFail = false;
 NimBLEAdvertising testAdvertising;
 unsigned testBleInitCalls = 0;
+unsigned testBleDeinitCalls = 0;
+unsigned testBtReleases = 0;
 const int MAX_READERS = 2;
 Reader readers[MAX_READERS];
 WebServer web;
@@ -27,6 +31,23 @@ static void configure() {
   web.params = {{"enabled", "1"}, {"reader", "010203"}, {"key", key}, {"stale_seconds", "5"}};
   bthome_configure();
   assert(web.code == 200);
+}
+
+// The 24-byte blob bthome_configure() persists: version 1, enabled, key present, reader 01:02:03,
+// stale 5 s, bindkey. Writing it before bthome_init() puts the module in the state a real device is in
+// after setup AND a reboot -- the only state the radio can still start from, since a boot that finds
+// BTHome disabled hands its RAM to the general heap.
+static void seedEnabled() {
+  std::vector<uint8_t> blob(24, 0);
+  blob[0] = 1; blob[1] = 1; blob[2] = 1;
+  blob[3] = 1; blob[4] = 2; blob[5] = 3;
+  blob[6] = 5;
+  for (int i = 0; i < 16; ++i) {
+    const std::string byte(key + 2 * i, 2);
+    blob[8 + i] = (uint8_t)strtoul(byte.c_str(), nullptr, 16);
+  }
+  testStorage["obible"]["config"] = blob;
+  testStorage["obiblecount"]["high"] = std::vector<uint8_t>(8, 0);
 }
 
 static void capture(int32_t power, unsigned index = 0) {
@@ -49,13 +70,31 @@ int main(int argc, char **argv) {
   r.used = r.assigned = r.haveData = true;
   r.flags = 1; r.handle[0] = 1; r.handle[1] = 2; r.handle[2] = 3;
   readers[1] = r; readers[1].handle[2] = 4;
+
+  const bool bootsEnabled = strcmp(argv[1], "validation") != 0 &&
+                            strcmp(argv[1], "disabled_boot") != 0;
+  if (bootsEnabled) seedEnabled();
   bthome_init(&web);
-  statusContains("\"enabled\":false");
-  capture(100);
-  assert(!testAdvertising.isAdvertising());
-  assert(testBleInitCalls == 0);
+
+  // A disabled boot must give the radio's RAM away and must not be able to take it back without one.
+  if (!strcmp(argv[1], "disabled_boot")) {
+    statusContains("\"enabled\":false");
+    assert(testBtReleases == 1 && testBleInitCalls == 0);
+    capture(100);
+    assert(!testAdvertising.isAdvertising());
+    configure();                                   // stored, but cannot take effect until a reboot
+    statusContains("\"reboot_required\":true");
+    statusContains("Reboot required");
+    capture(100);
+    assert(!testAdvertising.isAdvertising() && testBleInitCalls == 0);
+    return 0;
+  }
 
   if (!strcmp(argv[1], "validation")) {
+    statusContains("\"enabled\":false");
+    capture(100);
+    assert(!testAdvertising.isAdvertising());
+    assert(testBleInitCalls == 0);
     web.params = {{"enabled", "1"}, {"reader", "010203"}};
     bthome_configure(); assert(web.code == 400);
     for (const auto &entry : std::vector<std::pair<String, String>>{
@@ -75,9 +114,10 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  configure();
+  // Booted with BTHome already enabled: the radio's RAM is still ours and nothing has touched it yet.
+  assert(testBtReleases == 0 && testBleInitCalls == 0);
   statusContains("\"key_set\":true");
-  assert(testBleInitCalls == 0);
+  statusContains("\"reboot_required\":false");
   capture(-850, 1);
   assert(!testAdvertising.isAdvertising());
   capture(-850);
@@ -148,11 +188,13 @@ int main(int argc, char **argv) {
     capture(-25); assert(sequence() == 2);
     web.params = {{"enabled", "0"}};
     bthome_configure(); assert(web.code == 200);
+    assert(testBleDeinitCalls == 1 && testBtReleases == 1);   // heap handed back immediately
     capture(10); assert(!testAdvertising.isAdvertising());
     web.params = {{"enabled", "1"}};
     bthome_configure(); assert(web.code == 200);
-    assert(!testAdvertising.isAdvertising());
-    capture(10); assert(sequence() == 3);
+    statusContains("\"reboot_required\":true");
+    capture(10);
+    assert(!testAdvertising.isAdvertising() && testBleInitCalls == 1);
     return 0;
   }
   if (!strcmp(argv[1], "missing_counter")) {

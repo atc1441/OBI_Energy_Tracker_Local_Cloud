@@ -40,13 +40,59 @@ and receiving a valid reading. Disabled installations never initialize it.
 
 To preserve flash headroom, `embed_web.py` compresses the pages in `web/` during
 each build. The generated header lives inside the environment's build directory.
-Pages stream from flash with `Content-Encoding: gzip`; the browser decompresses
-them. Page contents are unchanged, and no device-side decompressor is needed.
+Pages stream from flash with `Content-Encoding: gzip` and `Vary: Accept-Encoding`; the
+browser decompresses them. Page contents are unchanged, and no device-side decompressor is needed.
+Because there is no decompressor, a request that rules gzip out (`Accept-Encoding: identity`,
+`deflate`, `gzip;q=0`) is answered with `406 Not Acceptable` and a line of plain text rather than a
+body it could not read. A request with no `Accept-Encoding` header still receives gzip, which RFC 9110
+permits; `curl --compressed` is the convenient way to read a page from a shell.
 CI checks the normal C3 image against both OTA slots and the history reserve.
 The radio diagnostics ring retains 32 packets by default, saving 30 KiB of
 static RAM compared with 96 entries. The browser still keeps its own history.
 `OBI_RADIO_LOG_ENTRIES` can override this at build time where RAM permits;
 larger rings may prevent classic ESP32 builds from linking with Bluetooth.
+
+## Heap: Bluetooth or everything else
+
+Measured on a live obi_gateway_c3, settled about 30 s after boot (`/api/status`):
+
+| State | Free heap | Largest block |
+| --- | --- | --- |
+| Built without BTHome (`custom_bthome =`) | 132,300 | 102,400 |
+| Built with BTHome, switched off at boot | 117,500 | 94,200 |
+| Switched on, advertising | 65,300 | 45,000 |
+| Switched off again at runtime | 114,200 | 47,100 |
+
+Three things follow from that.
+
+**Switching off returns the radio's heap at once.** `enabled=0` deinitializes the host stack and
+releases what the controller still allows, so the roughly 49 KB NimBLE had taken comes back
+immediately instead of staying occupied until the next restart.
+
+**Switching on again needs a reboot.** Handing that memory to the heap is one-way per boot
+(`esp_bt_mem_release` may only run before the controller has been started). A gateway that booted with
+BTHome off therefore stores the new configuration, answers `"reboot_required": true` with
+`"error": "Reboot required to start Bluetooth"`, and begins advertising after a restart.
+`POST /api/reboot` is enough.
+
+**Linking the code at all still costs about 15 KB, even switched off.** On the ESP32-C3 that is not the
+controller's releasable BSS: `esp_bt_mem_release` returns only ~2 KB before the controller starts, and
+the rest only disappears if NimBLE is not linked. Installations that will never use BTHome should leave
+it out of the build. One line in the git-ignored `platformio.local.ini` does it:
+
+```ini
+[env]
+custom_bthome =
+```
+
+That also saves about 126 KB of flash and changes nothing else in the firmware.
+
+**Reader-firmware updates want one large contiguous block.** `gw_ota_begin()` allocates a whole reader
+image in a single `malloc()` (~45 KB for the `reader_modded_*` images), so it is bounded by the largest
+block, not by free heap. While BTHome advertises that block is around 45 KB, and a runtime switch-off
+leaves it fragmented near 47 KB -- push reader firmware from a freshly rebooted gateway with BTHome off.
+The gateway's own OTA is unaffected: it streams in 4 KiB writes and was verified updating a live C3
+while BLE was running.
 
 ## Configure
 
@@ -91,7 +137,7 @@ Update receiver entity references or automations accordingly.
 | `stale_seconds` | 5–3600 seconds; defaults to 60 |
 
 Status: `GET /api/bthome`. It reports configuration, Bluetooth MAC, advertising
-state, packet count, sample age and errors. It never returns the key.
+state, `reboot_required`, packet count, sample age and errors. It never returns the key.
 
 To disable, send `enabled=0` to the same POST endpoint. Changing configuration
 stops advertisements and waits for the next valid reading. Authentication

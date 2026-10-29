@@ -7,6 +7,7 @@
 #include <NimBLEDevice.h>
 #include <Preferences.h>
 #include <WebServer.h>
+#include <esp_bt.h>
 #include <esp_mac.h>
 #include <mbedtls/ccm.h>
 
@@ -36,7 +37,19 @@ bthome::Counter counter;
 uint8_t mac[6] = {};
 uint32_t lastSend = 0, lastGeneration = 0, frames = 0;
 bool haveSent = false, counterReady = false;
+bool bleReleased = false;          // radio RAM handed to the general heap -- BLE needs a reboot now
 const char *error = "";
+
+// Nothing will bring Bluetooth up this boot, so give the controller's and host stack's BSS/data back to
+// the general heap: ~16 KB on obi_gateway_c3, which MQTT, the web server and above all gw_ota_begin()'s
+// single contiguous malloc() of a reader image can use instead. esp_bt.h allows this only while the
+// controller has never been initialized, so it is one-way until the next reboot -- which is exactly the
+// trade wanted here: the heap belongs either to Bluetooth or to everything else, never half to each.
+void releaseBleMemory() {
+  if (bleReleased) return;
+  bleReleased = esp_bt_mem_release(ESP_BT_MODE_BTDM) == ESP_OK;
+  if (bleReleased) Serial.printf("[bthome] off -- released Bluetooth RAM to the heap\n");
+}
 
 bool reserveCounter(uint64_t high, void *) {
   Preferences p;
@@ -75,6 +88,18 @@ void stopAdvertising() {
   haveSent = false;
 }
 
+// Switched off (or factory-reset) at runtime. Drop the host stack's heap right away; the controller's
+// own RAM only comes back if it was never initialized, so once BLE has run this boot the remainder
+// waits for a reboot -- reported as "reboot_required".
+void shutdownBle() {
+  if (advertising) {
+    stopAdvertising();
+    NimBLEDevice::deinit(true);    // clearAll deletes the advertising object -- drop our pointer too
+    advertising = nullptr;
+  }
+  releaseBleMemory();
+}
+
 void fail(const char *message) {
   stopAdvertising();
   error = message;
@@ -95,6 +120,7 @@ bool encrypt(const uint8_t *key, const uint8_t *nonce, const uint8_t *plain,
 
 bool startBle() {
   if (advertising) return true;
+  if (bleReleased) return false;   // its RAM is someone else's now; only a reboot can undo that
   if (!NimBLEDevice::init("OBI-PWR")) return false;
   if (!NimBLEDevice::setOwnAddrType(BLE_OWN_ADDR_PUBLIC)) return false;
   advertising = NimBLEDevice::getAdvertising();
@@ -140,13 +166,14 @@ void bthome_init(WebServer *srv) {
   Config loadedConfig;
   uint8_t data[24];
   Preferences p;
-  if (!p.begin("obible", false)) { error = "Configuration storage unavailable"; return; }
+  if (!p.begin("obible", false)) { error = "Configuration storage unavailable"; releaseBleMemory(); return; }
   bool exists = p.isKey("config");
   size_t size = p.getBytesLength("config");
   bool loaded = size == sizeof data && p.getBytes("config", data, sizeof data) == sizeof data;
   p.end();
   if (exists && (!loaded || data[0] != 1 || data[1] > 1 || data[2] > 1)) {
     error = "Invalid stored configuration";
+    releaseBleMemory();
     return;
   }
   if (loaded) {
@@ -157,15 +184,17 @@ void bthome_init(WebServer *srv) {
     if (loadedConfig.stale < 5 || loadedConfig.stale > 3600 ||
         (loadedConfig.enabled && !loadedConfig.hasKey)) {
       error = "Invalid stored configuration";
+      releaseBleMemory();
       return;
     }
   }
-  if (esp_read_mac(mac, ESP_MAC_BT) != ESP_OK) { error = "Bluetooth address unavailable"; return; }
+  if (esp_read_mac(mac, ESP_MAC_BT) != ESP_OK) { error = "Bluetooth address unavailable"; releaseBleMemory(); return; }
   counterReady = loadCounter(loadedConfig.hasKey);
   if (!counterReady) error = "Counter unavailable or exhausted";
   portENTER_CRITICAL(&sampleMux);
   config = loadedConfig; sample = Sample{};
   portEXIT_CRITICAL(&sampleMux);
+  if (!loadedConfig.enabled || !counterReady) releaseBleMemory();
 }
 
 void bthome_capture(const Reader &r) {
@@ -248,6 +277,7 @@ void bthome_status() {
   String json = "{\"enabled\":" + String(cfg.enabled ? "true" : "false");
   json += ",\"key_set\":" + String(cfg.hasKey ? "true" : "false");
   json += ",\"advertising\":" + String(advertising && advertising->isAdvertising() ? "true" : "false");
+  json += ",\"reboot_required\":" + String(cfg.enabled && bleReleased ? "true" : "false");
   json += ",\"mac\":\"" + String(address) + "\",\"reader\":\"" + String(handle) + "\"";
   json += ",\"stale_seconds\":" + String(cfg.stale) + ",\"frames\":" + String(frames);
   json += ",\"sample_age_ms\":" + (latest.valid ? String(uint32_t(millis() - latest.received)) : String("null"));
@@ -293,7 +323,10 @@ void bthome_configure() {
   portENTER_CRITICAL(&sampleMux);
   config = next; sample = Sample{};
   portEXIT_CRITICAL(&sampleMux);
-  error = "";
+  if (!next.enabled) shutdownBle();   // off again: hand the heap back instead of holding it idle
+  // Enabling after the RAM went to the heap can only take effect on the next boot. The configuration is
+  // stored either way; "reboot_required" and this message say what is still missing.
+  error = (next.enabled && bleReleased) ? "Reboot required to start Bluetooth" : "";
   bthome_status();
 }
 
@@ -303,6 +336,8 @@ void bthome_reset() {
   portEXIT_CRITICAL(&sampleMux);
   Preferences p;
   if (p.begin("obible", false)) { p.clear(); p.end(); }
+  error = "";
+  shutdownBle();
   // Preserve counters across factory resets.
 }
 
