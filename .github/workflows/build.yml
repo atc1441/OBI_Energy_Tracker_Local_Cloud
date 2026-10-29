@@ -40,7 +40,7 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       tag: ${{ steps.v.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0   # need the full tag list to compute the next patch number
 
@@ -61,6 +61,22 @@ jobs:
           echo "tag=v$ver"    >> "$GITHUB_OUTPUT"
           echo "Firmware version: $ver"
 
+  test-bthome:
+    name: Test BTHome packets and lifecycle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: '3.14'
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ libssl-dev
+          python -m pip install -r open_obi_energy_meter/tests/requirements.txt
+      - name: Run host tests
+        run: python -m pytest open_obi_energy_meter/tests -q
+
   build:
     name: Build ${{ matrix.variant }}
     needs: version
@@ -76,14 +92,14 @@ jobs:
           - generic_esp32
           - xiao_esp32s3
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: '3.12'
 
       - name: Cache PlatformIO
-        uses: actions/cache@v4
+        uses: actions/cache@v6.1.0
         with:
           path: |
             ~/.platformio
@@ -101,6 +117,11 @@ jobs:
         working-directory: open_obi_energy_meter
         run: pio run -e ${{ matrix.variant }}
 
+      - name: Check BLE image and history reserve
+        if: matrix.variant == 'obi_gateway_c3'
+        working-directory: open_obi_energy_meter
+        run: python tests/verify_bthome_image.py .pio/build/obi_gateway_c3
+
       - name: Stage binary
         working-directory: open_obi_energy_meter
         run: |
@@ -109,8 +130,9 @@ jobs:
              "dist/${{ matrix.variant }}-${{ needs.version.outputs.version }}.bin"
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
+          retention-days: 7
           name: ${{ matrix.variant }}
           path: open_obi_energy_meter/dist/*.bin
           if-no-files-found: error
@@ -119,7 +141,7 @@ jobs:
     name: Build reader firmware mod
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
       - name: Install arm-none-eabi-gcc
         run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
@@ -157,15 +179,16 @@ jobs:
           cp reader_modded_89mock_v90_EMHeHZP_sf9.bin dist/
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
+          retention-days: 7
           name: reader_firmware_mod
           path: reader_firmware_mod/dist/*.bin
           if-no-files-found: error
 
   release:
     name: Publish release
-    needs: [ version, build, build-reader ]
+    needs: [ version, build, build-reader, test-bthome ]
     # Auto-release on every push to main; also attach to a manually published release.
     # PRs and plain workflow_dispatch runs only produce artifacts (no release).
     if: >-
@@ -174,13 +197,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all built binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.2
         with:
           path: dist
           merge-multiple: true
 
       - name: Publish / update the GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3.0.3
         with:
           tag_name: ${{ needs.version.outputs.tag }}
           name: Open OBI Energy Meter ESP32 Firmware ${{ needs.version.outputs.tag }}

@@ -1,0 +1,459 @@
+
+<!doctype html><html><head><meta charset="utf-8"><link rel="icon" href="/favicon.svg">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Open OBI Energy Tracker</title>
+<style>
+:root{--bg:#0a0e14;--panel:#141a23;--panel2:#1b2430;--line:#232e3c;--txt:#eaf0f7;--dim:#7d8da0;
+--accent:#31d07a;--accent2:#12a35a;--amber:#e3b341;--red:#f0616d;--blue:#5aa9ff;
+--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:
+ radial-gradient(1200px 500px at 80% -10%,#12351f33,transparent),
+ radial-gradient(900px 400px at -10% 0%,#0e2a4a33,transparent),var(--bg);
+ color:var(--txt);font:14.5px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;min-height:100vh}
+header{padding:12px 20px;position:sticky;top:0;z-index:5;
+ background:#0a0e14cc;backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.htop{display:flex;align-items:center;gap:13px}
+.logo{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;font-size:19px;
+ background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 0 18px #31d07a55}
+h1{font-size:16px;margin:0;font-weight:650}.sub{color:var(--dim);font-size:12px}
+.ghlink{font-size:12px;font-weight:500;color:var(--accent);text-decoration:none;margin-left:8px;vertical-align:middle;white-space:nowrap}
+.ghlink:hover{text-decoration:underline}
+.spacer{flex:1}
+.seg{display:flex;background:var(--panel2);border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.seg button{background:transparent;border:0;color:var(--dim);padding:7px 12px;cursor:pointer;font-size:13px;font-weight:600}
+.seg button.act{background:var(--accent);color:#04140a}
+.icon{background:var(--panel2);border:1px solid var(--line);color:var(--dim);border-radius:9px;padding:7px 11px;cursor:pointer;font-size:15px}
+.wrap{max-width:1200px;margin:0 auto;padding:20px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;margin-top:11px}
+.pill{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:7px 12px;font-size:12.5px;white-space:nowrap}
+.pill .k{color:var(--dim);margin-right:7px;font-weight:600}.pill b{font-family:var(--mono)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+.on{background:var(--accent);box-shadow:0 0 8px var(--accent)}.off{background:var(--red)}.idle{background:var(--dim)}
+.list{display:flex;flex-direction:column;gap:12px}
+.card{background:linear-gradient(180deg,#161d27,#131922);border:1px solid var(--line);border-radius:15px;
+ padding:14px 16px;transition:.15s;position:relative;overflow:hidden}
+.card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(var(--accent),var(--accent2))}
+.hd{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.hd .id{font-family:var(--mono);font-size:17px;font-weight:700;letter-spacing:1.5px}
+.tag{font-size:10px;padding:3px 8px;border-radius:20px;border:1px solid var(--line);color:var(--dim);
+ text-transform:uppercase;letter-spacing:.8px;font-weight:700}
+.tag.meter{color:var(--blue);border-color:#26496f;background:#1a2c4022}
+.tag.outlet{color:var(--amber);border-color:#5a4713;background:#3a2e0a22}
+.tag.pend{color:#ffd166;border-color:#6a5316;background:#4a3a0e33}
+.card.pending{opacity:.62;filter:grayscale(.5)}
+.card.pending .mx,.card.pending .uuid{opacity:.8}
+.pairbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.hidetog{display:inline-flex;align-items:center;gap:6px;color:var(--dim);font-size:12px;cursor:pointer;margin-left:4px;user-select:none}
+.hidetog input{width:auto;margin:0;cursor:pointer}
+#hideunb_badge a{color:var(--accent);cursor:pointer;text-decoration:none}
+#hideunb_badge a:hover{text-decoration:underline}
+.meta{color:var(--dim);font-size:12px;font-family:var(--mono)}
+.del{margin-left:0;background:transparent;border:1px solid var(--line);color:var(--dim);border-radius:7px;padding:3px 9px;cursor:pointer;font-size:13px;line-height:1}
+.del:hover{border-color:var(--red);color:var(--red)}
+.del:disabled{opacity:.4;cursor:not-allowed}                 /* edit mode: delete stays visible but inert, so it can't be mistaken for a cancel */
+.del:disabled:hover{border-color:var(--line);color:var(--dim)}
+.ren{background:transparent;border:1px solid var(--line);color:var(--dim);border-radius:7px;padding:3px 8px;cursor:pointer;font-size:12px;line-height:1}
+.ren:hover{border-color:var(--accent);color:var(--accent)}
+/* per-reader "edit boxes" pencil — sits in the card header, right-aligned just left of the ✕ delete button */
+.edb{margin-left:auto;background:transparent;border:1px solid var(--line);color:var(--dim);border-radius:7px;padding:3px 9px;cursor:pointer;font-size:13px;line-height:1}
+.edb:hover{border-color:var(--accent);color:var(--accent)}
+.edb.act{border-color:var(--accent);color:var(--accent);background:#12331f}
+.nmi{width:210px;max-width:55vw;font-size:16px;font-weight:600;padding:6px 9px}
+.uuid{font-family:var(--mono);font-size:11.5px;color:var(--dim);word-break:break-all;margin:7px 0 13px;
+ padding:6px 9px;background:#0d131b;border-radius:8px;border:1px solid #1a222d}
+.uuid b{color:#9fb0c4;letter-spacing:.5px}
+.mx{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:8px}
+.mc{background:#0f151d;border:1px solid #1a222d;border-radius:10px;padding:9px 11px;display:flex;flex-direction:column;gap:3px;min-width:0}
+.mc .l{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.7px;font-weight:600}
+.mc .v{font-family:var(--mono);font-size:15.5px;font-weight:600;line-height:1.15;
+ white-space:nowrap;font-variant-numeric:tabular-nums;display:flex;align-items:baseline;gap:3px}
+.mc .v small{font-size:11px;color:var(--dim);font-weight:400;flex:none}
+.v.na{color:#3d4a5a}
+.batt{height:5px;background:#0a0e14;border-radius:3px;overflow:hidden;margin-top:6px}
+.batt>i{display:block;height:100%;border-radius:3px;transition:.3s}
+/* dashboard box edit mode: drag to reorder, eye to show/hide (per reader, persisted server-side).
+   Both controls sit on their own high-contrast chip so they stay visible on the dark card; the eye chip
+   is additionally green-tinted when the box is shown and red-tinted when hidden, so state reads at a glance
+   even though the emoji glyph itself ignores `color`. */
+.mc.edit{position:relative;cursor:grab;user-select:none;padding:32px 11px 9px}
+.mc.edit:active{cursor:grabbing}
+.mc.edit.hid{opacity:.7}
+.mc .bh{position:absolute;top:6px;left:6px;display:inline-flex;align-items:center;justify-content:center;
+ width:26px;height:24px;color:#dfe7f1;font-size:15px;letter-spacing:-2px;cursor:grab;pointer-events:none;
+ background:#222c39;border:1px solid #3a4a60;border-radius:7px}
+.mc .be{position:absolute;top:6px;right:6px;display:inline-flex;align-items:center;justify-content:center;
+ min-width:30px;height:24px;padding:0 6px;cursor:pointer;font-size:13px;line-height:1;border-radius:7px;
+ background:#222c39;border:1px solid #3a4a60}
+.mc.edit:not(.hid) .be{border-color:#2f7a4d;background:#12331f}   /* shown  -> green chip */
+.mc.edit.hid .be{border-color:#8a3a3a;background:#3a1717}         /* hidden -> red chip  */
+.mc .be:hover{filter:brightness(1.35)}
+.mc.dragover{outline:2px dashed var(--accent);outline-offset:-2px}
+.ebar{display:flex;justify-content:flex-end;margin-top:9px}
+.icon.act{border-color:var(--accent);color:var(--accent)}
+.ctrl{display:flex;gap:8px;margin-top:12px;align-items:center;flex-wrap:wrap}
+.ivrow button.g{white-space:nowrap}                   /* interval pill + file + flash share one row; flash label never wraps */
+input{background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:8px 10px;font-family:var(--mono);font-size:13px}
+.ctrl input{width:92px}
+button.b{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#04140a;border:0;border-radius:8px;padding:8px 14px;font-weight:700;cursor:pointer}
+button.g{background:transparent;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:8px 13px;cursor:pointer;font-size:13px}
+/* interval quick-select: one connected pill (Live | chips | custom input | set), mirrors the .seg look */
+.ivseg{display:flex;flex:0 0 auto;background:var(--panel2);border:1px solid var(--line);border-radius:9px;overflow-x:auto;max-width:100%}
+.ivseg button,.ivseg input{background:transparent;border:0;border-right:1px solid var(--line);border-radius:0;color:var(--dim);padding:8px 11px;font-family:var(--mono)}
+.ivseg button{font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
+.ivseg button:hover{color:var(--txt)}
+.ivseg button.act{background:var(--accent);color:#04140a}
+.ivseg input{width:62px;text-align:center;color:var(--txt);padding:8px 6px;border-right:0}
+.ivseg .set{border-right:0;border-left:1px solid var(--line);background:var(--accent);color:#04140a;font-weight:700}
+.hint{color:var(--amber);font-size:12px;margin-top:9px;display:flex;gap:6px;align-items:center}
+.boot{background:linear-gradient(90deg,#3a2a05,#2a1f08);border:1px solid #7a5a12;color:#f5c451;
+ font-size:12px;font-weight:600;padding:7px 11px;border-radius:9px;margin:0 0 12px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px;display:none}
+.panel.open{display:block}
+.panel h2{margin:0 0 3px;font-size:15px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px 14px;margin:12px 0}
+.grid2 label{font-size:11.5px;color:var(--dim);display:block;margin-bottom:5px}
+.grid2 input{width:100%}
+footer{color:var(--dim);font-size:12px;text-align:center;padding:26px}
+footer b{font-family:var(--mono);color:var(--txt)}
+/* ---------- phone / narrow screens ---------- */
+@media (max-width:760px){
+ header{padding:11px 13px;position:static}   /* scroll away with the page (don't eat fixed height) */
+ .htop{flex-wrap:wrap;gap:9px 10px}          /* title + toolbar wrap instead of overflowing */
+ .spacer{display:none}
+ h1{font-size:15px}
+ .sub{font-size:11px;line-height:1.35}
+ .ghlink{margin-left:6px}
+ .seg button{padding:9px 13px;font-size:13px}       /* comfy touch targets */
+ .icon{padding:9px 11px;font-size:14px;flex:1 1 auto;text-align:center}  /* toolbar buttons share width & wrap */
+ .bar{gap:7px;margin-top:11px}
+ .pill{flex:1 1 calc(50% - 4px);white-space:normal;padding:8px 10px;font-size:12px}  /* 2-up status pills */
+ .wrap{padding:14px 12px}
+ .list{gap:11px}
+ .card{padding:13px 13px;border-radius:13px}
+ .hd .id{font-size:16px}
+ .uuid{font-size:11px;margin:6px 0 11px}
+ .mx{grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:6px}
+ .grid2{grid-template-columns:1fr;gap:10px}          /* config forms: single column */
+ input{font-size:16px}                               /* >=16px stops iOS focus-zoom */
+ .ctrl{gap:8px}
+ .ctrl input{width:auto}
+ .ivrow .ivseg{flex:1 1 100%;min-width:0}            /* mobile: interval pill takes its own row */
+ .ctrl input[type=file]{flex:1 1 100%;min-width:0}   /* file picker gets its own row */
+ .ctrl button.g{flex:1 1 auto;min-width:104px}
+ button.b,button.g{padding:11px 15px}
+ .ctrl .meta{flex:1 1 100%}
+ footer{padding:22px 12px}
+}
+@media (max-width:400px){
+ .icon{flex:1 1 calc(50% - 5px)}                     /* 2-up toolbar buttons on tiny phones */
+ .seg{flex:1 1 100%}.seg button{flex:1}              /* DE/EN full width */
+}
+</style></head><body>
+<header>
+<div class="htop"><div class="logo">⚡</div><div><h1>Open OBI Energy Tracker<a class="ghlink" href="https://github.com/atc1441/OBI_Energy_Tracker_Local_Cloud" target="_blank" rel="noopener" title="View this project on GitHub">GitHub ↗</a></h1><div class="sub" id="sub"></div></div>
+<div class="spacer"></div>
+<div class="seg"><button id="lde" onclick="setLang('de')">DE</button><button id="len" onclick="setLang('en')">EN</button></div>
+<button class="icon" onclick="location.href='/settings'" title="WiFi, MQTT &amp; Firmware-Einstellungen">⚙ Settings</button>
+<button class="icon" onclick="location.href='/history'" title="Energie-Historie &amp; Tagesverbrauch pro Reader">📈 History</button>
+<button class="icon" onclick="location.href='/radio'" title="Live LoRa radio messages">📡 Radio</button>
+<button class="icon" onclick="location.href='/debug'" title="Flash hex editor / eFuses / debug">🐞 Debug</button>
+<button class="icon" onclick="rebootGw()" title="Restart the gateway">⟳ Reboot</button>
+<button class="icon" id="logout_btn" style="display:none" onclick="doLogout()" title="Log out">⎋ Logout</button></div>
+<div class="bar" id="bar"></div>
+</header>
+<div class="wrap">
+ <div class="pairbar"><button class="b" id="pair_btn" onclick="pairAll()"></button><span class="meta" id="pair_st"></span>
+  <label class="hidetog"><input type="checkbox" id="hideunb_cb" onchange="setHideUnbound()"><span id="hideunb_lbl"></span></label>
+  <span class="meta" id="hideunb_badge"></span></div>
+ <div class="list" id="list"></div>
+ <footer><span id="ft"></span> · <b id="gw"></b></footer>
+</div>
+<script>
+const $=s=>document.querySelector(s);
+const _f=window.fetch;window.fetch=(...a)=>_f(...a).then(r=>{if(r.status==401)location.href='/login';return r;});  // session lost -> login
+const T={
+ de:{sub:'869,5 MHz · SF7 · liest deine Zähler direkt',wifi:'WLAN',mqtt:'MQTT',radio:'Funk',readers:'Reader',
+  offline:'offline',fw:'Firmware',batt:'Batterie',opt:'Sensor',active:'aktiv',nosig:'kein Signal',
+  imp:'Bezug',exp:'Einspeisung',pow:'Leistung',seen:'Zuletzt',before:'vor',setiv:'Intervall setzen',sec:'Sek.',
+  bedit:'Reihenfolge und Ansicht bearbeiten',bdone:'Bearbeiten beenden',breset:'Zurücksetzen',bhide:'ausblenden',bshow:'einblenden',bdrag:'ziehen zum Sortieren',
+  boxsaveerr:'Layout konnte nicht gespeichert werden (Gateway nicht erreichbar) — bitte erneut versuchen.',
+  del:'Reader löschen',delq:'Reader %i löschen und Binding entfernen?\n\nEr taucht beim nächsten Empfang wieder auf — dann ausgegraut (nicht gebunden).',
+  pending:'nicht gebunden',addrd:'🔗 An Gateway binden',unassign:'Lösen',
+  pendhint:'Wird nur angezeigt — noch nicht an dieses Gateway gebunden.',
+  pairall:'🔗 Alle für 3 Min binden',pairon:'Auto-Binding aktiv — %s s',pairoff:'Neue Reader bleiben ausgegraut, bis du sie bindest.',
+  hideUnb:'Ungebundene ausblenden',unbHidden:'ungebunden ausgeblendet',unbShow:'anzeigen',unbHideAgain:'wieder ausblenden',
+  none:'Noch keine Reader',waiting:'Warte auf einen Reader — Reader-Taste ~10 s halten (echtes Gateway aus).',
+  uuidwait:'UUID noch unbekannt — Reader per Taste neu verbinden',
+  irhint:'Noch keine Messwerte — Reader-Taste einmal kurz drücken, um die Infrarot-Lesung zu starten.',
+  uptime:'Laufzeit',heapfree:'Speicher frei',histfs:'Rohdaten',dailyfs:'Tageswerte',
+  heapwarn:'⚠ Firmware (%s) ist größer als der aktuell freie zusammenhängende Speicherblock (%s) — der Flash-Vorgang wird vermutlich fehlschlagen.\n\nDeaktiviere kurz MQTT (weiter unten), das gibt genug Speicher frei — danach erneut versuchen.',
+  mqcfg:'MQTT-Einstellungen',host:'Server',port:'Port',user:'Benutzer',pass:'Passwort',
+  topic:'Basis-Topic',save:'Speichern',disc:'Discovery senden',discok:'Discovery gesendet ✓',discno:'MQTT nicht verbunden',con:'verbunden',dis:'getrennt',lastpub:'zuletzt gesendet',
+  msgs:'Nachr.',never:'noch nichts',disabled:'deaktiviert',ago:'her',
+  cmdhint:'Intervall per MQTT setzen (Sekunden als Payload):',
+  boot:'Bootloader-Modus — bereit zum Flashen',
+  flash:'Firmware flashen',pick:'Erst eine .bin auswählen',uploading:'lädt hoch…',armed:'bereit — Reader startet neu & zieht',
+  otarun:'OTA läuft',otawarn:'⚠ Reader-Firmware über LoRa flashen — nur mit gültiger .bin. Der Reader validiert vor dem Schreiben.',
+  vnote:'Die Firmware-Version MUSS im Dateinamen stehen, z.B. reader_v55.bin.',
+  novers:'Keine Version im Dateinamen gefunden.\nBitte die richtige Firmware-Version in den Dateinamen schreiben, z.B. reader_v55.bin',
+  vmiss:'Version fehlt im Dateinamen',
+  ren:'Name ändern',abort:'Abbrechen',
+  samever:'Der Reader läuft bereits auf v%v — er akzeptiert dieselbe Version nicht (kein Reflash).\n\nTrotzdem versuchen?'},
+ en:{sub:'869.5 MHz · SF7 · reading your meters directly',wifi:'WiFi',mqtt:'MQTT',radio:'Radio',readers:'Readers',
+  offline:'offline',fw:'Firmware',batt:'Battery',opt:'Sensor',active:'active',nosig:'no signal',
+  imp:'Import',exp:'Export',pow:'Power',seen:'Last seen',before:'',setiv:'Set interval',sec:'sec',
+  bedit:'Edit boxes',bdone:'Finish editing',breset:'Reset',bhide:'hide',bshow:'show',bdrag:'drag to reorder',
+  boxsaveerr:'Could not save the layout (gateway unreachable) — please try again.',
+  del:'Delete reader',delq:'Delete reader %i and remove its binding?\n\nIt reappears greyed (unbound) on the next reception.',
+  pending:'not bound',addrd:'🔗 Bind to gateway',unassign:'Unbind',
+  pendhint:'Shown only — not yet bound to this gateway.',
+  pairall:'🔗 Bind all for 3 min',pairon:'Auto-binding active — %s s',pairoff:'New readers stay greyed until you bind them.',
+  hideUnb:'Hide unbound',unbHidden:'unbound hidden',unbShow:'show',unbHideAgain:'hide again',
+  none:'No readers yet',waiting:'Waiting for a reader — hold its button ~10 s (real gateway off).',
+  uuidwait:'UUID unknown yet — reconnect the reader with its button',
+  irhint:'No readings yet — tap the reader button once to start its infrared readout.',
+  uptime:'uptime',heapfree:'free heap',histfs:'raw data',dailyfs:'daily values',
+  heapwarn:'⚠ Firmware (%s) is larger than the currently free contiguous memory block (%s) — flashing will likely fail.\n\nTemporarily disable MQTT (further down), that frees up enough memory — then try again.',
+  mqcfg:'MQTT settings',host:'Server',port:'Port',user:'User',pass:'Password',
+  topic:'Base topic',save:'Save',disc:'Send discovery',discok:'Discovery sent ✓',discno:'MQTT not connected',con:'connected',dis:'disconnected',lastpub:'last publish',
+  msgs:'msgs',never:'nothing yet',disabled:'disabled',ago:'ago',
+  cmdhint:'Set interval via MQTT (seconds as payload):',
+  boot:'Bootloader mode — ready to flash',
+  flash:'Flash firmware',pick:'Pick a .bin first',uploading:'uploading…',armed:'armed — reader will reset & pull',
+  otarun:'OTA in progress',otawarn:'⚠ Flash reader firmware over LoRa — use a valid .bin only. The reader validates before writing.',
+  vnote:'The firmware version MUST be in the filename, e.g. reader_v55.bin.',
+  novers:'No version found in the filename.\nPut the correct firmware version in the filename, e.g. reader_v55.bin',
+  vmiss:'version missing in filename',
+  ren:'Rename',abort:'Cancel',
+  samever:'The reader is already on v%v — it will not accept the same version (no reflash).\n\nTry anyway?'}};
+let lang=localStorage.getItem('lang')||'de',L=T[lang];
+// number format for every kWh/W/€ value: independent of `lang` (the UI TEXT language) -- 0=auto (follow
+// lang, the historical behavior), 1=force EU (1.234,56), 2=force US (1,234.56). Set from /api/status's
+// num_fmt in tick() below; a global gateway setting (Settings page), not a per-page localStorage choice.
+let numFmt=0;
+const numLoc=()=>numFmt===1?'de-DE':numFmt===2?'en-US':(lang=='de'?'de-DE':'en-US');
+function setLang(x){lang=x;L=T[x];localStorage.setItem('lang',x);applyLang();tick();}
+function applyLang(){$('#lde').className=lang=='de'?'act':'';$('#len').className=lang=='en'?'act':'';
+ $('#pair_btn').textContent=L.pairall;$('#hideunb_lbl').textContent=L.hideUnb;}
+function rebootGw(){if(!confirm(lang=='de'?'Gateway jetzt neu starten?':'Restart the gateway now?'))return;
+ fetch('/api/reboot',{method:'POST'}).catch(()=>{});}
+async function doLogout(){await fetch('/api/logout',{method:'POST'}).catch(()=>{});location.href='/login';}
+async function scanWifi(){$('#wf_msg').textContent=lang=='de'?'suche…':'scanning…';$('#wf_scanb').disabled=true;
+ try{let n=await(await fetch('/api/wifi/scan')).json();n.sort((a,b)=>b.rssi-a.rssi);
+  let seen={},opts='<option value="">'+(lang=='de'?'— Netzwerk wählen —':'— pick a network —')+'</option>';
+  for(let x of n){if(!x.ssid||seen[x.ssid])continue;seen[x.ssid]=1;
+   opts+='<option value="'+x.ssid.replace(/"/g,'&quot;')+'">'+x.ssid+' ('+x.rssi+' dBm)'+(x.enc?' 🔒':'')+'</option>';}
+  $('#wf_ssid').innerHTML=opts;$('#wf_msg').textContent=Object.keys(seen).length+(lang=='de'?' Netzwerke':' networks');}
+ catch(e){$('#wf_msg').textContent=lang=='de'?'Scan fehlgeschlagen':'scan failed';}
+ $('#wf_scanb').disabled=false;}
+function wifiPick(){var v=$('#wf_ssid').value;if(v){$('#wf_manual').value=v;$('#wf_pass').focus();}}
+function wifiSsid(){return $('#wf_manual').value.trim()||$('#wf_ssid').value;}
+async function wifiConnect(){let s=wifiSsid();if(!s){$('#wf_msg').textContent=lang=='de'?'SSID wählen/eingeben':'pick or type an SSID';return;}
+ $('#wf_msg').textContent=(lang=='de'?'verbinde mit ':'connecting to ')+s+'…';
+ try{await fetch('/api/wifi/connect',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+  body:'ssid='+encodeURIComponent(s)+'&pass='+encodeURIComponent($('#wf_pass').value)});}catch(e){}
+ $('#wf_msg').textContent=(lang=='de'?'verbinde mit ':'connecting to ')+s+' — '+(lang=='de'?'Status oben beachten':'watch the status bar')+'.';}
+function wifiPortal(){fetch('/api/wifi',{method:'POST'}).then(r=>r.json()).then(d=>{
+ alert((lang=='de'?'Portal gestartet auf WLAN: ':'Portal started on WiFi: ')+d.ssid+'\n'+(lang=='de'?'Verbinde dich damit und öffne ':'Connect to it and open ')+'http://192.168.4.1/');}).catch(()=>{});}
+const nf=n=>n.toLocaleString(numLoc());
+function val(v,unit){return v===null?`<span class="v na">–</span>`:`<span class="v">${nf(v)}${unit?' <small>'+unit+'</small>':''}</span>`}
+// import/export come as raw Wh -> show kWh (raw/1000) with 3 decimals
+function valE(v){return v===null?`<span class="v na">–</span>`:`<span class="v">${(v/1000).toLocaleString(numLoc(),{minimumFractionDigits:3,maximumFractionDigits:3})} <small>kWh</small></span>`}
+function bcol(p){return p>50?'var(--accent)':p>20?'var(--amber)':'var(--red)'}
+function fmt(s){const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return (d?d+'d ':'')+(h?h+'h ':'')+m+'m'}
+function fmtKB(n){return n==null?'?':(n/1024).toFixed(0)+' KB'}
+let cfgLoaded=false;
+let lastStatus=null;   // cached /api/status, so file-picker checks don't need their own fetch
+async function tick(){try{
+ const st=await (await fetch('/api/status')).json(), rs=await (await fetch('/api/readers')).json();_rs=rs;
+ lastStatus=st;numFmt=st.num_fmt||0;
+ $('#logout_btn').style.display=(st.auth&&st.auth.enabled)?'':'none';   // only show logout when a login is required
+ $('#sub').textContent='OBI Gateway '+(st.gw||st.gwid).toUpperCase();
+ $('#gw').textContent=st.gwid_ascii+' · '+(st.mac||st.gwid);
+ const hf=st.hist_fs;
+ const fsTxt=hf&&hf.ok?' · '+L.histfs+' '+fmtKB(hf.total-hf.used)+'/'+fmtKB(hf.total)+' · '+L.dailyfs+' '+fmtKB(hf.daily_total-hf.daily_used)+'/'+fmtKB(hf.daily_total):'';
+ $('#ft').textContent=L.uptime+' '+fmt(st.uptime_s)+' · '+L.heapfree+' '+fmtKB(st.max_alloc_heap)+(st.fw?' · fw '+st.fw.version+' ('+st.fw.target+')':'')+fsTxt;
+ const q=st.mqtt;
+ const mqp=!q.enabled?`<span class="dot idle"></span>${L.disabled}`
+  :q.connected?`<span class="dot on"></span>${q.host} · ${q.pub_count} ${L.msgs} · ${q.last_pub_s<0?L.never:L.lastpub+' '+q.last_pub_s+'s '+L.ago}`
+  :`<span class="dot off"></span>${q.host} · ${q.state}`;
+ $('#bar').innerHTML=[
+  [L.wifi,st.wifi?`<span class="dot on"></span>${st.ip} · ${st.wifi_rssi} dBm`:`<span class="dot off"></span>${L.offline}`],
+  [L.mqtt,mqp],
+  [L.radio,`<span class="dot on"></span>${st.freq_mhz} MHz · SF${st.sf} · BW${st.bw_khz}`],
+  [L.readers,`<b>${rs.length}</b>`]
+ ].concat(st.temp_c!=null?[['Temp',`<b>${st.temp_c} °C</b>`]]:[])
+  .map(p=>`<div class="pill"><span class="k">${p[0]}</span>${p[1]}</div>`).join('');
+ $('#pair_st').textContent=st.pair_remaining_s>0?L.pairon.replace('%s',st.pair_remaining_s):L.pairoff;
+ // hide-unbound view: reflect the persisted flag + pairing state, update the toggle + the "N hidden · show" badge
+ _hideUnbound=!!st.hide_unbound; _pairActive=st.pair_remaining_s>0;
+ { const cb=$('#hideunb_cb'); if(cb&&document.activeElement!==cb) cb.checked=_hideUnbound;   // don't fight an in-flight click
+   const nUnb=rs.filter(r=>!r.assigned).length; let badge='';
+   const tog=$('.hidetog'); if(tog) tog.style.display=nUnb>0?'':'none';   // only show the toggle when there ARE unbound readers to hide
+   if(_hideUnbound&&nUnb>0&&!_pairActive)
+     badge=_revealTmp?`<a onclick="hideUnboundAgain();return false" href="#">${L.unbHideAgain}</a>`
+                     :`${nUnb} ${L.unbHidden} · <a onclick="revealUnbound();return false" href="#">${L.unbShow}</a>`;
+   $('#hideunb_badge').innerHTML=badge; }
+ // don't blow away a reader card while its interval/file input is focused (you'd never finish typing);
+ // editId (unified edit mode) freezes the redraw too: the name input + box drag/drop mutate the DOM/_rs in place,
+ // so a 1-s tick must not rebuild over it
+ const ae=document.activeElement, editing=editId!==null||(ae&&/^(iv_|fw_)/.test(ae.id||''));
+ if(!editing && !uploading){const vis=visRs(rs);
+  $('#list').innerHTML=vis.length?vis.map(card).join(''):(rs.length?'':`<div class="card"><div class="hd"><span class="id">—</span></div><div class="uuid" style="border:0;background:0">${L.waiting}</div></div>`);}
+ if(st.ota&&st.ota.active){const el=$('#op_'+st.ota.target);if(el){const p=st.ota.size?Math.min(100,Math.max(0,Math.round(st.ota.served/st.ota.size*100))):0;el.textContent=L.otarun+' '+p+'%';}}
+}catch(e){}}
+// ---- dashboard metric boxes: order + visibility, editable per reader, persisted server-side (NVS) ----
+let editId=null;                           // reader whose card is in the unified edit mode (name + boxes); only one at a time
+const BOXES=['imp','exp','pow','batt','opt','seen'];   // canonical order + the only valid box keys
+function boxInner(k,r){                     // the label + value markup for one box (was inline in card())
+ if(k=='imp') return `<div class="l">${L.imp}</div>${valE(r.import)}`;
+ if(k=='exp') return `<div class="l">${L.exp}</div>${valE(r.export)}`;
+ if(k=='pow') return `<div class="l">${L.pow}</div>${val(r.power,'W')}`;
+ if(k=='batt'){const p=Math.max(0,Math.min(100,Math.round((r.battery_mV-2400)/8)));
+  return `<div class="l">${L.batt}</div><span class="v">${(r.battery_mV/1000).toFixed(2)} <small>V</small></span><div class="batt"><i style="width:${p}%;background:${bcol(p)}"></i></div>`;}
+ if(k=='opt'){const sens=r.infrared?`<span class="dot on"></span>${L.active}`:`<span class="dot idle"></span>${L.nosig}`;
+  return `<div class="l">${L.opt}</div><span class="v" style="font-size:13px">${sens}</span>`;}
+ if(k=='seen') return `<div class="l">${L.seen}</div><span class="v">${L.before} ${r.age_s}s</span>`;
+ return '';
+}
+// Parse r.boxcfg ("imp,-exp,pow,…") -> [{key,vis}]. Unknown/dup keys dropped; any missing box appended visible
+// (so a partial/legacy config still shows every box). Empty cfg = default order, all visible.
+function boxOrder(r){
+ const seen={},out=[];
+ (r.boxcfg||'').split(',').forEach(t=>{t=t.trim();if(!t)return;
+  const vis=t[0]!=='-',key=vis?t:t.slice(1);
+  if(BOXES.includes(key)&&!seen[key]){seen[key]=1;out.push({key,vis});}});
+ BOXES.forEach(key=>{if(!seen[key])out.push({key,vis:true});});
+ return out;
+}
+function mxHtml(r){
+ const ord=boxOrder(r);
+ if(editId!==r.id) return ord.filter(b=>b.vis).map(b=>`<div class="mc">${boxInner(b.key,r)}</div>`).join('');
+ return ord.map(b=>`<div class="mc edit${b.vis?'':' hid'}" draggable="true"
+   ondragstart="boxDrag(event,'${r.id}','${b.key}')" ondragover="boxOver(event)" ondragleave="boxLeave(event)" ondrop="boxDrop(event,'${r.id}','${b.key}')" ondragend="boxEnd(event)">
+   <span class="bh" title="${L.bdrag}">⋮⋮</span>
+   <button class="be" title="${b.vis?L.bhide:L.bshow}" onclick="boxVis('${r.id}','${b.key}')">${b.vis?'👁':'🚫'}</button>
+   ${boxInner(b.key,r)}</div>`).join('');
+}
+let dragKey=null,dragId=null;
+function boxDrag(e,id,k){dragKey=k;dragId=id;e.dataTransfer.effectAllowed='move';try{e.dataTransfer.setData('text/plain',k);}catch(_){}}
+function boxOver(e){e.preventDefault();e.dataTransfer.dropEffect='move';e.currentTarget.classList.add('dragover');}
+function boxLeave(e){e.currentTarget.classList.remove('dragover');}
+function boxEnd(){dragKey=null;dragId=null;}
+function boxDrop(e,id,k){e.preventDefault();e.currentTarget.classList.remove('dragover');
+ if(dragId!==id||dragKey===null||dragKey===k)return;     // only reorder within the same reader card
+ const r=_rs.find(x=>x.id===id);if(!r)return;
+ const ord=boxOrder(r),from=ord.findIndex(b=>b.key===dragKey),to=ord.findIndex(b=>b.key===k);
+ if(from<0||to<0)return;
+ const [m]=ord.splice(from,1);ord.splice(to,0,m);
+ commitBox(r,ord);
+}
+function boxVis(id,k){const r=_rs.find(x=>x.id===id);if(!r)return;
+ const ord=boxOrder(r),b=ord.find(x=>x.key===k);if(b)b.vis=!b.vis;commitBox(r,ord);}
+function boxReset(id){const r=_rs.find(x=>x.id===id);if(!r)return;r.boxcfg='';saveBox(id,'');redraw();}
+function commitBox(r,ord){const cfg=ord.map(b=>(b.vis?'':'-')+b.key).join(',');r.boxcfg=cfg;saveBox(r.id,cfg);redraw();}
+// Persist a layout change. Retries a few times over ~1.5s (rides out a brief blip) and, if it still can't
+// reach the gateway (e.g. mid-reboot), warns the user instead of failing silently — otherwise the change
+// only lives in the browser until the next poll reverts it, which looks like "my layout got lost".
+async function saveBox(id,cfg){
+ for(let i=0;i<3;i++){
+  try{const r=await fetch('/api/boxcfg?id='+id+'&cfg='+encodeURIComponent(cfg),{method:'POST'});if(r.ok)return true;}catch(e){}
+  await new Promise(s=>setTimeout(s,500));
+ }
+ alert(L.boxsaveerr);return false;
+}
+// One unified per-card edit mode (card header ✎): the name field becomes editable AND the boxes get their
+// drag/hide handles. Entering focuses the name; leaving (or Enter) saves the name only if it actually changed.
+function toggleEdit(id){
+ if(editId===id){saveNameIfChanged(id);editId=null;redraw();}       // leaving edit mode
+ else{editId=id;redraw();const el=$('#nm_'+id);if(el){el.focus();el.select();}}   // entering -> jump into the name field
+}
+function saveNameIfChanged(id){
+ const el=$('#nm_'+id);if(!el)return;
+ const v=el.value.trim().slice(0,24),r=_rs.find(x=>x.id===id);
+ if(r&&v!==(r.name||'')){r.name=v;fetch('/api/name?id='+id+'&name='+encodeURIComponent(v),{method:'POST'}).catch(()=>{});}
+}
+function card(r){
+ const nm=r.name?esc(r.name):'';
+ return `<div class="card${r.assigned?'':' pending'}">
+  <div class="hd">${editId===r.id
+   ?`<input class="nmi" id="nm_${r.id}" maxlength="24" value="${esc(r.name||'')}" placeholder="${r.id.toUpperCase()}" onkeydown="nmKey(event,'${r.id}')">`
+   :`<span class="id">${nm||r.id.toUpperCase()}</span>`}
+   <span class="tag ${r.type}">${r.type}</span>
+   ${r.assigned?'':`<span class="tag pend">${L.pending}</span>`}
+   <span class="meta">${nm?r.id.toUpperCase()+' · ':''}FW ${r.softver} · HW ${r.hardver}${r.legacy?' · legacy':''} · ${r.rssi} dBm · ${r.snr} dB${r.paired?' · 🔒':''}</span>
+   <button class="edb${editId===r.id?' act':''}" onclick="toggleEdit('${r.id}')" title="${editId===r.id?L.bdone:L.bedit}">✎</button>
+   <button class="del" ${editId===r.id?'disabled':''} onclick="delReader('${r.id}')" title="${L.del}">✕</button></div>
+  <div class="uuid">${r.uuid?('<b>UUID</b> '+r.uuid):L.uuidwait}</div>
+  ${r.bootloader?`<div class="boot">⚙ ${L.boot}</div>`:''}
+  <div class="mx">${mxHtml(r)}</div>
+  ${editId===r.id?`<div class="ebar"><button class="ren" onclick="boxReset('${r.id}')" title="${L.breset}">↺ ${L.breset}</button></div>`:''}
+  ${r.assigned?`<div class="ctrl ivrow"><div class="ivseg">${[['Live',1],['10s',10],['30s',30],['60s',60],['120s',120],['300s',300]].map(q=>`<button class="${r.interval==q[1]?'act':''}" onclick="setIvQ('${r.id}',${q[1]})">${q[0]}</button>`).join('')}<input type="number" id="iv_${r.id}" placeholder="${L.sec}" min="1" max="9999" value="${r.interval||''}" oninput="ivChg('${r.id}')" onkeydown="if(event.key==='Enter')setIv('${r.id}')"><button class="set" id="setb_${r.id}" style="display:none" onclick="setIv('${r.id}')">${L.setiv}</button></div>
+   <input type="file" id="fw_${r.id}" accept=".bin" onchange="fwCheck('${r.id}')" style="flex:1 1 200px;min-width:170px;padding:6px 8px;font-size:12px">
+   <button class="g" onclick="doOta('${r.id}',${r.softver||0})">${L.flash}</button>
+   <span class="meta" id="op_${r.id}"></span></div>`
+  :`<div class="ctrl"><button class="b" onclick="assignRd('${r.id}',1)">${L.addrd}</button>
+   <span class="meta">${L.pendhint}</span></div>`}
+  ${r.assigned&&!r.has_data&&!r.bootloader?`<div class="hint">⚠ ${L.irhint}</div>`:''}
+ </div>`;
+}
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let _rs=[];
+// --- hide-unbound view state (persisted flag comes from /api/status; reveal/pairActive are live) ---
+let _hideUnbound=false,_revealTmp=false,_pairActive=false;
+// which reader cards to actually render: drop unbound ones when hiding is on — UNLESS temporarily revealed
+// or a pairing window is open (so you can always still bind a new reader)
+function visRs(list){return (_hideUnbound&&!_revealTmp&&!_pairActive)?list.filter(r=>r.assigned):list;}
+function redraw(){$('#list').innerHTML=visRs(_rs).map(card).join('');}
+async function setHideUnbound(){_revealTmp=false;const on=$('#hideunb_cb').checked;
+ await fetch('/api/hideunbound?on='+(on?1:0),{method:'POST'}).catch(()=>{});tick();}
+function revealUnbound(){_revealTmp=true;tick();}       // temporary — reset on reload or when hiding is re-toggled
+function hideUnboundAgain(){_revealTmp=false;tick();}
+function nmKey(e,id){if(e.key==='Enter')toggleEdit(id);else if(e.key==='Escape'){editId=null;redraw();}}  // Enter=save+leave, Esc=discard+leave
+async function setIvQ(id,secs){await fetch('/api/interval?id='+id+'&seconds='+secs,{method:'POST'});tick();}   // one-tap preset (Live/10/30/60/120/300)
+function setIv(id){const v=$('#iv_'+id).value;if(v)setIvQ(id,v);}     // custom value from the input field
+function ivChg(id){$('#setb_'+id).style.display='';}                 // reveal the green "set" button once a custom value is typed
+async function assignRd(id,on){await fetch('/api/assign?id='+id+'&on='+on,{method:'POST'});tick();}
+async function pairAll(){await fetch('/api/pairall',{method:'POST'});tick();}
+async function delReader(id){if(!confirm(L.delq.replace('%i',id.toUpperCase())))return;
+ await fetch('/api/delete?id='+id,{method:'POST'});tick();}
+let uploading=false;
+// the OTA buffer is ONE contiguous malloc() for the whole image (see gw_ota_begin) -- max_alloc_heap
+// (largest allocatable block, not just total free heap) is what decides whether that succeeds. MQTT's
+// TLS session alone can hold enough heap to push a ~45 KB reader image over the edge.
+function heapWarn(size){
+ if(!lastStatus||lastStatus.max_alloc_heap==null)return null;
+ return size>lastStatus.max_alloc_heap?L.heapwarn.replace('%s',fmtKB(size)).replace('%s',fmtKB(lastStatus.max_alloc_heap)):null;
+}
+function fwCheck(id){
+ const f=$('#fw_'+id).files[0], w=$('#op_'+id); if(!w)return;
+ const warn=f?heapWarn(f.size):null;
+ w.textContent=warn||''; w.style.color=warn?'var(--red)':'';
+}
+async function doOta(id,cur){
+ const f=$('#fw_'+id).files[0]; if(!f){$('#op_'+id).textContent=L.pick;return;}
+ const hw=heapWarn(f.size); if(hw&&!confirm(hw))return;
+ // version comes from the filename (…v55.bin); the reader needs it to decide whether to reflash.
+ const vm=f.name.match(/v(\d+)/);
+ if(!vm){ alert(L.novers); $('#op_'+id).textContent=L.vmiss; return; }
+ const ver=parseInt(vm[1])&255;
+ const dl=lang=='de'?'Datei':'File';
+ if(!confirm(L.otawarn+'\n\n'+L.vnote+'\n\nReader: '+id.toUpperCase()+'\n'+dl+': '+f.name+'\nVersion: v'+ver)) return;
+ // the reader refuses an OTA to the version it is already running -> warn but let the user force it.
+ if(cur&&ver===cur){ if(!confirm(L.samever.replace('%v',ver))) return; }
+ const buf=await f.arrayBuffer(); const fd=new FormData(); fd.append('fw',new Blob([buf]),f.name);
+ uploading=true; $('#op_'+id).textContent=L.uploading;
+ try{ const r=await (await fetch('/api/ota?id='+id+'&size='+buf.byteLength+'&ver='+ver,{method:'POST',body:fd})).json();
+   $('#op_'+id).textContent=r.ok?L.armed:'error'; }
+ catch(e){ $('#op_'+id).textContent='error'; }
+ uploading=false;
+}
+async function saveMqtt(){const b=new URLSearchParams();b.set('host',$('#c_host').value);b.set('port',$('#c_port').value);
+ b.set('user',$('#c_user').value);b.set('topic',$('#c_topic').value);if($('#c_pass').value)b.set('pass',$('#c_pass').value);
+ await fetch('/api/mqtt',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b});$('#c_pass').value='';tick();}
+async function rediscover(){const m=$('#disc_msg');m.textContent='…';
+ try{const r=await(await fetch('/api/rediscover',{method:'POST'})).json();
+  m.textContent=r.ok?L.discok+' ('+r.count+')':L.discno;}catch(e){m.textContent=L.discno;}
+ setTimeout(()=>{m.textContent=''},4000);tick();}
+applyLang();tick();setInterval(tick,2000);
+</script></body></html>

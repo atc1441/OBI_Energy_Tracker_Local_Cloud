@@ -1,0 +1,3 @@
+pytest==9.2.0
+pycryptodome==4.2.0
+bthome-ble==3.25.0

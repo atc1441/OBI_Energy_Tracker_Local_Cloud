@@ -28,6 +28,7 @@
 #include "gateway_web.h"
 #include "flash_dbg.h"
 #include "status_led.h"
+#include "bthome_ble.h"
 #include <Preferences.h>
 
 // ---- reversed OBI radio configuration --------------------------------------
@@ -282,7 +283,11 @@ struct Rlog { uint32_t seq, ms; char dir; uint8_t h[3]; int16_t cmd, len, rssi, 
               uint8_t rawLen; uint8_t raw[RAW_MAX];
               uint8_t decLen; uint8_t dec[DEC_MAX];      // dec: TEA-decrypted energy payload, if any (see gw_radio_log_dec)
               char decInfo[DECINFO_MAX]; };               // decInfo: byte-range-annotated field breakdown of dec, e.g. "[6:10]imp=..."
-static const int RLOG_N = 96;     // ~96 * ~310 B ≈ 29 KB RAM; client keeps its own 800-row history anyway
+#ifndef OBI_RADIO_LOG_ENTRIES
+#define OBI_RADIO_LOG_ENTRIES 32
+#endif
+static_assert(OBI_RADIO_LOG_ENTRIES > 0, "Radio log must retain entries");
+static const int RLOG_N = OBI_RADIO_LOG_ENTRIES;
 static Rlog g_rl[RLOG_N];
 static volatile uint32_t g_rlSeq = 0;
 static int g_rlHead = 0;
@@ -392,6 +397,7 @@ bool gw_delete_reader(const uint8_t handle[3]) {
   bool found = false;
   for (auto &r : readers)
     if (r.used && !memcmp(r.handle, handle, 3)) { r.assigned = false; r.haveKey = false; r.used = false; found = true; }
+  bthome_forget(handle);
   return found;
 }
 // Accept (or drop) a reader onto this gateway. Persisted, so it auto-binds/keys on the next announce and
@@ -401,7 +407,7 @@ bool gw_assign_reader(const uint8_t handle[3], bool on) {
   for (auto &r : readers)
     if (r.used && !memcmp(r.handle, handle, 3)) {
       r.assigned = on;
-      if (!on) { r.haveKey = false; r.decoded = false; }
+      if (!on) { r.haveKey = false; r.decoded = false; bthome_forget(handle); }
       return true;
     }
   return true;   // persisted even if the reader isn't currently in the live list
@@ -1143,6 +1149,7 @@ static void handleRx() {
             r->lastEnergyMs = nowMs;
             r->softver = nSoftver; r->hardver = nHardver; r->battery_mV = nBattery_mV; r->flags = nFlags;
             r->import_ = nImport; r->export_ = nExport; r->power = powerSane ? nPower : 0x7FFFFFFF;
+            bthome_capture(*r);
             if (newBaseline) {   // don't let calcPower average across the jump -- restart its window here
               r->calcAnchorImport = nImport; r->calcAnchorExport = nExport;
               r->calcAnchorMs = nowMs; r->haveCalcAnchor = true;
