@@ -151,6 +151,28 @@ button:disabled{opacity:.5;cursor:default}
   <div class=msg id=ecopairhint style="margin-top:6px"></div>
  </div>
 
+ <div class=card id=cble style=display:none>
+  <h3>📶 <span id=hble>BTHome (verschlüsselte BLE-Leistungsausgabe)</span></h3>
+  <div class=stat id=blestat>…</div>
+  <div class=msg id=blenote style="margin:2px 0 8px"></div>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
+   <input type=checkbox id=bleon style="width:auto;margin:0"><span id=lbleon>Aktiviert</span></label>
+  <div class=grid>
+   <div><label id=lblerdr>Reader</label><select id=blerdr></select></div>
+   <div><label id=lblestale>Senden beenden, wenn Messwert älter als (Sekunden)</label>
+    <input id=blestale type=number min=5 max=3600 placeholder=60></div>
+  </div>
+  <label id=lblekey>Bindkey (32 Hex-Zeichen)</label>
+  <div style="display:flex;gap:6px">
+   <input id=blekey type=password maxlength=32 autocomplete=off spellcheck=false style="flex:1">
+   <button type=button class=g onclick=bleGenKey()><span id=bblegen>Erzeugen</span></button></div>
+  <div class=msg id=blekeyhint style="margin:4px 0 0"></div>
+  <div class=msg id=bleid style="margin-top:10px"></div>
+  <div class=row><button onclick=saveBle()><span id=bble>Speichern</span></button>
+   <button class=g id=blerebootb onclick=bleReboot() style=display:none><span id=bblereboot>Jetzt neu starten</span></button>
+   <span class=msg id=blemsg></span></div>
+ </div>
+
  <div class=card>
   <h3>📤 <span id=hftp>FTP-Backup der Historie</span></h3>
   <div class=stat id=ftpstat>…</div>
@@ -285,6 +307,15 @@ $('lecoallow').textContent=t('Erlaubte Clients für /v1/json (leer = alle im Net
 $('ecoallowhint').textContent=t('Optional: IPv4-Adressen und/oder CIDR-Bereiche, kommagetrennt — z. B. die IP des STREAM. Andere Anfragen erhalten 403. Vorsicht bei DHCP: wechselt die IP des STREAM, wird er ausgesperrt — am besten eine feste Adresse im Router vergeben.','Optional: IPv4 addresses and/or CIDR ranges, comma-separated — e.g. the STREAM\'s IP. Other clients get 403. Mind DHCP: if the STREAM\'s IP changes it gets locked out — best give it a fixed address in the router.');
 $('beco').textContent=t('Speichern','Save');
 $('becopair').textContent=t('Kopplungsmodus (15 min)','Pairing mode (15 min)');
+$('hble').textContent=t('BTHome (verschlüsselte BLE-Leistungsausgabe)','BTHome (encrypted BLE power output)');
+$('lbleon').textContent=t('Aktiviert — Leistung verschlüsselt per Bluetooth senden','Enabled — broadcast power over Bluetooth, encrypted');
+$('blenote').textContent=t('Sendet die Leistung eines Readers als verschlüsselte BTHome-v2-Mitteilung — ein BLE-Advertisement unter dem Namen „OBI-PWR". Home Assistant findet das Gerät von selbst und fragt nach dem Bindkey; es wird nur gesendet, nie verbunden oder gekoppelt. Nach dem Einschalten ist einmalig ein Neustart nötig, weil Bluetooth seinen Arbeitsspeicher nur beim Start bekommen kann.','Broadcasts one reader\'s power as an encrypted BTHome v2 message — a BLE advertisement named "OBI-PWR". Home Assistant discovers it on its own and asks for the bindkey; it only ever broadcasts, never connects or pairs. Switching it on needs one reboot, because Bluetooth can only claim its memory at startup.');
+$('lblerdr').textContent=t('Reader (Leistungsquelle)','Reader (power source)');
+$('lblestale').textContent=t('Senden beenden, wenn Messwert älter als (Sekunden)','Stop broadcasting once the reading is older than (seconds)');
+$('lblekey').textContent=t('Bindkey (32 Hex-Zeichen)','Bindkey (32 hex characters)');
+$('bblegen').textContent=t('Erzeugen','Generate');
+$('bble').textContent=t('Speichern','Save');
+$('bblereboot').textContent=t('Jetzt neu starten','Reboot now');
 $('hftp').textContent=t('FTP-Backup der Historie','FTP history backup');$('lftpen').textContent=t('Aktiviert','Enabled');
 $('lftphost').textContent=t('Server','Server');$('lftpuser').textContent=t('Benutzer','User');$('lftppass').textContent=t('Passwort','Password');
 $('lftppath').textContent=t('Zielordner (leer = Login-Verzeichnis)','Target folder (blank = login directory)');
@@ -301,7 +332,7 @@ $('lorasf').options[0].textContent=t('SF7 (Standard)','SF7 (default)');$('lorasf
 $('lorawarn').textContent=t('Nur ändern, wenn ALLE Reader bereits mit der passenden SF-Firmware geflasht sind — sonst verlieren sie sofort nach dem Neustart die Verbindung. Änderung wirkt erst nach einem Neustart des Gateways.','Only change this once ALL readers are already flashed with matching-SF firmware — otherwise they lose the connection the moment this reboots. Takes effect after a gateway reboot.');
 $('lorawarn9').textContent=t('⚠️ SF9 kostet deutlich mehr Sendezeit pro Übertragung (grob das 3,4-Fache) und damit spürbar mehr Akku beim Reader als SF7 — nur für Reader mit schwachem Empfang sinnvoll. Inoffizielle, ungetestete Anpassung der Reader-Firmware: Nutzung auf eigenes Risiko.','⚠️ SF9 costs noticeably more airtime per transmission (roughly 3.4×) and therefore meaningfully more reader battery than SF7 — only worth it for readers with a weak signal. An unofficial, off-label reader firmware patch: use at your own risk.');
 $('blorasave').textContent=t('Speichern','Save');
-let cfg=false,tzc=false,ghc=false,loraSfc=false,ftpc=false,ghBusy=false,ecoc=false,ecoSel='auto',ecoPairing=false;
+let cfg=false,tzc=false,ghc=false,loraSfc=false,ftpc=false,ghBusy=false,ecoc=false,ecoSel='auto',ecoPairing=false,blec=false,bleSel='';
 function loraSfChanged(){$('lorawarn9').style.display=$('lorasf').value==='9'?'':'none';}
 async function load(){try{
   const s=await(await fetch('/api/status')).json();
@@ -367,9 +398,17 @@ async function load(){try{
 function tzPick(){const v=$('tzsel').value;if(v)$('tztext').value=v;}
 async function saveNightMode(){const m=$('nmsg');m.textContent='…';try{const r=await(await fetch('/api/night_mode',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'enabled='+($('night').checked?'1':'0')})).json();if(!r.ok)throw Error();m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);}catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
 async function saveNumFmt(){const m=$('numfmtmsg');m.textContent='…';try{const r=await(await fetch('/api/numfmt',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'fmt='+$('numfmt').value})).json();if(!r.ok)throw Error();m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);}catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
-async function loadEcoReaders(){try{const rs=await(await fetch('/api/readers')).json();const o=$('ecordr');
- rs.filter(r=>r.assigned).forEach(r=>{const op=document.createElement('option');op.value=r.id;op.textContent=r.id+(r.name?' — '+r.name:'');o.appendChild(op);});
- o.dataset.filled=1;o.value=ecoSel;if(!o.value)o.value='auto';}catch(e){}}
+// One /api/readers round trip fills both reader pickers (EcoTracker and BTHome). Only assigned meters
+// are offered: neither feature can publish a reader the gateway is not bound to.
+async function loadReaders(){try{const rs=await(await fetch('/api/readers')).json();
+ const o=$('ecordr'),ob=$('blerdr');
+ ob.innerHTML='';const ph=document.createElement('option');ph.value='';
+ ph.textContent=t('— Reader wählen —','— pick a reader —');ob.appendChild(ph);
+ rs.filter(r=>r.assigned).forEach(r=>{const label=r.id+(r.name?' — '+r.name:'');
+  const op=document.createElement('option');op.value=r.id;op.textContent=label;o.appendChild(op);
+  const opb=document.createElement('option');opb.value=r.id;opb.textContent=label;ob.appendChild(opb);});
+ o.dataset.filled=1;o.value=ecoSel;if(!o.value)o.value='auto';
+ ob.dataset.filled=1;ob.value=bleSel;}catch(e){}}
 async function saveEco(){const m=$('ecomsg');m.textContent='…';
  const b=new URLSearchParams();b.set('on',$('ecoon').checked?'1':'0');b.set('reader',$('ecordr').value||'auto');
  b.set('src',$('ecosrc').value);b.set('stale',$('ecostale').value===''?300:$('ecostale').value);b.set('allow',$('ecoallow').value.trim());b.set('phase',$('ecoph').value);
@@ -381,6 +420,70 @@ async function ecoPair(){const m=$('ecomsg');m.textContent='…';
  try{const r=await(await fetch('/api/ecotracker',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'pairing='+(ecoPairing?'0':'1')})).json();
   if(typeof r.pairing==='undefined')throw Error();m.textContent='';ecoc=false;load();}
  catch(e){m.textContent=t('Fehlgeschlagen','failed');}}
+// BTHome card. The firmware reports its own errors in English; translate the ones a user can actually
+// run into and fall back to the raw text for anything else, so a new message still reaches the screen.
+const BLEERR={
+ 'Bluetooth advertising failed':'Senden fehlgeschlagen',
+ 'Bluetooth initialization failed':'Bluetooth konnte nicht gestartet werden',
+ 'Bluetooth address unavailable':'Bluetooth-Adresse nicht lesbar',
+ 'Packet encryption failed':'Verschlüsselung fehlgeschlagen',
+ 'Counter unavailable or exhausted':'Zähler nicht verfügbar oder erschöpft',
+ 'Counter persistence failed or exhausted':'Zähler konnte nicht gespeichert werden',
+ 'Counter unavailable; reboot and inspect storage':'Zähler nicht verfügbar — Gerät neu starten',
+ 'Configuration storage unavailable':'Einstellungsspeicher nicht verfügbar',
+ 'Invalid stored configuration':'Gespeicherte Einstellung ungültig',
+ 'Could not save configuration':'Speichern fehlgeschlagen',
+ 'Reboot required to start Bluetooth':'Neustart nötig, damit Bluetooth startet',
+ 'Select an assigned meter and provide a key':'Zugewiesenen Reader wählen und Bindkey angeben'};
+const bleErr=e=>!e?'':(de&&BLEERR[e])||e;
+// /api/bthome only exists in builds with OBI_BTHOME, so the card stays hidden until the endpoint
+// answers: a gateway built without Bluetooth shows no Bluetooth settings instead of a dead panel.
+async function loadBle(){try{
+  const r=await fetch('/api/bthome');
+  if(!r.ok)return;
+  const b=await r.json();
+  $('cble').style.display='';
+  if(!blec){blec=true;$('bleon').checked=!!b.enabled;$('blestale').value=b.stale_seconds||60;
+   bleSel=(b.reader&&b.reader!=='000000')?b.reader:'';
+   const o=$('blerdr');if(o.dataset.filled)o.value=bleSel;
+   if(b.key_set)$('blekey').placeholder=t('gespeichert — leer lassen zum Beibehalten','saved — leave blank to keep');}
+  const age=b.sample_age_ms==null?null:Math.round(b.sample_age_ms/1000);
+  const pk=n=>n+' '+(n===1?t('Paket','packet'):t('Pakete','packets'));
+  $('blestat').innerHTML=!b.enabled?`<span class="dot idle"></span>${t('deaktiviert','disabled')}`
+   :b.reboot_required?`<span class="dot off"></span>${t('gespeichert — Bluetooth startet erst nach einem Neustart','saved — Bluetooth only starts after a reboot')}`
+   :b.error?`<span class="dot off"></span>${esc(bleErr(b.error))}`
+   :b.advertising?`<span class="dot on"></span>${t('sendet','broadcasting')} · ${pk(b.frames)}`+(age!=null?` · ${t('Messwert','reading')} ${age} ${t('s alt','s old')}`:'')
+   :`<span class="dot idle"></span>${t('aktiv — wartet auf einen Messwert','enabled — waiting for a reading')}`+(b.frames?' · '+pk(b.frames):'');
+  $('blerebootb').style.display=b.reboot_required?'':'none';
+  $('bleid').innerHTML=b.enabled?`${t('Bluetooth-Adresse','Bluetooth address')} <code>${b.mac}</code> · ${t('Name','name')} <code>OBI-PWR</code>`:'';
+ }catch(e){}}
+function bleGenKey(){const a=new Uint8Array(16);crypto.getRandomValues(a);
+ $('blekey').value=[...a].map(x=>x.toString(16).padStart(2,'0')).join('');
+ $('blekey').type='text';          // it has to be readable once -- the receiver needs the very same key
+ $('blekeyhint').textContent=t('Neuer Schlüssel — jetzt kopieren und beim Empfänger eintragen. Das Gateway gibt ihn nach dem Speichern nicht mehr heraus.','A fresh key — copy it now and enter it in the receiver. Once saved, the gateway never hands it out again.');}
+async function saveBle(){const m=$('blemsg'),k=$('blekey').value.trim();
+ if($('bleon').checked&&!$('blerdr').value){m.textContent=t('erst einen zugewiesenen Reader wählen','pick an assigned reader first');return;}
+ if(k&&!/^[0-9a-fA-F]{32}$/.test(k)){m.textContent=t('Bindkey braucht genau 32 Hex-Zeichen','the bindkey needs exactly 32 hex characters');return;}
+ const st=$('blestale').value===''?60:+$('blestale').value;
+ if(!(st>=5&&st<=3600)){m.textContent=t('Zeitlimit muss zwischen 5 und 3600 Sekunden liegen','the timeout has to be between 5 and 3600 seconds');return;}
+ m.textContent='…';
+ const b=new URLSearchParams();b.set('enabled',$('bleon').checked?'1':'0');
+ if($('blerdr').value)b.set('reader',$('blerdr').value);
+ b.set('stale_seconds',st);
+ if(k)b.set('key',k);
+ try{const r=await fetch('/api/bthome',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b});
+  const d=await r.json();
+  if(!r.ok){m.textContent=bleErr(d.error)||t('Speichern fehlgeschlagen','save failed');return;}
+  // Keep a key the user just generated on screen: it is stored now and unreadable afterwards, so
+  // clearing the field here would be the one way to lose it for good.
+  $('blekey').value='';$('blekey').type='password';
+  if(k)$('blekeyhint').innerHTML=t('Bindkey gespeichert — beim Empfänger eintragen: ','Bindkey saved — enter it in the receiver: ')+`<code>${k.toLowerCase()}</code>`;
+  if(d.key_set)$('blekey').placeholder=t('gespeichert — leer lassen zum Beibehalten','saved — leave blank to keep');
+  m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);blec=false;await loadBle();}   // redraw before the 5 s poll
+ catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
+function bleReboot(){if(!confirm(t('Gateway jetzt neu starten, damit Bluetooth startet?','Reboot the gateway now so Bluetooth starts?')))return;
+ $('blemsg').textContent=t('Neustart…','rebooting…');fetch('/api/reboot',{method:'POST'}).catch(()=>{});
+ setTimeout(()=>location.reload(),9000);}
 async function saveGwName(){const m=$('gwnmsg');m.textContent='…';
  try{const r=await(await fetch('/api/gwname',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'name='+encodeURIComponent($('gwname').value.trim())})).json();if(!r.ok)throw Error();
   m.textContent=t('gespeichert ✓ — Discovery gesendet','saved ✓ — discovery sent');setTimeout(()=>m.textContent='',3000);load();}
@@ -524,5 +627,5 @@ async function factoryReset(){
  $('frbtn').disabled=true;$('frmsg').textContent=t('setze zurück…','resetting…');
  try{await fetch('/api/factory_reset',{method:'POST'});}catch(e){}
  $('frmsg').textContent=t('zurückgesetzt — Neustart ins Setup-Portal…','reset — rebooting into setup portal…');}
-load().then(loadEcoReaders);ghCheck();setInterval(()=>{if(!ghBusy)load();},5000);   // keep WiFi/MQTT status + the device clock fresh -- but not while a GitHub OTA is running, see ghUpdate()
+load().then(loadReaders);loadBle();ghCheck();setInterval(()=>{if(!ghBusy){load();loadBle();}},5000);   // keep WiFi/MQTT status + the device clock fresh -- but not while a GitHub OTA is running, see ghUpdate()
 </script></body></html>

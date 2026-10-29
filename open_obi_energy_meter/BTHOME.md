@@ -96,38 +96,39 @@ while BLE was running.
 
 ## Configure
 
-The feature starts disabled. Configuration uses the existing authenticated web
-API; there is no additional settings panel. Pair and assign the meter through
-the dashboard first. Its six-digit reader ID appears in `/api/readers`.
+The feature starts disabled. Pair and assign the meter through the dashboard
+first: BTHome can only publish a reader the gateway is bound to.
 
-Generate a private 16-byte bindkey (32 hexadecimal characters) and keep it for
-the receiving BTHome integration. For example, on your computer:
+Then open **Settings → BTHome** — the card right below EcoFlow STREAM:
+
+1. Tick *Enabled* and pick the reader whose power should go out.
+2. Press *Generate* for a private 16-byte bindkey and copy it: the receiving
+   BTHome integration needs the very same key. The gateway keeps it in NVS and
+   never hands it back out, so a key that is written down nowhere else is lost.
+3. *Save*. The first time, the card then asks for one reboot — Bluetooth can
+   only claim its memory while the device starts up, so an enable that arrives
+   later has to wait for the next boot. *Reboot now* gets it over with.
+
+On a later save, leaving the key field blank keeps the stored key. Switching the
+feature off takes effect immediately and hands the heap back; switching it on
+again always needs that reboot. The card shows the advertising state, the frame
+count, the age of the last reading and any error, and hides itself entirely on a
+build without `OBI_BTHOME`.
+
+Configure over your trusted local network: the dashboard uses HTTP. Supply your
+key to the receiver when it discovers `OBI-PWR`. The gateway has its own stable
+Bluetooth MAC; it does not impersonate the old ESPHome device. Update receiver
+entity references or automations accordingly.
+
+The card is only a client of the authenticated web API, which also stands on its
+own — handy for provisioning several gateways from a script. Keys are stored in
+NVS, never returned by this API and never logged.
 
 ```sh
-python3 -c 'import secrets; print(secrets.token_hex(16))'
+python3 -c 'import secrets; print(secrets.token_hex(16))'    # a bindkey
+curl -X POST http://gateway/api/bthome \
+     -d enabled=1 -d reader=010203 -d key=<32 hex> -d stale_seconds=60
 ```
-
-Open the gateway dashboard, sign in if authentication is enabled, then execute
-this in that page's browser console. The request uses the existing session.
-
-```js
-await fetch('/api/bthome', {
-  method: 'POST',
-  headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-  body: new URLSearchParams({
-    enabled: '1',
-    reader: '010203', // Replace with your assigned meter ID.
-    key: prompt('BTHome bindkey (32 hex characters)'),
-    stale_seconds: '60'
-  })
-}).then(r => r.json());
-```
-
-Configure over your trusted local network: the existing dashboard uses HTTP.
-Keys are stored in the device's NVS, never returned by this API or logged.
-Supply your key to the receiver when it discovers `OBI-PWR`. The gateway has
-its own stable Bluetooth MAC; it does not impersonate the old ESPHome device.
-Update receiver entity references or automations accordingly.
 
 | POST field | Meaning |
 | --- | --- |
@@ -136,10 +137,11 @@ Update receiver entity references or automations accordingly.
 | `key` | Exactly 32 hex characters; omit to retain the saved key |
 | `stale_seconds` | 5–3600 seconds; defaults to 60 |
 
-Status: `GET /api/bthome`. It reports configuration, Bluetooth MAC, advertising
-state, `reboot_required`, packet count, sample age and errors. It never returns the key.
+Status: `GET /api/bthome`, which is what the settings card polls. It reports
+configuration, Bluetooth MAC, advertising state, `reboot_required`, packet count,
+sample age and errors. It never returns the key.
 
-To disable, send `enabled=0` to the same POST endpoint. Changing configuration
+To disable, untick *Enabled* or send `enabled=0`. Changing configuration
 stops advertisements and waits for the next valid reading. Authentication
 follows the dashboard: without a configured login, its APIs are open locally.
 
@@ -227,11 +229,16 @@ ausgeschaltet. Für die originale Bridge bleibt der Build `obi_gateway_c3`.
 Der Lesekopf sendet weiterhin LoRa. Übertragen wird die aktuelle
 vorzeichenbehaftete Leistung, entsprechend `power_sint32` in ESPHome.
 
-Die Erweiterung ist zunächst ausgeschaltet. Konfiguration erfolgt über
-`POST /api/bthome`, Status über `GET /api/bthome`, jeweils mit der vorhandenen
-Dashboard-Anmeldung. Nach Auswahl des Readers und Eingabe eines privaten
-32-stelligen Hex-Schlüssels erscheint die Bridge als `OBI-PWR`. Die neue
-Bluetooth-Adresse muss im Empfänger eingerichtet werden.
+Die Erweiterung ist zunächst ausgeschaltet. Eingestellt wird sie unter
+*Einstellungen → BTHome*, in der Kachel unter EcoFlow STREAM: Reader auswählen,
+mit *Erzeugen* einen privaten 32-stelligen Hex-Schlüssel anlegen, kopieren,
+speichern. Danach ist einmalig ein Neustart nötig, weil Bluetooth seinen
+Arbeitsspeicher nur beim Start belegen kann; die Kachel bietet dafür einen
+Knopf. Anschließend erscheint die Bridge als `OBI-PWR`. Der Schlüssel liegt im
+NVS und wird nie wieder herausgegeben — ohne eigene Kopie ist er verloren. Die
+neue Bluetooth-Adresse muss im Empfänger eingerichtet werden. Dieselben
+Einstellungen gibt es unverändert als `POST /api/bthome` und `GET /api/bthome`
+mit der vorhandenen Dashboard-Anmeldung.
 
 Build und Hosttests ersetzen keinen Funk- oder Dauertest. Vor einer Freigabe
 sind die obigen Prüfungen am gekauften Gerät erforderlich. Bis dahin ist dies
