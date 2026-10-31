@@ -24,6 +24,8 @@ SECTIONS
     *(.rodata*)
   } > HOOKS
 
+  .vendor 0x4700 (NOLOAD) : { KEEP(*(.vendor_sub_4700)) }   /* stock code, call target only */
+
   /DISCARD/ : {
     *(.ARM.exidx*)
     *(.ARM.extab*)
