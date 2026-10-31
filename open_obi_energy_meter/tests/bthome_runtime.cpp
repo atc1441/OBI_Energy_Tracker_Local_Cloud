@@ -59,9 +59,11 @@ static void capture(int32_t power, unsigned index = 0) {
 
 static uint32_t sequence() {
   const auto &p = testAdvertising.payload;
-  assert(p.size() == 31 && p[3] == 27 && p[4] == 0x16);
+  const size_t ad = p.size() == 31 ? 27 : 17;   // with or without import/export
+  assert(p.size() == 4 + ad && p[3] == ad && p[4] == 0x16);
   assert(p[5] == 0xD2 && p[6] == 0xFC && p[7] == 0x41);
-  return p[23] | uint32_t(p[24]) << 8 | uint32_t(p[25]) << 16 | uint32_t(p[26]) << 24;
+  const size_t c = 3 + ad - 7;
+  return p[c] | uint32_t(p[c + 1]) << 8 | uint32_t(p[c + 2]) << 16 | uint32_t(p[c + 3]) << 24;
 }
 
 int main(int argc, char **argv) {
@@ -130,7 +132,26 @@ int main(int argc, char **argv) {
   assert(testAdvertising.duration == 2000);
   assert(sequence() == 0);
 
+  if (!strcmp(argv[1], "energy_guard")) {
+    assert(testAdvertising.payload.size() == 21);              // first frame: power only
+    auto step = [&](uint32_t imp, uint32_t exp) {
+      testMillis += 3000; r.import_ = imp; r.export_ = exp; capture(-850);
+      return testAdvertising.payload.size();
+    };
+    assert(step(4646890, 77402) == 31);                        // two frames agree
+    assert(step(0, 77402) == 21);                              // zeroed counter
+    assert(step(4646891, 77402) == 21);                        // implausible vs. the 0
+    assert(step(4646892, 77402) == 31);
+    assert(step(4646880, 77402) == 21);                        // falling: dip never sent
+    assert(step(4646893, 77402) == 31);
+    assert(step(4600000, 77402) == 21);                        // implausible drop
+    assert(step(4646894, 77402) == 21);                        // implausible vs. the drop
+    assert(step(4646895, 77402) == 31);
+    assert(step(0x7FFFFFFF, 77402) == 21);                     // n/a
+    return 0;
+  }
   if (!strcmp(argv[1], "packet")) {
+    testMillis += 3000; capture(-850);                         // second frame confirms the counters
     for (auto b : testAdvertising.payload) printf("%02x", b);
     puts(""); return 0;
   }
