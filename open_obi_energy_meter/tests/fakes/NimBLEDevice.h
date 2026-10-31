@@ -30,8 +30,8 @@ class NimBLEAdvertisementData {
 
 class NimBLEAdvertising {
  public:
-  std::vector<uint8_t> payload;
-  bool active = false, failStart = false, scanResponse = true;
+  std::vector<uint8_t> payload, scanPayload;
+  bool active = false, failStart = false, scanResponse = false;
   uint32_t started = 0, duration = 0;
   unsigned starts = 0;
   uint16_t minInterval = 0, maxInterval = 0;
@@ -42,6 +42,7 @@ class NimBLEAdvertising {
   bool setConnectableMode(int value) { mode = value; return true; }
   bool stop() { active = false; return true; }
   bool setAdvertisementData(const NimBLEAdvertisementData &data) { payload = data.payload; return true; }
+  bool setScanResponseData(const NimBLEAdvertisementData &data) { scanPayload = data.payload; return true; }
   bool start(uint32_t ms) {
     if (failStart) return false;
     duration = ms; started = millis(); active = true; ++starts; return true;

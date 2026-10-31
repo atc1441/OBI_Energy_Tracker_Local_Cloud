@@ -24,6 +24,7 @@ struct Config {
 struct Sample {
   bool valid = false;
   uint32_t power = 0;
+  uint32_t importWh = 0, exportWh = 0;
   uint32_t received = 0;
   uint32_t generation = 0;
 };
@@ -125,7 +126,9 @@ bool startBle() {
   if (!NimBLEDevice::setOwnAddrType(BLE_OWN_ADDR_PUBLIC)) return false;
   advertising = NimBLEDevice::getAdvertising();
   if (!advertising) return false;
-  advertising->enableScanResponse(false);
+  advertising->enableScanResponse(true);   // name lives here; the 31-byte advert is full
+  NimBLEAdvertisementData scan;
+  if (!scan.setName("OBI-PWR") || !advertising->setScanResponseData(scan)) return false;
   advertising->setMinInterval(160);
   advertising->setMaxInterval(240);
   return advertising->setConnectableMode(BLE_GAP_CONN_MODE_NON);
@@ -201,6 +204,7 @@ void bthome_capture(const Reader &r) {
   portENTER_CRITICAL(&sampleMux);
   if (config.enabled && !memcmp(config.reader, r.handle, 3)) {
     sample.power = r.power;
+    sample.importWh = r.import_; sample.exportWh = r.export_;
     sample.received = r.lastEnergyMs;
     sample.valid = r.used && r.assigned && r.devType == 0x10 && r.haveData &&
                    !r.inBootloader && (r.flags & 1);
@@ -243,12 +247,12 @@ void bthome_service() {
     fail("Counter persistence failed or exhausted"); return;
   }
   uint8_t data[bthome::SERVICE_SIZE];
-  if (!bthome::powerPacket(latest.power, cfg.key, mac, sequence, data, encrypt)) {
-    fail("Packet encryption failed"); return;
-  }
+  size_t size = bthome::powerPacket(latest.power, latest.importWh, latest.exportWh, cfg.key, mac,
+                                    sequence, data, encrypt);
+  if (!size) { fail("Packet encryption failed"); return; }
   NimBLEAdvertisementData adv;
-  bool ok = adv.setFlags(0x06) && adv.setName("OBI-PWR") &&
-            adv.setServiceData(NimBLEUUID(uint16_t(0xFCD2)), data + 2, sizeof data - 2);
+  bool ok = adv.setFlags(0x06) &&
+            adv.setServiceData(NimBLEUUID(uint16_t(0xFCD2)), data + 2, size - 2);
   now = millis();
   if (!bthome::sampleFresh(latest.valid, latest.received, now, uint32_t(cfg.stale) * 1000)) {
     stopAdvertising(); return;

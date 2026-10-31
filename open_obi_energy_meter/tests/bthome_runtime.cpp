@@ -59,9 +59,9 @@ static void capture(int32_t power, unsigned index = 0) {
 
 static uint32_t sequence() {
   const auto &p = testAdvertising.payload;
-  assert(p.size() == 30 && p[12] == 17 && p[13] == 0x16);
-  assert(p[14] == 0xD2 && p[15] == 0xFC && p[16] == 0x41);
-  return p[22] | uint32_t(p[23]) << 8 | uint32_t(p[24]) << 16 | uint32_t(p[25]) << 24;
+  assert(p.size() == 31 && p[3] == 27 && p[4] == 0x16);
+  assert(p[5] == 0xD2 && p[6] == 0xFC && p[7] == 0x41);
+  return p[23] | uint32_t(p[24]) << 8 | uint32_t(p[25]) << 16 | uint32_t(p[26]) << 24;
 }
 
 int main(int argc, char **argv) {
@@ -69,6 +69,7 @@ int main(int argc, char **argv) {
   Reader &r = readers[0];
   r.used = r.assigned = r.haveData = true;
   r.flags = 1; r.handle[0] = 1; r.handle[1] = 2; r.handle[2] = 3;
+  r.import_ = 4646884; r.export_ = 77402;
   readers[1] = r; readers[1].handle[2] = 4;
 
   const bool bootsEnabled = strcmp(argv[1], "validation") != 0 &&
@@ -123,7 +124,8 @@ int main(int argc, char **argv) {
   capture(-850);
   assert(testAdvertising.isAdvertising());
   assert(testBleInitCalls == 1);
-  assert(!testAdvertising.scanResponse && testAdvertising.mode == BLE_GAP_CONN_MODE_NON);
+  assert(testAdvertising.scanResponse && testAdvertising.mode == BLE_GAP_CONN_MODE_NON);
+  assert(testAdvertising.scanPayload == std::vector<uint8_t>({8, 9, 'O', 'B', 'I', '-', 'P', 'W', 'R'}));
   assert(testAdvertising.minInterval == 160 && testAdvertising.maxInterval == 240);
   assert(testAdvertising.duration == 2000);
   assert(sequence() == 0);

@@ -35,24 +35,32 @@ bool powerValue(uint32_t raw, int32_t &scaled) {
   return true;
 }
 
-bool powerPacket(uint32_t raw, const uint8_t key[16], const uint8_t mac[6],
-                 uint32_t counter, uint8_t out[SERVICE_SIZE], Encrypt encrypt) {
+static bool energyValid(uint32_t wh) { return wh != 0x7FFFFFFF && wh != 0xCCCCCCCD; }
+
+size_t powerPacket(uint32_t raw, uint32_t importWh, uint32_t exportWh, const uint8_t key[16],
+                   const uint8_t mac[6], uint32_t counter, uint8_t out[SERVICE_SIZE], Encrypt encrypt) {
   memset(out, 0, SERVICE_SIZE);
   int32_t scaled;
-  if (!encrypt || !powerValue(raw, scaled)) return false;
-  uint8_t plain[5] = {0x5C};
-  little32(plain + 1, static_cast<uint32_t>(scaled));
+  if (!encrypt || !powerValue(raw, scaled)) return 0;
+  uint8_t plain[15];
+  size_t n = 0;
+  if (energyValid(importWh) && energyValid(exportWh)) {   // 0x4D: uint32, 0.001 kWh = 1 Wh
+    plain[n++] = 0x4D; little32(plain + n, importWh); n += 4;
+    plain[n++] = 0x4D; little32(plain + n, exportWh); n += 4;
+  }
+  plain[n++] = 0x5C;
+  little32(plain + n, static_cast<uint32_t>(scaled)); n += 4;
   uint8_t nonce[13];
   memcpy(nonce, mac, 6);
   nonce[6] = 0xD2; nonce[7] = 0xFC; nonce[8] = 0x41;
   little32(nonce + 9, counter);
   out[0] = 0xD2; out[1] = 0xFC; out[2] = 0x41;
-  little32(out + 8, counter);
-  if (!encrypt(key, nonce, plain, sizeof plain, out + 3, out + 12)) {
+  little32(out + 3 + n, counter);
+  if (!encrypt(key, nonce, plain, n, out + 3, out + 7 + n)) {
     memset(out, 0, SERVICE_SIZE);
-    return false;
+    return 0;
   }
-  return true;
+  return n + 11;
 }
 
 bool sampleFresh(bool valid, uint32_t received, uint32_t now, uint32_t maxAge) {
