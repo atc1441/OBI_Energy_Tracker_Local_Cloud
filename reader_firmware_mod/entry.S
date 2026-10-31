@@ -110,7 +110,11 @@ entry_sxtb8_fix:
 // (the replaced single BL only clobbered it transiently); push/pop it
 // instead of relying on `bx lr`, since hook_power_correct's own `bl`
 // already overwrites LR with an address inside this trampoline.
-.equ vendor_sub_4700, 0x4700
+// A typed Thumb symbol at 0x4700: binutils >= 2.45 rejects BL to an untyped
+// absolute (.equ). Placed by link.ld as NOLOAD, so the blob gains no bytes.
+.section .vendor_sub_4700, "ax", %progbits
+.thumb_func
+vendor_sub_4700:
 
 .section .text.entry_power_correct, "ax", %progbits
 .global entry_power_correct
