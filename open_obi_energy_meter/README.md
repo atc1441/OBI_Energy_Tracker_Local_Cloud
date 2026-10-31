@@ -192,9 +192,12 @@ running firmware kept (brick-safe dual-OTA). The build → flash → verify loop
 ## Web dashboard
 
 - **WiFi captive portal** (WiFiManager) — no hard-coded credentials; reconfigurable any time. If the
-  connection drops, the gateway retries the saved network every 30 s in the background (in addition to
-  raising its setup hotspot), so it recovers on its own instead of needing a manual reboot. The setup
-  hotspot itself (`OpenOBI-<MAC>`) can optionally be given a password in Settings — blank/open by default.
+  connection drops, the gateway retries the saved network every 30 s in the background, so it recovers on
+  its own instead of needing a manual reboot. While WiFi is down the setup hotspot (`OpenOBI-<MAC>`) comes up.
+  Opt-in **Settings → Hotspot only 10 min after boot or button tap** limits it to 10 min after boot or a
+  short case-button tap (`OBI_SETUP_AP_MS`); a later WiFi drop then never reopens it. It still stays up
+  while a client is connected or no WiFi is saved yet. It can optionally
+  be given a password in Settings — blank/open by default.
 - **Live reader cards**: 3-byte id, 16-byte **UUID**, device type, firmware/hardware version, RSSI,
   battery, infrared (meter-reading) status, and import / export / power.
 - **Per reader**: set the **upload interval**, **flash firmware** (`.bin` picker → over-the-air update), and
@@ -630,9 +633,11 @@ Build-→-Flash-→-Verify-Ablauf und die Endpoint-Details stehen in [`PROJECT_N
 ## Web-Dashboard
 
 - **WLAN-Captive-Portal** (WiFiManager) — keine fest verdrahteten Zugangsdaten; jederzeit neu konfigurierbar.
-  Bricht die Verbindung ab, versucht das Gateway im Hintergrund alle 30 s erneut das gespeicherte Netz (zusätzlich
-  zu seinem Einrichtungs-Hotspot) — erholt sich also von selbst, ohne manuellen Neustart. Der Einrichtungs-Hotspot
-  (`OpenOBI-<MAC>`) kann in den Einstellungen optional ein Passwort bekommen — standardmäßig offen/ohne.
+  Bricht die Verbindung ab, versucht das Gateway im Hintergrund alle 30 s erneut das gespeicherte Netz — erholt
+  sich also von selbst, ohne manuellen Neustart. Ohne WLAN öffnet der Einrichtungs-Hotspot (`OpenOBI-<MAC>`).
+  Optional begrenzt **Einstellungen → Hotspot nur 10 min nach Start oder Tastendruck** ihn auf 10 min nach dem
+  Start oder nach kurzem Tippen auf die Gehäusetaste (`OBI_SETUP_AP_MS`); ein späterer WLAN-Ausfall öffnet ihn
+  dann nicht erneut. Er bleibt offen, solange ein Client verbunden ist oder noch kein WLAN gespeichert ist. Optional mit Passwort in den Einstellungen — standardmäßig offen/ohne.
 - **Live-Reader-Karten**: 3-Byte-ID, 16-Byte-**UUID**, Gerätetyp, Firmware-/Hardware-Version, RSSI,
   Batterie, Infrarot-(Zähler-Lese-)Status sowie Bezug / Einspeisung / Leistung.
 - **Je Reader**: **Upload-Intervall** setzen, **Firmware flashen** (`.bin`-Auswahl → Over-the-Air-Update) und
