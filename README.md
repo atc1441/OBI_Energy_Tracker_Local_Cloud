@@ -127,10 +127,14 @@ the firmware has its own built-in web updater and never needs a cloud again.
    join it, set your WiFi / MQTT, open the dashboard. From now on **all** updates go through
    **Settings → Firmware** (upload a `.bin` or pull a GitHub release) — **no cloud needed**.
 5. **Back up the stock image — now straight from the device.** The partition table is **dual-OTA**, so your
-   original firmware is still sitting untouched in the *other* app slot after the flash. Open the custom
-   firmware's **🐞 Debug** page → **Dump full flash** to download a complete backup (bootloader + partition
-   table + both app slots + NVS) for restore/downgrade. Do this **before** any further self-update, which
-   reuses that spare slot. *(The old pre-flash method — `python 04-connect-your-own-cloud/tools/obi_ota_download.py`
+   original firmware is still sitting untouched in the *other* app slot after the flash, and the firmware
+   deliberately leaves it there: the big history store would normally use that slot's free space, but it
+   keeps its hands off an image it never put there and logs to the small 128 KB partition instead
+   ([#100](https://github.com/atc1441/OBI_Energy_Tracker_Local_Cloud/issues/100)). Open the custom firmware's **🐞 Debug** page → **Dump full flash** to download a complete
+   backup (bootloader + partition table + both app slots + NVS) for restore/downgrade. Two things erase
+   that copy, so do this first: your next self-update (it reuses the spare slot) and the **Release the slot
+   for history** button the Debug page offers right there, which trades the stock image for the full ~1.6 MB
+   of history. *(The old pre-flash method — `python 04-connect-your-own-cloud/tools/obi_ota_download.py`
    over your cloud — still works but is no longer needed.)*
 
 > ⚠️ Step 3 is the only hard-to-reverse step — a wrong image can't be re-flashed over UART. It is brick-safe
@@ -157,10 +161,14 @@ Flashen über UART/JTAG). Die eigene Firmware wird deshalb **einmalig über den 
    verbinden, WLAN / MQTT einstellen, Dashboard öffnen. Ab jetzt laufen **alle** Updates über
    **Einstellungen → Firmware** (`.bin` hochladen oder GitHub-Release ziehen) — **ohne Cloud**.
 5. **Stock-Image sichern — jetzt direkt vom Gerät.** Die Partitionstabelle ist **Dual-OTA**, deine originale
-   Firmware liegt nach dem Flashen also unangetastet im *anderen* App-Slot. Öffne die **🐞 Debug**-Seite der
-   eigenen Firmware → **Dump full flash** und lade ein vollständiges Backup herunter (Bootloader +
-   Partitionstabelle + beide App-Slots + NVS) zum Wiederherstellen/Downgraden. Mach das **vor** dem nächsten
-   Self-Update, das diesen freien Slot wiederverwendet. *(Die alte Vorab-Methode —
+   Firmware liegt nach dem Flashen also unangetastet im *anderen* App-Slot — und die Firmware lässt sie dort
+   auch liegen: der große History-Speicher würde normalerweise den freien Platz dieses Slots nutzen, rührt
+   ein Image, das er nicht selbst dort hingeschrieben hat, aber nicht an und loggt stattdessen in die kleine
+   128-KB-Partition ([#100](https://github.com/atc1441/OBI_Energy_Tracker_Local_Cloud/issues/100)). Öffne die **🐞 Debug**-Seite der eigenen Firmware → **Dump full flash** und
+   lade ein vollständiges Backup herunter (Bootloader + Partitionstabelle + beide App-Slots + NVS) zum
+   Wiederherstellen/Downgraden. Zwei Dinge löschen diese Kopie, mach es also vorher: das nächste Self-Update
+   (es verwendet den freien Slot) und der Button **Slot für die History freigeben** auf derselben
+   Debug-Seite, der das Stock-Image gegen die vollen ~1,6 MB History tauscht. *(Die alte Vorab-Methode —
    `python 04-connect-your-own-cloud/tools/obi_ota_download.py` über deine Cloud — funktioniert weiter, ist
    aber nicht mehr nötig.)*
 

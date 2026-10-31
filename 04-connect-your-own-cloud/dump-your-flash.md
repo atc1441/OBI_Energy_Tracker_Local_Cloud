@@ -6,7 +6,9 @@ there is a second, much simpler route: the firmware's **web debug page can read 
 flash** — the whole chip, including *both* OTA app slots. That means you can pull:
 
 - the **currently running** firmware,
-- the **previous version** still sitting in the other OTA slot (whatever the last update replaced), and
+- the **previous version** still sitting in the other OTA slot (whatever the last update replaced) — on a
+  freshly converted gateway that is the **stock image**, which the firmware keeps intact for exactly this
+  purpose until you release the slot for history storage ([#100](https://github.com/atc1441/OBI_Energy_Tracker_Local_Cloud/issues/100)), and
 - the bootloader, partition table, NVS and data partitions.
 
 No esptool, no UART, no cert — just a browser. (The **stock** firmware has no such page — this only works

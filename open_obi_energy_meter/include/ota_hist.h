@@ -65,6 +65,13 @@
 // this exact same fixed offset from the partition's end.
 static const uint32_t OTA_HIST_TAIL_RESERVE = 256UL * 1024UL;
 
+// The spare slot is not always ours to take: right after a stock gateway has been converted it still
+// holds the vendor image the cloud OTA replaced -- the only copy of it on a device whose bootloader is
+// fused shut. Mounting the store over it formatted it away within minutes of the first boot (GitHub issue
+// #100). So the first mount looks at what is physically in there and leaves a foreign image alone, with
+// raw samples falling back to the 128 KB userdata store exactly as on every other board, until either the
+// user releases the slot from the Debug page or an OTA update overwrites that image anyway. The decision
+// itself is in ota_slot_guard.h (and tests/ota_slot_native.cpp).
 bool   otaHist_mount();            // mount both regions (format-on-first-use) on the current inactive partition
 bool   otaHist_mounted();          // true if the BULK region is mounted (the one callers actually read/write)
 bool   otaHist_format();           // wipe + remount both regions (factory reset)
@@ -77,6 +84,10 @@ bool   otaHist_format();           // wipe + remount both regions (factory reset
 bool   otaHist_prepareForFlash();
 void   otaHist_abortFlash();       // OTA failed/rejected and device keeps running current firmware -- remount
 bool   otaHist_writesPaused();     // historyService() must skip logging raw samples while true
+
+bool        otaHist_slotHeld();     // spare slot deliberately left intact (see above); store is on userdata
+const char *otaHist_slotImage();   // name/version of the protected image, "" if it carries none
+bool        otaHist_releaseSlot(); // user confirmed the backup: format the slot and mount the store there
 
 void   otaHist_space(size_t &total, size_t &used);          // BULK region space; 0/0 if not mounted
 void   otaHist_regionInfo(uint32_t &addr, uint32_t &size);   // BULK region physical address/size (0/0 if none)

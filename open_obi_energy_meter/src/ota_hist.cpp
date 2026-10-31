@@ -9,11 +9,15 @@ extern "C" {
 }
 #include <Preferences.h>   // tiny "which partition did we last mount" marker -- see needsMigrate()
 #include <dirent.h>
+#include "ota_slot_guard.h"   // may this slot be claimed at all? -- the issue #100 check, host-tested
 
 // Sanity floor: the partition must be big enough for the tail reserve plus a realistic firmware image,
 // or this board's partition table doesn't match what this feature was designed against (see platformio.ini).
 static const uint32_t OTA_MIN_FW_BUDGET = 900UL * 1024UL;
 
+static bool            g_slotHeld    = false;   // spare slot left intact on purpose -- see claimSlot()
+static bool            g_releaseOnce = false;   // one-shot "the user said go ahead" for otaHist_releaseSlot()
+static char            g_slotLabel[48] = {0};   // name of the image being protected, for the UI
 static bool            g_bulkMounted = false;
 static bool            g_tailMounted = false;
 static bool            g_paused      = false;
@@ -100,15 +104,74 @@ static void migrateTailFromActive() {
   Serial.println("[otahist] migrated the newest raw samples forward across the last OTA update");
 }
 
+// NVS marker, "otahist" namespace: "ran<hex address>" = this firmware has BOOTED from that app slot at
+// some point. Written at every mount (below) for the partition we are running from right now, so one OTA
+// cycle later the slot we left behind is recognizable as our own superseded image rather than as something
+// that was already there before us. Two app slots on this board, so this never holds more than two keys.
+// Deliberately NOT in web_factory_reset()'s list of namespaces to clear: a reset must not make the gateway
+// forget which images are its own.
+static void slotKey(uint32_t addr, char *out, size_t n) { snprintf(out, n, "ran%lX", (unsigned long)addr); }
+
+static bool everRanFrom(uint32_t addr) {
+  char k[16]; slotKey(addr, k, sizeof k);
+  Preferences pr; pr.begin("otahist", true);
+  bool ran = pr.getBool(k, false);
+  pr.end();
+  return ran;
+}
+static void noteRunningSlot() {
+  const esp_partition_t *running = esp_ota_get_running_partition();
+  if (!running || everRanFrom(running->address)) return;   // one flash write per slot, ever
+  char k[16]; slotKey(running->address, k, sizeof k);
+  Preferences pr; pr.begin("otahist", false);
+  pr.putBool(k, true);
+  pr.end();
+}
+
+// Decide whether the spare slot may be claimed, and remember what is in it when it may not. The rules and
+// the reasoning behind them live in ota_slot_guard.h; this only gathers the facts: what the first bytes of
+// the region look like, and what NVS says about the slot's past.
+static bool claimSlot(const esp_partition_t *inactive, bool haveStoreMarker) {
+  uint8_t head[0x80] = {0};   // 0x20 image+segment header, then the app descriptor through project_name
+  OtaSlotState st = {};
+  for (uint32_t off = 0; off <= 4096 && !st.ourStore; off += 4096)   // littlefs keeps two superblocks
+    if (esp_partition_read(inactive, off, head, 16) == ESP_OK) st.ourStore = otaSlotLooksLikeLittlefs(head);
+  if (!st.ourStore && esp_partition_read(inactive, 0, head, sizeof head) == ESP_OK)
+    st.appImage = otaSlotLooksLikeApp(head, sizeof head);
+  st.everUsed = haveStoreMarker || everRanFrom(inactive->address);
+  st.released = g_releaseOnce;
+  if (otaSlotClaimable(st)) return true;
+
+  char proj[32] = {0}, ver[32] = {0};
+  otaSlotDescText(head, sizeof head, OTA_SLOT_DESC_PROJECT, proj, sizeof proj);
+  otaSlotDescText(head, sizeof head, OTA_SLOT_DESC_VERSION, ver, sizeof ver);
+  snprintf(g_slotLabel, sizeof g_slotLabel, "%s%s%s", proj, (proj[0] && ver[0]) ? " " : "", ver);
+  g_slotHeld = true;
+  Serial.printf("[otahist] app partition 0x%lX holds a firmware image this gateway has never run (%s) -- "
+                "that is the stock image the conversion replaced, and most likely the only copy of it "
+                "(issue #100). Leaving it untouched; raw samples go to the 128 KB userdata store instead. "
+                "Back it up via Debug -> Dump full flash, then release the slot there for the full "
+                "history capacity.\n",
+                (unsigned long)inactive->address, g_slotLabel[0] ? g_slotLabel : "unnamed image");
+  return false;
+}
+
 bool otaHist_mount() {
   unmountBulk(); unmountTail();
+  g_slotHeld = false; g_slotLabel[0] = 0;
   const esp_partition_t *inactive = esp_ota_get_next_update_partition(NULL);
   if (!sizeOk(inactive)) return false;
 
   Preferences pr; pr.begin("otahist", true);
   uint32_t lastAddr = pr.getUInt("addr", 0);
+  bool flashedSpare = pr.getBool("flashed", false);
   pr.end();
   bool needMigrate = (lastAddr != 0 && lastAddr != inactive->address);
+
+  noteRunningSlot();
+  // "addr" (a store has been mounted in some slot before) or "flashed" (we have written an image into the
+  // spare slot ourselves) both mean the same thing here: nothing original is left in there to protect.
+  if (!claimSlot(inactive, lastAddr != 0 || flashedSpare)) return false;
 
   // TAIL first: fixed address/size, always -- start clean on a migration (an earlier stint of this SAME
   // partition as "inactive" may have left stale data there from 1+ OTA cycles ago).
@@ -250,6 +313,12 @@ static void snapshotBulkIntoTail() {
 bool otaHist_prepareForFlash() {
   g_paused = true;
   if (g_bulkMounted) snapshotBulkIntoTail();
+  // The flash about to start overwrites the spare slot with our own new image, so the next boot must not
+  // mistake the leftovers for an untouched stock image and hold the slot back (issue #100). Recorded here
+  // rather than on success because a flash that dies halfway has written there just the same; an image
+  // rejected before its first write leaves a slot that still reads as a valid foreign app, and the content
+  // check in claimSlot() catches that case on its own.
+  { Preferences pp; pp.begin("otahist", false); pp.putBool("flashed", true); pp.end(); }
   unmountBulk(); unmountTail();   // release both VFS handles -- Update.begin() is about to overwrite this partition
   return true;
 }
@@ -258,6 +327,22 @@ void otaHist_abortFlash() {
   g_paused = false;
   otaHist_mount();   // OTA never completed -- re-resolves to the same (unchanged) inactive partition and
                       // remounts both; nothing here ever touched their contents, so this is the original data.
+}
+
+bool otaHist_slotHeld() { return g_slotHeld; }
+const char *otaHist_slotImage() { return g_slotLabel; }
+
+// The user has seen what is in the slot (and, one hopes, downloaded it) and wants the capacity instead.
+// One-shot: the mount that follows formats the slot and writes the "addr" marker, so the question never
+// comes up again on this device.
+bool otaHist_releaseSlot() {
+  if (!g_slotHeld) return otaHist_mounted();
+  g_releaseOnce = true;
+  bool ok = otaHist_mount();
+  g_releaseOnce = false;
+  Serial.printf("[otahist] spare slot released by the user -- history store %s\n",
+                ok ? "mounted" : "FAILED to mount");
+  return ok;
 }
 
 void otaHist_space(size_t &total, size_t &used) {
@@ -281,6 +366,9 @@ bool otaHist_format() { return false; }
 bool otaHist_prepareForFlash() { return false; }
 void otaHist_abortFlash() {}
 bool otaHist_writesPaused() { return false; }
+bool otaHist_slotHeld() { return false; }
+const char *otaHist_slotImage() { return ""; }
+bool otaHist_releaseSlot() { return false; }
 void otaHist_space(size_t &total, size_t &used) { total = used = 0; }
 void otaHist_regionInfo(uint32_t &addr, uint32_t &size) { addr = size = 0; }
 

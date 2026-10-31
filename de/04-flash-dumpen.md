@@ -7,7 +7,9 @@ Firmware kann den SPI‑Flash des Geräts selbst auslesen** — den ganzen Chip,
 Slots. Damit bekommst du:
 
 - die **aktuell laufende** Firmware,
-- die **vorherige Version**, die noch im anderen OTA‑Slot liegt (das, was das letzte Update ersetzt hat), und
+- die **vorherige Version**, die noch im anderen OTA‑Slot liegt (das, was das letzte Update ersetzt hat) —
+  bei einem frisch umgestellten Gateway ist das das **Stock‑Image**, das die Firmware genau dafür unangetastet
+  liegen lässt, bis du den Slot für die History freigibst ([#100](https://github.com/atc1441/OBI_Energy_Tracker_Local_Cloud/issues/100)), und
 - Bootloader, Partitionstabelle, NVS und Daten‑Partitionen.
 
 Kein esptool, kein UART, kein Cert — nur ein Browser. (Die **Stock**‑Firmware hat keine solche Seite — das

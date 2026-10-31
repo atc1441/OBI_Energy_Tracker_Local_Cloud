@@ -70,8 +70,10 @@ default — hours or days, pulls from this repo or your own fork), plus a **fact
 A power-user flash inspector: browse raw flash as hex, read **eFuses**, and — most importantly — **Dump
 full flash** to pull a complete backup of the device (bootloader + partition table + both OTA app slots +
 NVS). Because the partition table is dual-OTA, your **original stock firmware is still intact in the other
-slot** after conversion, so this is how you grab a full stock backup straight from the device. Below the
-hex editor, a **flash map** section renders the whole chip as a defrag-style grid — which OTA bank is
+slot** after conversion, so this is how you grab a full stock backup straight from the device — the history
+store recognizes that image and leaves the slot alone until you say otherwise, so the page also carries the
+**Release the slot for history** button that trades it for the full raw-sample capacity ([#100](https://github.com/atc1441/OBI_Energy_Tracker_Local_Cloud/issues/100)). Below
+the hex editor, a **flash map** section renders the whole chip as a defrag-style grid — which OTA bank is
 active, how much of it is firmware vs. history data, and how full each history region is (see
 [Energy history & storage](#energy-history--storage) below).
 
@@ -240,6 +242,12 @@ purely from the import/export counter deltas — useful when a meter's own Watt 
   **stock OBI C3 gateway** (env `obi_gateway_c3`) they instead use the free space of whichever OTA app
   partition isn't currently booted — up to **~1.6 MB**, many times the old capacity, at no extra hardware
   cost. See [`PROJECT_NOTES.md`](PROJECT_NOTES.md) for the exact partition layout and byte offsets.
+  Right after a conversion that slot still holds the stock image the cloud OTA replaced, and formatting a
+  store over it would destroy the only copy of it on a device whose bootloader is fused shut — so the
+  firmware checks what is physically in the slot, leaves a firmware image it never wrote there alone, and
+  stays on the 128 KB partition until either `/debug` → **Release the slot for history** or the first
+  self-update overwrites that image anyway ([#100](https://github.com/atc1441/OBI_Energy_Tracker_Local_Cloud/issues/100)). Whatever was already logged moves across at the
+  switch.
 - Export **CSV** any time — raw samples or daily values — via the ⬇ buttons on `/history`.
 - A reader that's gone out of range (or been removed) still keeps its history reachable and deletable: the
   reader picker also lists "offline" ids that only exist in stored history, not the live radio list.
@@ -509,7 +517,8 @@ Ein Flash-Inspektor für Power-User: Roh-Flash als Hex ansehen, **eFuses** lesen
 **Dump full flash**, um ein vollständiges Backup des Geräts zu ziehen (Bootloader + Partitionstabelle +
 beide OTA-App-Slots + NVS). Da die Partitionstabelle Dual-OTA ist, liegt deine **originale Stock-Firmware
 nach dem Umflashen weiter unangetastet im anderen Slot** — so holst du ein volles Stock-Backup direkt vom
-Gerät. Unter dem Hex-Editor zeigt eine **Speicherkarte** den ganzen Chip als Defragmentierungs-artige
+Gerät; der History-Speicher erkennt dieses Image und lässt den Slot in Ruhe, bis du etwas anderes sagst,
+weshalb dieselbe Seite den Button **Slot für die History freigeben** anbietet ([#100](https://github.com/atc1441/OBI_Energy_Tracker_Local_Cloud/issues/100)). Unter dem Hex-Editor zeigt eine **Speicherkarte** den ganzen Chip als Defragmentierungs-artige
 Übersicht — welche OTA-Bank aktiv ist, wie viel davon Firmware bzw. History-Daten sind, und wie voll jeder
 History-Bereich gerade ist (siehe [Energie-Historie & Speicher](#energie-historie--speicher) unten).
 Gerät.
@@ -684,6 +693,12 @@ Vorzeichenerweiterung bei negativer Leistung, die manche DWSB20-2TH-Einheiten be
   **Stock-OBI-C3-Gateway** (Env `obi_gateway_c3`) stattdessen den freien Speicher der jeweils nicht gebooteten
   OTA-App-Partition — bis zu **~1,6 MB**, ein Vielfaches der alten Kapazität, ganz ohne zusätzliche Hardware.
   Das genaue Partitions-Layout mit Byte-Offsets steht in [`PROJECT_NOTES.md`](PROJECT_NOTES.md).
+  Direkt nach der Umstellung liegt in diesem Slot noch das Stock-Image, das das Cloud-OTA ersetzt hat; ein
+  Dateisystem darüber zu formatieren würde die einzige Kopie davon zerstören — auf einem Gerät mit per eFuse
+  gesperrtem Bootloader. Die Firmware schaut deshalb nach, was physisch im Slot liegt, lässt ein
+  Firmware-Image, das sie nicht selbst geschrieben hat, unangetastet und bleibt bei der 128-KB-Partition,
+  bis entweder `/debug` → **Slot für die History freigeben** gedrückt wird oder das erste Self-Update dieses
+  Image ohnehin überschreibt ([#100](https://github.com/atc1441/OBI_Energy_Tracker_Local_Cloud/issues/100)). Was bis dahin geloggt wurde, zieht beim Umschalten mit.
 - Jederzeit als **CSV** exportierbar — Rohdaten oder Tageswerte — über die ⬇-Buttons auf `/history`.
 - Ein Reader, der außer Reichweite geraten ist (oder entfernt wurde), bleibt trotzdem erreich- und löschbar:
   die Reader-Auswahl listet auch „offline"-IDs, die nur noch in der gespeicherten Historie existieren, nicht

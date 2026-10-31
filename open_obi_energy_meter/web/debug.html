@@ -48,6 +48,8 @@ table.hex td{padding:0 2px;text-align:center}td.off{color:var(--accent);padding:
 .tailused{background:#ff6fae}
 .sysnvs{background:var(--blue)}.sysota{background:#3ddbd9}.sysphy{background:#e08a4f}.syscore{background:var(--red)}
 .empty{color:var(--dim);padding:20px;text-align:center}
+.hold{border-color:#5c2020;background:#1c1210}.hold h2{color:#ffb4b4}.hold .cap{color:#e8b9b9}
+.hrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 @media (max-width:760px){
  header,.bar{position:static}                    /* both scroll away → full height for the hex view */
  header{flex-wrap:wrap;gap:8px;padding:11px 13px}.sp{display:none}
@@ -163,7 +165,16 @@ const MT={
   legNvs:'NVS (WLAN/MQTT/Einstellungen)',legOtaData:'OTA-Data (Boot-Auswahl)',legPhy:'PHY-Init (Funk-Kalibrierung)',legCore:'Coredump (Absturz-Speicher)',legSys:'Sonstige Systempartition',
   parts:'Partitionen',backend:'Rohdaten (Messpunkte) gerade gespeichert in:',beOta:'OTA-Bereich',beUser:'userdata (128 KB)',beNone:'keins',dailyNote:'Tageswerte liegen immer in userdata.',
   label:'Label',addr:'Adresse',size:'Größe',details:'Details',idle:'(idle)',used:'belegt',
-  roleActive:'aktiv',roleInactive:'inaktiv',roleOther:'andere'},
+  roleActive:'aktiv',roleInactive:'inaktiv',roleOther:'andere',
+  slotTitle:'⚠ Stock-Firmware liegt noch im freien OTA-Slot',
+  slotBody:(img,addr)=>'Der Slot bei '+addr+' enthält unverändert das Original-Image ('+img+'), das die Umstellung ersetzt hat — '+
+   'auf diesem Gerät sehr wahrscheinlich die einzige Kopie, denn der Bootloader ist per eFuse gesperrt. Die Firmware lässt '+
+   'ihn deshalb in Ruhe und legt die Rohdaten der History im 128-KB-Speicher ab. Zieh oben erst ein Backup mit '+
+   '„Dump full flash“ — danach kannst du den Slot hier für die vollen ~1,6 MB History freigeben. Ein Firmware-Update '+
+   'überschreibt das Image ebenso, also vorher sichern.',
+  slotBtn:'Slot für die History freigeben',
+  slotConfirm:'Das Stock-Image wird dabei endgültig überschrieben. Hast du das Flash-Backup heruntergeladen?',
+  slotDone:n=>'freigegeben ✓ ('+n+' Datei(en) übernommen)',slotFail:'Freigabe fehlgeschlagen',slotUnnamed:'ohne Namen'},
  en:{loading:'loading…',loadErr:'Failed to load.',dash:'← dashboard',fw:'firmware ⬆',
   title:n=>'Flash map ('+n+' flash total)',
   cap:n=>'Each block ≈ '+n+'. Green = firmware bytes, yellow = history data, dimmed purple = the history region on the currently INACTIVE OTA bank (moves there on the next update), the remaining colors are individual system partitions (see legend) instead of one gray block.',
@@ -171,7 +182,16 @@ const MT={
   legNvs:'NVS (WiFi/MQTT/settings)',legOtaData:'OTA data (boot selector)',legPhy:'PHY init (radio calibration)',legCore:'Coredump (crash storage)',legSys:'Other system partition',
   parts:'Partitions',backend:'Raw samples currently stored in:',beOta:'OTA region',beUser:'userdata (128 KB)',beNone:'none',dailyNote:'Daily summaries always live in userdata.',
   label:'Label',addr:'Address',size:'Size',details:'Details',idle:'(idle)',used:'used',
-  roleActive:'active',roleInactive:'inactive',roleOther:'other'}
+  roleActive:'active',roleInactive:'inactive',roleOther:'other',
+  slotTitle:'⚠ Stock firmware is still sitting in the spare OTA slot',
+  slotBody:(img,addr)=>'The slot at '+addr+' still holds the original image ('+img+') that the conversion replaced — '+
+   'almost certainly the only copy on this device, since the bootloader is fused shut. The firmware therefore leaves '+
+   'it alone and keeps the raw history samples in the 128 KB store. Grab a backup with “Dump full flash” above first — '+
+   'then you can release the slot here for the full ~1.6 MB of history. A firmware update overwrites that image just '+
+   'the same, so back it up before either.',
+  slotBtn:'Release the slot for history',
+  slotConfirm:'This overwrites the stock image for good. Have you downloaded the flash backup?',
+  slotDone:n=>'released ✓ ('+n+' file(s) moved)',slotFail:'Release failed',slotUnnamed:'unnamed'}
 };
 let mlang=localStorage.getItem('lang')||'de';
 function setL(x){localStorage.setItem('lang',x);location.reload();}
@@ -237,7 +257,15 @@ async function loadMap(){
   grid+=`<div class="blk ${k.c}" data-off=${off} data-cat=${k.c} data-lbl="${k.p?k.p.label:''}"></div>`;}
  let rows=parts.map(mpartLine).join('');
  const be=d.hist_backend==='ota'?t.beOta:d.hist_backend==='userdata'?t.beUser:t.beNone;
- main.innerHTML=`
+ // Only sent while the firmware is protecting the stock image in the spare slot (issue #100) -- offer the
+ // one way out of that state right where the full-flash dump that makes it safe lives.
+ const hs=d.hist_slot;
+ const hold=hs&&hs.held?`
+ <div class="card hold"><h2>${t.slotTitle}</h2>
+  <p class=cap>${t.slotBody(hs.image||t.slotUnnamed,mhex(hs.addr))}</p>
+  <div class=hrow><button class=d onclick=releaseSlot()>${t.slotBtn}</button><span class=cap id=slotmsg></span></div>
+ </div>`:'';
+ main.innerHTML=hold+`
  <div class=card><h2>${t.title(mkb(d.chip_size))}</h2>
  <p class=cap>${t.cap(mkb(step))}</p>
  <div class=mapinfo id=mapinfo>&nbsp;</div>
@@ -262,6 +290,14 @@ async function loadMap(){
   $('mapinfo').innerHTML=`<b>${mhex(off)}</b> · ${lbl||(mlang==='de'?'nicht zugewiesen':'unallocated')} · ${mcatLabel(cat,t)}`;
  });
 }
+async function releaseSlot(){
+ const t=MT[mlang];
+ if(!confirm(t.slotConfirm))return;
+ const m=$('slotmsg');m.textContent='…';
+ try{const r=await(await fetch('/api/histslot/release',{method:'POST'})).json();
+  if(!r.ok)throw Error();
+  m.textContent=t.slotDone(r.moved);setTimeout(loadMap,1800);   // let the result be read, then redraw
+ }catch(e){m.textContent=t.slotFail;}}
 loadInfo().then(read);
 loadMap();
 </script></body></html>

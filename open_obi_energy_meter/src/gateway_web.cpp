@@ -1416,7 +1416,15 @@ static void handleFlashMapJson() {
   size_t dailyTotal = 0, dailyUsed = 0; dailySpace(dailyTotal, dailyUsed);
 
   String j = "{\"chip_size\":" + String(flash_dbg_size()) +
-             ",\"hist_backend\":" + jstr(g_fsOk ? (g_usingOtaHist ? "ota" : "userdata") : "none") + ",\"parts\":[";
+             ",\"hist_backend\":" + jstr(g_fsOk ? (g_usingOtaHist ? "ota" : "userdata") : "none");
+#ifdef OBI_OTA_HIST_SUPPORTED
+  // Only present while the spare slot is being kept intact for the stock image still in it (see
+  // ota_hist.h) -- the page turns this into the "back it up before you release it" notice above the map.
+  if (otaHist_slotHeld())
+    j += ",\"hist_slot\":{\"held\":true,\"addr\":" + String(inactive ? inactive->address : 0) +
+         ",\"image\":" + jstr(otaHist_slotImage()) + "}";
+#endif
+  j += ",\"parts\":[";
   esp_partition_iterator_t it = esp_partition_find(ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, nullptr);
   bool first = true;
   for (; it; it = esp_partition_next(it)) {
@@ -1632,6 +1640,58 @@ static void dailySpace(size_t &total, size_t &used) {
   total = used = 0;
   if (!g_fsOk) return;
   total = LittleFS.totalBytes(); used = LittleFS.usedBytes();
+}
+
+// ---- /api/histslot/release — hand the spare OTA slot to the history store (GitHub issue #100) ---------
+// While that slot still holds the stock image the conversion replaced, otaHist_mount() refuses to format
+// it and raw samples go to the 128 KB userdata store instead (see ota_hist.h). This is the way out of that
+// state: it formats the image away for good, so it is a deliberate POST from the Debug page -- where the
+// full-flash dump that preserves the image is one button to the left. Whatever samples were collected in
+// the fallback store move across, so the history does not visibly restart at the switch.
+#ifdef OBI_OTA_HIST_SUPPORTED   // the move below only exists where there is a second store to move to
+static bool copyFileStream(const String &src, const String &dst) {
+  FILE *sf = fopen(src.c_str(), "rb");
+  if (!sf) return false;
+  FILE *df = fopen(dst.c_str(), "wb");
+  if (!df) { fclose(sf); return false; }
+  uint8_t buf[512]; size_t n; bool ok = true;      // streamed in small chunks: a sample file can be tens of
+  while ((n = fread(buf, 1, sizeof buf, sf)) > 0)  // KB and the C3's largest free block is not much more
+    if (fwrite(buf, 1, n, df) != n) { ok = false; break; }
+  fclose(sf); fclose(df);
+  if (!ok) remove(dst.c_str());
+  return ok;
+}
+static int moveRawSamples(const String &from, const String &to) {
+  if (from == to) return 0;
+  String names[HIST_SLOTS]; int n = 0;
+  DIR *dir = opendir(from.c_str());                 // collect first, then copy: never edit a directory
+  if (dir) {                                        // while its own iterator is still open
+    struct dirent *de;
+    while ((de = readdir(dir)) != nullptr && n < HIST_SLOTS) {
+      String name = de->d_name;
+      if (name.length() == 7 && name[0] == 's') names[n++] = name;
+    }
+    closedir(dir);
+  }
+  int moved = 0;
+  for (int i = 0; i < n; i++) {
+    String src = from + "/" + names[i];
+    if (copyFileStream(src, to + "/" + names[i])) { remove(src.c_str()); moved++; }
+  }
+  return moved;
+}
+#endif
+static void handleHistSlotRelease() {
+#ifdef OBI_OTA_HIST_SUPPORTED
+  if (!otaHist_slotHeld()) { server.send(409, "application/json", "{\"ok\":false,\"error\":\"slot not held\"}"); return; }
+  if (!otaHist_releaseSlot()) { server.send(500, "application/json", "{\"ok\":false,\"error\":\"mount failed\"}"); return; }
+  int moved = moveRawSamples(g_rawBase, OTA_HIST_BASE);
+  g_rawBase = OTA_HIST_BASE; g_usingOtaHist = true;
+  Serial.printf("[web] history: spare OTA slot released -- raw samples on the OTA store now (%d file(s) moved)\n", moved);
+  server.send(200, "application/json", String("{\"ok\":true,\"moved\":") + moved + "}");
+#else
+  server.send(404, "application/json", "{\"ok\":false,\"error\":\"not supported on this board\"}");
+#endif
 }
 
 static String fpS(const String &id) { return g_rawBase + "/s" + id; }
@@ -2613,6 +2673,7 @@ static void startServices() {
   server.on("/api/selfupdate", HTTP_POST, guard(handleSelfOtaDone), handleSelfOtaUpload);
   server.on("/debug", HTTP_GET, guard(handleDebugPage));                     // flash hex editor + flash map
   server.on("/api/flash/map",   HTTP_GET,  guard(handleFlashMapJson));
+  server.on("/api/histslot/release", HTTP_POST, guard(handleHistSlotRelease));  // issue #100, see ota_hist.h
   server.on("/api/flash/info",  HTTP_GET,  guard(handleFlashInfo));
   server.on("/api/flash/read",  HTTP_GET,  guard(handleFlashRead));
   server.on("/api/flash/patch", HTTP_POST, guard(handleFlashPatch));
