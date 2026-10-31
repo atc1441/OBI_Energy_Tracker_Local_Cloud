@@ -1,6 +1,7 @@
 // reader.h — shared reader state (LoRa side fills it, web/MQTT side reads it)
 #pragma once
 #include <Arduino.h>
+#include "energy_filter.h"   // obi_na() + the counter plausibility rules shared with the host tests
 
 struct Reader {
   bool     used     = false;
@@ -144,7 +145,5 @@ uint32_t gw_ota_size();
 uint32_t gw_ota_progress();   // bytes served so far
 void     gw_ota_target(uint8_t out[3]);
 
-// helper: is an energy field "no reading"? 0x7FFFFFFF is our own n/a sentinel; 0xCCCCCCCD is a garbage
-// value some meters return for import/export (looks like an uninitialized-register fill pattern) -- both
-// mean "void", never a real Wh/W reading.
-static inline bool obi_na(uint32_t v) { return v == 0x7FFFFFFF || v == 0xCCCCCCCD; }
+// obi_na() -- "is this energy field a no-reading sentinel?" -- and the counter plausibility rules are in
+// include/energy_filter.h, included above, so the host tests can exercise them without Arduino.

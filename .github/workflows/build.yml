@@ -87,6 +87,7 @@ jobs:
         variant:
           - obi_gateway_c3
           - vision_master_e290
+          - heltec_wifi_lora32_v3
           - ttgo_tbeam_sx1262
           - generic_esp32s3
           - generic_esp32

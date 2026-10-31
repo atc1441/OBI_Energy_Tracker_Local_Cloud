@@ -109,7 +109,7 @@ bind + ECDH). Everything was reverse-engineered from firmware `1.2.1`; details i
 Any ESP32 (classic or S3) plus a **Semtech SX1262** module. You need seven GPIOs plus the TCXO voltage.
 Presets live in [`include/board_config.h`](include/board_config.h); pick one with a build flag.
 
-| Signal | Heltec Vision Master E290 / V3 (`OBI_BOARD_HELTEC_S3`) | LILYGO T-Beam / T3 (`OBI_BOARD_TTGO_TBEAM_SX1262`) |
+| Signal | Heltec Vision Master E290 / T190 (`OBI_BOARD_HELTEC_S3`)<br>Heltec WiFi LoRa 32 V3 / Wireless Stick V3 (`OBI_BOARD_HELTEC_LORA32_V3`) | LILYGO T-Beam / T3 (`OBI_BOARD_TTGO_TBEAM_SX1262`) |
 |---|---|---|
 | NSS  | 8  | 18 |
 | SCK  | 9  | 5  |
@@ -120,6 +120,11 @@ Presets live in [`include/board_config.h`](include/board_config.h); pick one wit
 | DIO1 | 14 | 33 |
 | TCXO | DIO3 @ 1.8 V | DIO3 @ 1.8 V |
 | RF switch | DIO2 | DIO2 |
+
+The two Heltec presets share the radio pins above and differ only around them: the Vision Master drives the
+2.9″ e-paper and has its factory-reset button on GPIO21, while on the WiFi LoRa 32 V3 that GPIO is the OLED's
+reset line and the button is PRG on GPIO0. Building the V3 with the Vision Master preset made it wipe its
+settings and reboot every ~11 s ([#98](https://github.com/atc1441/OBI_Energy_Tracker_Local_Cloud/issues/98)).
 
 For any other wiring, edit the `OBI_BOARD_CUSTOM` block (set `LORA_TCXO_V 0.0f` if your module has a plain
 crystal, not a TCXO).
@@ -137,7 +142,8 @@ crystal, not a TCXO).
 pip install platformio
 
 # 2. Build + flash for your board (from this folder)
-pio run -e vision_master_e290 -t upload      # Heltec Vision Master E290 (ESP32-S3 + SX1262)
+pio run -e vision_master_e290 -t upload      # Heltec Vision Master E290 / T190 (ESP32-S3 + SX1262)
+pio run -e heltec_wifi_lora32_v3 -t upload   # Heltec WiFi LoRa 32 V3 / Wireless Stick V3
 pio run -e ttgo_tbeam_sx1262  -t upload      # LILYGO T-Beam / T3
 pio run -e generic_esp32s3    -t upload      # your own wiring (edit board_config.h → OBI_BOARD_CUSTOM)
 pio run -e generic_esp32      -t upload      # classic ESP32 + your own wiring
@@ -539,7 +545,7 @@ Bind + ECDH). Alles wurde aus Firmware `1.2.1` reversed; Details in
 Beliebiger ESP32 (klassisch oder S3) plus ein **Semtech SX1262**-Modul. Du brauchst sieben GPIOs plus die
 TCXO-Spannung. Presets liegen in [`include/board_config.h`](include/board_config.h); per Build-Flag wählen.
 
-| Signal | Heltec Vision Master E290 / V3 (`OBI_BOARD_HELTEC_S3`) | LILYGO T-Beam / T3 (`OBI_BOARD_TTGO_TBEAM_SX1262`) |
+| Signal | Heltec Vision Master E290 / T190 (`OBI_BOARD_HELTEC_S3`)<br>Heltec WiFi LoRa 32 V3 / Wireless Stick V3 (`OBI_BOARD_HELTEC_LORA32_V3`) | LILYGO T-Beam / T3 (`OBI_BOARD_TTGO_TBEAM_SX1262`) |
 |---|---|---|
 | NSS  | 8  | 18 |
 | SCK  | 9  | 5  |
@@ -550,6 +556,11 @@ TCXO-Spannung. Presets liegen in [`include/board_config.h`](include/board_config
 | DIO1 | 14 | 33 |
 | TCXO | DIO3 @ 1,8 V | DIO3 @ 1,8 V |
 | RF-Schalter | DIO2 | DIO2 |
+
+Die beiden Heltec-Presets teilen die obigen Funk-Pins und unterscheiden sich nur drumherum: der Vision
+Master treibt das 2,9″-E-Ink und hat seinen Werksreset-Taster auf GPIO21, beim WiFi LoRa 32 V3 ist dieser
+GPIO die Reset-Leitung des OLED und der Taster ist PRG auf GPIO0. Den V3 mit dem Vision-Master-Preset zu
+bauen ließ ihn alle ~11 s seine Einstellungen löschen und neu starten ([#98](https://github.com/atc1441/OBI_Energy_Tracker_Local_Cloud/issues/98)).
 
 Für andere Verdrahtung den `OBI_BOARD_CUSTOM`-Block anpassen (`LORA_TCXO_V 0.0f`, falls dein Modul einen
 Quarz statt eines TCXO hat).
@@ -567,7 +578,8 @@ Quarz statt eines TCXO hat).
 pip install platformio
 
 # 2. Für dein Board bauen + flashen (aus diesem Ordner)
-pio run -e vision_master_e290 -t upload      # Heltec Vision Master E290 (ESP32-S3 + SX1262)
+pio run -e vision_master_e290 -t upload      # Heltec Vision Master E290 / T190 (ESP32-S3 + SX1262)
+pio run -e heltec_wifi_lora32_v3 -t upload   # Heltec WiFi LoRa 32 V3 / Wireless Stick V3
 pio run -e ttgo_tbeam_sx1262  -t upload      # LILYGO T-Beam / T3
 pio run -e generic_esp32s3    -t upload      # eigene Verdrahtung (board_config.h → OBI_BOARD_CUSTOM)
 pio run -e generic_esp32      -t upload      # klassischer ESP32 + eigene Verdrahtung

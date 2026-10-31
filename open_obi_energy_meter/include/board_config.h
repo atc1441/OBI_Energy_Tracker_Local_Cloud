@@ -5,7 +5,12 @@
 // RST/BUSY/DIO1) plus the TCXO voltage (0 = module has a plain crystal, not a TCXO).
 #pragma once
 
-#if defined(OBI_BOARD_HELTEC_S3)          // Heltec Vision Master E290 / T190, WiFi LoRa 32 V3, Wireless Stick V3
+// NOTE: this block is the Vision Master E290 / T190 ONLY. The WiFi LoRa 32 V3 and Wireless Stick V3
+// share the radio wiring but nothing else: they carry an OLED instead of e-paper, and GPIO21 is that
+// display's reset line rather than a button. Pointing PIN_BUTTON at GPIO21 there makes the firmware see
+// a button held down forever, so it factory-resets and reboots about every 11 s with nothing on the
+// console to explain it (GitHub issue #98). Those boards get their own block below.
+#if defined(OBI_BOARD_HELTEC_S3)          // Heltec Vision Master E290 / T190
   #define PIN_LORA_NSS   8
   #define PIN_LORA_SCK   9
   #define PIN_LORA_MOSI  10
@@ -31,6 +36,30 @@
   // (wipe WiFi/MQTT + reader list) and reboot into the setup portal. Active-low (INPUT_PULLUP).
   #define PIN_BUTTON        21
   #define BUTTON_ACTIVE_LOW 1
+
+#elif defined(OBI_BOARD_HELTEC_LORA32_V3)  // Heltec WiFi LoRa 32 V3 / Wireless Stick V3 (ESP32-S3)
+  // Identical SX1262 wiring to the Vision Master above -- it is the rest of the board that differs.
+  #define PIN_LORA_NSS   8
+  #define PIN_LORA_SCK   9
+  #define PIN_LORA_MOSI  10
+  #define PIN_LORA_MISO  11
+  #define PIN_LORA_RST   12
+  #define PIN_LORA_BUSY  13
+  #define PIN_LORA_DIO1  14
+  #define LORA_TCXO_V    1.8f     // SX1262 TCXO on DIO3 @ 1.8 V
+  #define LORA_RXEN_PIN  RADIOLIB_NC
+  #define LORA_DIO2_RFSW true     // RF switch is driven from DIO2
+  // No display here: the on-board screen is an SSD1306 OLED (SDA 17 / SCL 18, reset on GPIO21) and this
+  // firmware's only display support is the e-paper above. GPIO21 is therefore taken, not free.
+  // User button: PRG on GPIO0, the only button on the board (external pull-up, so pressed reads LOW).
+  // GPIO0 is also the ESP32-S3 boot strapping pin. That costs nothing at runtime, but it does mean
+  // holding it ACROSS a reset drops the chip into the serial bootloader instead of reaching the handler
+  // in main.cpp -- hold it while the firmware is already running. Comment both lines out for no button.
+  #define PIN_BUTTON        0
+  #define BUTTON_ACTIVE_LOW 1
+  // The on-board LED is on GPIO35, which Heltec's own wiki lists inside the GPIO33-38 range reserved for
+  // the flash/SubSPI interface. Sources disagree on whether driving it is safe on every revision, so the
+  // optional status LED is left undefined rather than guessed at.
 
 #elif defined(OBI_BOARD_TTGO_TBEAM_SX1262) // LILYGO T-Beam / T3 with SX1262
   #define PIN_LORA_NSS   18
@@ -92,5 +121,5 @@
   #define LORA_DIO2_RFSW true
 
 #else
-  #error "No board selected. Add -D OBI_BOARD_HELTEC_S3 (or _TTGO_TBEAM_SX1262 / _OBI_C3 / _XIAO_ESP32S3 / _CUSTOM) to build_flags in platformio.ini"
+  #error "No board selected. Add -D OBI_BOARD_HELTEC_S3 (or _HELTEC_LORA32_V3 / _TTGO_TBEAM_SX1262 / _OBI_C3 / _XIAO_ESP32S3 / _CUSTOM) to build_flags in platformio.ini"
 #endif

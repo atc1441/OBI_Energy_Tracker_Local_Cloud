@@ -837,30 +837,10 @@ static bool legacyValid(const uint8_t *pl, size_t n) {
   return pl[1] < 50 && mv >= 1500 && mv <= 4500;
 }
 
-// ---- energy VALUE sanity filter (see GitHub issue #51: multi-billion-W spikes in Import/Export/Power) ----
-// Neither validity check above looks at the actual import/export/power bytes: energyValid() only proves the
-// 1.2.x layout's own CRC16 matches (~1/65536 false-accept, good), but legacyValid() only checks hardver+
-// battery (~11% false-accept on random bytes) and never touches the energy fields at all. A frame can pass
-// either check while still carrying garbage import/export/power -- confirmed NOT a radio-level bit error
-// (the SX1262's own hardware CRC, radio.setCRC(2), already rejects a corrupted-in-the-air packet before it
-// ever reaches here -- see handleRx()'s `if (st != RADIOLIB_ERR_NONE ...) return;`). The two remaining
-// candidates are a reader that computed a bad value before encrypting it (the same bug class already fixed
-// for DWSB20.2TH, see reader_firmware_mod/README.md, just on a different/older reader generation) or a
-// hardware-CRC-clean frame TEA-decrypted with a momentarily stale key (e.g. a reader-side re-bind racing the
-// gateway's own key update) -- either way the fields downstream are untrustworthy and neither existing check
-// catches it. No real residential/small-commercial installation draws anywhere near this many watts
-// continuously, so bound both the reported power and the implied average power from the Wh-counter deltas.
-static const uint32_t OBI_MAX_PLAUSIBLE_W = 50000;
+// The energy VALUE sanity filter (issue #51) and the stuck-at-zero rule (issue #99) live in
+// include/energy_filter.h, pulled in via reader.h: pure arithmetic, so the host tests can drive the
+// very same predicates this applies below.
 
-// True if going from oldWh (the reader's last ACCEPTED reading) to newWh over dtMs implies an average power
-// within OBI_MAX_PLAUSIBLE_W in either direction. The counters are cumulative and should only crawl, never
-// leap -- this catches a wild jump regardless of which of the two causes above produced it.
-static bool plausibleEnergyStep(uint32_t oldWh, uint32_t newWh, uint32_t dtMs) {
-  if (dtMs < 1000) dtMs = 1000;   // floor -- avoid dividing by a near-zero interval on a fast retry
-  int64_t deltaWh = (int64_t)newWh - (int64_t)oldWh;
-  int64_t avgW = deltaWh * 3600000LL / (int64_t)dtMs;
-  return avgW >= -(int64_t)OBI_MAX_PLAUSIBLE_W && avgW <= (int64_t)OBI_MAX_PLAUSIBLE_W;
-}
 // legacy 3x.x / 1.0.x layout (gateway sub_4200BCFC): softver[0] hardver[1] battery[2]
 // flags[3] (b0 ir, b1 lowpower, b2 timesync) pos[4:8]BE neg[8:12]BE power[12:16]BE. No leading crc.
 static bool printEnergyOld(const uint8_t *pl, size_t n) {
@@ -1106,23 +1086,33 @@ static void handleRx() {
           if (!powerSane) Serial.printf("  [energy] %02X%02X%02X: implausible power=%ld, showing n/a\n",
                                         r->handle[0], r->handle[1], r->handle[2], (long)nPowerS);
           // Import/export: cumulative counters, should only crawl. Reject a single wild jump outright (see
-          // plausibleEnergyStep() above) -- keeps showing the last known-good reading instead of a spike.
+          // plausibleEnergyStep(), energy_filter.h) -- keeps showing the last known-good reading, not a spike.
           // Only checked once a real baseline exists (haveData) and both old/new counters are real readings,
           // not the n/a sentinel -- a first-ever reading, or the first one after an n/a gap, has nothing
           // sane to compare against.
-          bool plausible = true;
-          if (r->haveData && r->lastEnergyMs && !obi_na(r->import_) && !obi_na(nImport) &&
+          // A lone 0 from a reader whose counters were already non-zero is no reading at all (issue
+          // #99) and has to be caught before the step filter, because it holds however much time has
+          // passed since the last frame -- and, unlike a wild jump, it must never become a new baseline.
+          bool zeroDrop = r->haveData && (zeroedOutCounter(r->import_, nImport) ||
+                                          zeroedOutCounter(r->export_, nExport));
+          bool plausible = !zeroDrop;
+          if (!zeroDrop && r->haveData && r->lastEnergyMs && !obi_na(r->import_) && !obi_na(nImport) &&
               !obi_na(r->export_) && !obi_na(nExport)) {
             uint32_t dtMs = nowMs - r->lastEnergyMs;
             plausible = plausibleEnergyStep(r->import_, nImport, dtMs) &&
                         plausibleEnergyStep(r->export_, nExport, dtMs);
           }
+          if (zeroDrop)
+            Serial.printf("  [energy] %02X%02X%02X: counter fell to zero -- imp %lu->%lu exp %lu->%lu -- rejecting, keeping last known values\n",
+                          r->handle[0], r->handle[1], r->handle[2],
+                          (unsigned long)r->import_, (unsigned long)nImport,
+                          (unsigned long)r->export_, (unsigned long)nExport);
           // A single implausible jump is rejected above, but a reader moved to a different meter (or a
           // meter that got replaced) produces a LEGITIMATE, permanent jump -- distinguished from a one-off
           // corrupted/mis-keyed frame by seeing the SAME new value repeat CONFIRM_STREAK times in a row,
           // each one plausible relative to the PREVIOUS candidate (not the old, now-obsolete baseline).
           bool newBaseline = false;
-          if (!plausible && !obi_na(nImport) && !obi_na(nExport)) {
+          if (!plausible && !zeroDrop && !obi_na(nImport) && !obi_na(nExport)) {
             static const uint8_t CONFIRM_STREAK = 3;
             bool matchesPending = r->havePendingJump &&
                 plausibleEnergyStep(r->pendingImport, nImport, nowMs - r->pendingMs) &&
@@ -1258,6 +1248,23 @@ static void buttonSetup() {
 static void buttonLoop() {
   static uint32_t pressStart = 0;
   static bool triggered = false;
+  // A PIN_BUTTON that actually belongs to something else reads "pressed" forever, and the hold below then
+  // wipes the configuration and reboots on a loop every few seconds -- silently, which is what made GitHub
+  // issue #98 so hard to place (GPIO21 is the OLED reset on the Heltec WiFi LoRa 32 V3, not a button). So
+  // require the pin to have been seen RELEASED at least once before a hold can arm anything, and say so on
+  // the console. The documented gesture, holding ~5 s on a running gateway, is unaffected; only keeping the
+  // button held from power-on no longer counts, which was never the way in.
+  static bool everReleased = false;
+  static bool warned = false;
+  if (!everReleased) {
+    if (!buttonPressed()) everReleased = true;
+    else if (!warned && millis() > 10000) {
+      warned = true;
+      Serial.printf("button: GPIO%d has read pressed ever since boot -- ignoring it until it goes idle. "
+                    "Wrong PIN_BUTTON for this board?\n", PIN_BUTTON);
+    }
+    return;
+  }
   if (buttonPressed()) {
     uint32_t now = millis();
     if (!pressStart) { pressStart = now; triggered = false; }
