@@ -42,6 +42,9 @@ button:disabled{opacity:.5;cursor:default}
   <div class=stat id=apstat>…</div>
   <label id=lappass>Hotspot-Passwort (leer = offen)</label><input id=appass type=password autocomplete=new-password placeholder=•••••••• minlength=8>
   <div class=row><button onclick=saveApPass()><span id=bapsave>Speichern</span></button><span class=msg id=apmsg></span></div>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
+   <input type=checkbox id=aplim style="width:auto;margin:0"><span id=laplim>Hotspot nur 10 min nach Start oder Tastendruck</span></label>
+  <div class=row><button type=button onclick=saveApLimit()><span id=baplsave>Speichern</span></button><span class=msg id=aplmsg></span></div>
  </div>
 
  <div class=card>
@@ -269,6 +272,7 @@ $('lnet').textContent=t('Netzwerk (Scan)','Network (scan)');$('bscan').textConte
 $('lman').textContent=t('…oder SSID eingeben','…or type SSID');$('lwpass').textContent=t('Passwort','Password');
 $('bconn').textContent=t('Verbinden & speichern','Connect & save');$('bportal').textContent=t('Setup-Portal (AP)','Setup portal (AP)');
 $('lappass').textContent=t('Hotspot-Passwort (leer = offen)','Hotspot password (blank = open)');$('bapsave').textContent=t('Speichern','Save');
+$('laplim').textContent=t('Hotspot nur 10 min nach Start oder Tastendruck','Hotspot only 10 min after boot or button tap');$('baplsave').textContent=t('Speichern','Save');
 $('hstip').textContent=t('Statische IP','Static IP');$('lstipon').textContent=t('Statische IP statt DHCP verwenden','Use a static IP instead of DHCP');
 $('lstipip').textContent=t('IP-Adresse','IP address');$('lstipsn').textContent=t('Subnetzmaske','Subnet mask');$('lstipgw').textContent=t('Gateway','Gateway');
 $('lstipd1').textContent=t('DNS 1','DNS 1');$('lstipd2').textContent=t('DNS 2 (optional)','DNS 2 (optional)');$('bstip').textContent=t('Speichern','Save');
@@ -343,7 +347,7 @@ async function load(){try{
   $('mqstat').innerHTML=!q.enabled?`<span class="dot idle"></span>${t('deaktiviert','disabled')}`:q.connected?`<span class="dot on"></span>${t('verbunden','connected')} · ${q.host}${tls}`:`<span class="dot off"></span>${t('getrennt','disconnected')} — ${q.state}${tls}`;
   if(!cfg){cfg=true;$('mh').value=q.host||'';$('mp').value=q.port||1883;$('mu').value=q.user||'';$('mt').value=q.topic||'';
    $('mtls').checked=!!q.tls;if(q.ca_set)$('mca').placeholder=t('Zertifikat gespeichert — leer lassen zum Beibehalten','certificate saved — leave blank to keep');
-   $('au').value=(s.auth&&s.auth.user)||'';$('night').checked=!!s.night_mode;$('numfmt').value=s.num_fmt||0;
+   $('au').value=(s.auth&&s.auth.user)||'';$('night').checked=!!s.night_mode;$('aplim').checked=!!(s.ap&&s.ap.limit);$('numfmt').value=s.num_fmt||0;
    $('gwname').value=s.gw_custom_name||'';
    const si=s.static_ip||{};$('stipon').checked=!!si.on;
    // Off (no custom values saved yet): prefill with whatever DHCP actually handed out right now, so turning
@@ -552,6 +556,7 @@ async function saveApPass(){const p=$('appass').value;
  $('apmsg').textContent='…';const r=await(await fetch('/api/appass',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'pass='+encodeURIComponent(p)})).json();
  if(!r.ok){$('apmsg').textContent=t('mind. 8 Zeichen (oder leer lassen)','8+ chars (or leave blank)');return;}
  $('appass').value='';$('apmsg').textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>$('apmsg').textContent='',3000);load();}
+async function saveApLimit(){const m=$('aplmsg');m.textContent='…';try{const r=await(await fetch('/api/aplimit',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'enabled='+($('aplim').checked?'1':'0')})).json();if(!r.ok)throw Error();m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);}catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
 function validIp4(v){return /^(\d{1,3}\.){3}\d{1,3}$/.test(v)&&v.split('.').every(o=>+o>=0&&+o<=255);}
 async function saveStaticIp(){const on=$('stipon').checked;
  if(on){

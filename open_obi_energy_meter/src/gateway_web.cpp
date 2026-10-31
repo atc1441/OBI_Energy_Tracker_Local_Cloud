@@ -2,6 +2,7 @@
 // Runs on its own FreeRTOS task pinned to core 0 so the HTTP/MQTT work never stutters the
 // LoRa gateway (which runs on the Arduino loop, core 1).
 #include "gateway_web.h"
+#include "setup_ap.h"
 #include "bthome_ble.h"
 #include "web_gzip.h"
 #include "web_assets.h"
@@ -64,7 +65,10 @@ static WiFiManagerParameter *pHost, *pPort, *pUser, *pPass, *pTopic;
 static bool     g_serverUp = false;
 static bool     g_wifiOk   = false;
 static volatile bool g_portalReq = false;   // set by the /api/wifi button -> webTask opens the WM portal
-static bool          g_apActive  = false;   // our own setup AP is up (unconfigured / WiFi lost)
+static bool          g_apActive  = false;   // our own setup AP is up (see setup_ap.h for when)
+static volatile bool g_apReq     = false;   // case-button tap -> webTask reopens the setup-AP window
+static SetupApWindow g_apWindow;
+static bool          g_apLimit   = false;   // opt-in: setup AP only inside g_apWindow (NVS "obigw"/"aplim")
 static volatile bool g_mqttUp    = false;   // cached mqtt.connected() — read by the e-paper task (no cross-task PubSubClient)
 
 // Per-device setup-AP name: "OpenOBI-XXXXXX" (last 3 MAC bytes) so two gateways in setup mode don't clash.
@@ -389,7 +393,8 @@ static String statusJson() {
   j += ",\"wifi\":" + String(g_wifiOk ? "true" : "false");
   j += ",\"ip\":\"" + (g_wifiOk ? WiFi.localIP().toString() : String("-")) + "\"";
   j += ",\"wifi_rssi\":" + String(g_wifiOk ? WiFi.RSSI() : 0);
-  j += ",\"ap\":{\"ssid\":" + jstr(apSsid()) + ",\"pass_set\":" + String(g_apPass[0] ? "true" : "false") + "}";
+  j += ",\"ap\":{\"ssid\":" + jstr(apSsid()) + ",\"pass_set\":" + String(g_apPass[0] ? "true" : "false") +
+       ",\"limit\":" + String(g_apLimit ? "true" : "false") + "}";
   j += ",\"static_ip\":{\"on\":" + String(g_staticIpOn ? "true" : "false") + ",\"ip\":" + jstr(g_staticIp) +
        ",\"gw\":" + jstr(g_staticGw) + ",\"sn\":" + jstr(g_staticSn) + ",\"dns1\":" + jstr(g_staticDns1) +
        ",\"dns2\":" + jstr(g_staticDns2) +
@@ -731,6 +736,16 @@ static void handleApPassword() {
   prefs.end();
   if (g_apActive) WiFi.softAP(apSsid(), g_apPass[0] ? g_apPass : nullptr);   // re-raise with the new password now
   server.send(200, "application/json", "{\"ok\":true}");
+}
+
+// ---- /api/aplimit — opt-in: no setup AP on a later WiFi drop (see setup_ap.h) -----------------------------
+static void handleApLimit() {
+  if (server.hasArg("enabled")) {
+    g_apLimit = server.arg("enabled") == "1";
+    prefs.begin("obigw", false); prefs.putBool("aplim", g_apLimit); prefs.end();
+    Serial.printf("[settings] setup-AP limit %s\n", g_apLimit ? "on" : "off");
+  }
+  server.send(200, "application/json", String("{\"ok\":true,\"enabled\":") + (g_apLimit ? "true" : "false") + "}");
 }
 
 // ---- /api/staticip — custom DHCP / static IP for the router-facing (STA) link ----------------------------
@@ -2572,6 +2587,7 @@ static void startServices() {
   server.on("/api/mqtt", HTTP_POST, guard(handleMqttCfg));
   server.on("/api/auth", HTTP_POST, guard(handleAuthCfg));   // set web Basic Auth user/pass
   server.on("/api/appass", HTTP_POST, guard(handleApPassword));  // set the setup-hotspot AP password
+  server.on("/api/aplimit", HTTP_POST, guard(handleApLimit));    // setup AP only after boot / button tap
   server.on("/api/staticip", HTTP_POST, guard(handleStaticIp));  // custom DHCP / static IP for the STA link
   server.on("/api/tz",   HTTP_POST, guard(handleTz));       // set the timezone (history day-buckets)
   server.on("/api/night_mode", HTTP_POST, guard(handleNightMode)); // disable normal-operation LED activity
@@ -2739,6 +2755,7 @@ static void runPortal() {
   wm.setConfigPortalTimeout(0);
   if (WiFi.status() != WL_CONNECTED) { WiFi.mode(WIFI_AP_STA); WiFi.softAP(apSsid(), g_apPass[0] ? g_apPass : nullptr); g_apActive = true; }
   else g_apActive = false;                 // connected -> no setup AP needed
+  g_apWindow.start(millis());              // user asked for the portal -> fresh setup-AP window
   startServices();                         // dashboard back up (STA IP or 192.168.4.1)
   Serial.println("[web] WiFi portal closed — dashboard restored");
 }
@@ -3328,7 +3345,8 @@ static void epdRender() {
     epd.drawFastHLine(0, 20, epd.width(), GxEPD_BLACK);
     epd.setCursor(2, 25);
     if (WiFi.status() == WL_CONNECTED) epd.printf("WiFi %s", WiFi.localIP().toString().c_str());
-    else                               epd.printf("AP: %s / 192.168.4.1", apSsid());
+    else if (g_apActive)               epd.printf("AP: %s / 192.168.4.1", apSsid());
+    else                               epd.printf("WiFi offline, tap button for AP");   // only reachable with the AP limit on
     epd.setCursor(2, 37);
     epd.printf("MQTT %s   Reader %d",
                g_mqttUp ? "connected" : (g_mqttHost[0] ? "offline" : "off"), n);
@@ -3393,6 +3411,7 @@ static void webTask(void *) {
   prefs.getString("au", "").toCharArray(g_authUser, sizeof g_authUser);   // web Basic Auth user (blank = open)
   prefs.getString("ap", "").toCharArray(g_authPass, sizeof g_authPass);
   prefs.getString("appw", "").toCharArray(g_apPass, sizeof g_apPass);     // setup-hotspot AP password (blank = open)
+  g_apLimit = prefs.getBool("aplim", false);                              // setup AP only after boot / tap (default off)
   g_ghAuto = prefs.getBool("ghauto", false);                              // periodic GitHub auto-update (default off)
   prefs.getString("ghrepo", "").toCharArray(g_ghRepo, sizeof g_ghRepo);
   g_ghIntervalH = prefs.getUInt("ghivl", 24);
@@ -3458,23 +3477,27 @@ static void webTask(void *) {
 
   for (;;) {
     if (g_portalReq) { g_portalReq = false; runPortal(); }   // WiFi button pressed -> open the WM portal
+    if (g_apReq) { g_apReq = false; g_apWindow.start(millis()); Serial.println("[web] button: setup-AP window opened"); }
     bthome_service();
-    // Watch WiFi transitions (e.g. after an in-dashboard connect): drop the setup AP once connected,
-    // raise it again if WiFi is lost — so the dashboard is always reachable (STA IP or 192.168.4.1).
+    // WiFi (re)connect edge: MQTT + NTP.
     bool conn = WiFi.status() == WL_CONNECTED;
     if (conn != g_wifiOk) {
       g_wifiOk = conn;
       if (conn) {
-        if (g_apActive) { WiFi.softAPdisconnect(true); g_apActive = false; }
         applyMqttClient();
         syncNtp();  // wall clock for history day-buckets (user-set zone + NTP server)
         Serial.printf("[web] connected: http://%s/\n", WiFi.localIP().toString().c_str());
-      } else if (!g_apActive) {
-        WiFi.mode(WIFI_AP_STA); WiFi.softAP(apSsid(), g_apPass[0] ? g_apPass : nullptr); g_apActive = true;
-        Serial.printf("[web] WiFi lost — setup AP '%s' back up at 192.168.4.1\n", apSsid());
       }
     }
-    if (g_apActive && !conn) {   // still down -- keep retrying the saved network. WiFiManager turns on
+    // Setup AP while offline; with the opt-in limit only inside its window (setup_ap.h).
+    bool wantAp = !conn && (!g_apLimit || g_apWindow.allowed(millis(), wm.getWiFiIsSaved(), WiFi.softAPgetStationNum()));
+    if (wantAp != g_apActive) {
+      g_apActive = wantAp;
+      if (wantAp) { WiFi.mode(WIFI_AP_STA); WiFi.softAP(apSsid(), g_apPass[0] ? g_apPass : nullptr); }
+      else WiFi.softAPdisconnect(true);
+      Serial.printf("[web] setup AP '%s' %s\n", apSsid(), wantAp ? "up at 192.168.4.1" : "off");
+    }
+    if (!conn) {   // still down -- keep retrying the saved network. WiFiManager turns on
       static uint32_t lastRetryMs = 0;   // WiFi.setAutoReconnect(), but that alone was observed to raise
       uint32_t nowMs = millis();         // the AP once on disconnect and then never reconnect again on its
       if (nowMs - lastRetryMs > 30000UL) {   // own -- even once the router/AP it was on comes back up.
@@ -3554,6 +3577,8 @@ bool web_night_mode() { return g_nightMode; }
 // Wipe the network config so the device comes back up in the setup captive portal. Used by the
 // case-button factory reset (main.cpp) — the only user input available on a closed, non-reflashable
 // unit. Clears WiFiManager's saved SSID/PSK and our MQTT settings; the caller reboots afterwards.
+void web_open_setup_ap() { g_apReq = true; }
+
 void web_factory_reset() {
   bthome_reset();
   wm.resetSettings();                 // erase saved WiFi credentials (WiFiManager NVS)

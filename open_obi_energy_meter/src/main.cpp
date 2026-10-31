@@ -1210,7 +1210,8 @@ static void handleRx() {
 // The original OBI gateway (OBI_BOARD_OBI_C3) is a sealed enclosure with a single button and a locked
 // bootloader: once custom firmware is delivered over the cloud OTA path there is no UART/JTAG to fix a
 // wrong WiFi/MQTT config. So the button is the escape hatch: hold it >= 5 s to wipe WiFi + MQTT + the
-// stored reader UUIDs and reboot into the 'OpenOBI-<MAC>' captive portal. A short tap does nothing.
+// stored reader UUIDs and reboot into the 'OpenOBI-<MAC>' captive portal. A short tap (<1 s) reopens
+// the setup-AP window (OBI_SETUP_AP_MS) when the AP limit is on (see setup_ap.h).
 // Compiled only when the selected board defines PIN_BUTTON (see board_config.h).
 #ifdef PIN_BUTTON
 #ifndef OBI_RESET_HOLD_MS
@@ -1242,7 +1243,7 @@ static void buttonSetup() {
 #else
   pinMode(PIN_BUTTON, INPUT_PULLDOWN);
 #endif
-  Serial.printf("button: GPIO%d (hold %ds -> factory reset)\n", PIN_BUTTON, OBI_RESET_HOLD_MS / 1000);
+  Serial.printf("button: GPIO%d (tap -> setup AP, hold %ds -> factory reset)\n", PIN_BUTTON, OBI_RESET_HOLD_MS / 1000);
 }
 
 static void buttonLoop() {
@@ -1272,6 +1273,8 @@ static void buttonLoop() {
     g_btnArming = held > 1000;                         // LED shows the "about to reset" fast blink
     if (!triggered && held >= OBI_RESET_HOLD_MS) { triggered = true; doFactoryReset(); }
   } else {
+    uint32_t held = pressStart ? millis() - pressStart : 0;
+    if (held >= 50 && held < 1000) web_open_setup_ap();   // short tap -> setup AP for OBI_SETUP_AP_MS
     pressStart = 0;
     g_btnArming = false;
   }
