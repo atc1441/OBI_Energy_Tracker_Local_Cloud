@@ -63,7 +63,7 @@ static void selftest() {
     assert(!bthome::powerValue(raw, scaled));
   uint8_t packet[bthome::SERVICE_SIZE];
   memset(packet, 0xFF, sizeof packet);
-  assert(!bthome::powerPacket(100, key, mac, 0, packet, failCipher));
+  assert(!bthome::powerPacket(100, 0, 0, key, mac, 0, packet, failCipher));
   for (auto b : packet) assert(b == 0);
 
   Store store;
@@ -105,12 +105,16 @@ static void selftest() {
 
 int main(int argc, char **argv) {
   if (argc == 1) { selftest(); return 0; }
-  if (argc != 5) return 2;
+  if (argc != 5 && argc != 7) return 2;
   const uint32_t raw = static_cast<uint32_t>(strtoll(argv[1], nullptr, 10));
+  const uint32_t na = 0x7FFFFFFF;   // power-only unless import/export are given
+  const uint32_t importWh = argc == 7 ? static_cast<uint32_t>(strtoull(argv[5], nullptr, 10)) : na;
+  const uint32_t exportWh = argc == 7 ? static_cast<uint32_t>(strtoull(argv[6], nullptr, 10)) : na;
   const uint32_t counter = static_cast<uint32_t>(strtoull(argv[2], nullptr, 10));
   uint8_t key[16], mac[6], out[bthome::SERVICE_SIZE];
   if (!bthome::parseHex(argv[3], key, 16) || !bthome::parseHex(argv[4], mac, 6)) return 2;
-  if (!bthome::powerPacket(raw, key, mac, counter, out, encrypt)) return 1;
-  for (uint8_t b : out) printf("%02x", b);
+  const size_t size = bthome::powerPacket(raw, importWh, exportWh, key, mac, counter, out, encrypt);
+  if (!size) return 1;
+  for (size_t i = 0; i < size; ++i) printf("%02x", out[i]);
   puts("");
 }

@@ -95,6 +95,8 @@ void loop() {
       power = values[(now / 10000) % 3];
     }
     readers[0].power = static_cast<uint32_t>(power);
+    readers[0].import_ = 4646884 + now / 1000;   // fake meter counters (Wh)
+    readers[0].export_ = 77402;
     readers[0].lastEnergyMs = now;
     bthome_capture(readers[0]);
   }

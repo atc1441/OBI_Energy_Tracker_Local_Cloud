@@ -27,9 +27,9 @@ def native(tmp_path_factory):
     return binary
 
 
-def packet(native, watts, counter=0):
+def packet(native, watts, counter=0, energy=()):
     result = subprocess.check_output([
-        str(native), str(watts), str(counter), KEY.hex(), MAC.hex()
+        str(native), str(watts), str(counter), KEY.hex(), MAC.hex(), *map(str, energy)
     ], text=True)
     return bytes.fromhex(result.strip())
 
@@ -96,9 +96,32 @@ def service_info(data, timestamp=1000):
     )
 
 
-def power_reading(update):
+def reading(update, name):
     return next((value.native_value for key, value in update.entity_values.items()
-                 if key.key == "power"), None)
+                 if key.key == name), None)
+
+
+def power_reading(update):
+    return reading(update, "power")
+
+
+@pytest.mark.parametrize("energy", [(0, 0), (4646884, 77402), (0xFFFFFFFF, 0x7FFFFFFE)])
+def test_energy_packets(native, energy):
+    data = packet(native, -850, 7, energy)
+    assert len(data) == 26 and 3 + 2 + len(data) == 31
+    plain = decrypt(data)
+    assert plain[0] == plain[5] == 0x4D and plain[10] == 0x5C
+    assert (int.from_bytes(plain[1:5], "little"), int.from_bytes(plain[6:10], "little")) == energy
+    update = BTHomeBluetoothDeviceData(bindkey=KEY).update(service_info(data))
+    assert reading(update, "energy_1") == pytest.approx(energy[0] / 1000)
+    assert reading(update, "energy_2") == pytest.approx(energy[1] / 1000)
+    assert power_reading(update) == -850
+
+
+@pytest.mark.parametrize("energy", [(0x7FFFFFFF, 1), (1, 0x7FFFFFFF), (0xCCCCCCCD, 1)])
+def test_energy_only_as_pair(native, energy):
+    data = packet(native, 1234, 7, energy)
+    assert len(data) == 16 and decrypt(data)[0] == 0x5C
 
 
 @pytest.mark.parametrize("watts", [0, 1, -1, 1234, -850])
@@ -135,7 +158,7 @@ def runtime(tmp_path_factory):
 
 @pytest.mark.parametrize("scenario", [
     "validation", "disabled_boot", "lifecycle", "storage", "factory_reset", "key_rotation",
-    "missing_counter", "advertising_error",
+    "missing_counter", "advertising_error", "energy_guard",
 ])
 def test_runtime_behaviour(runtime, scenario):
     subprocess.run([str(runtime), scenario], check=True)
@@ -143,7 +166,7 @@ def test_runtime_behaviour(runtime, scenario):
 
 def test_runtime_advertisement(runtime):
     advertisement = bytes.fromhex(subprocess.check_output([str(runtime), "packet"], text=True))
-    assert len(advertisement) == 30
+    assert len(advertisement) == 31
     fields = {}
     offset = 0
     while offset < len(advertisement):
@@ -151,8 +174,10 @@ def test_runtime_advertisement(runtime):
         fields[advertisement[offset + 1]] = advertisement[offset + 2:offset + 1 + size]
         offset += size + 1
     assert fields[0x01] == b"\x06"
-    assert fields[0x09] == b"OBI-PWR"
+    assert 0x09 not in fields   # name moved to the scan response
     data = fields[0x16]
-    assert int.from_bytes(decrypt(data)[1:], "little", signed=True) == -85000
-    decoder = BTHomeBluetoothDeviceData(bindkey=KEY)
-    assert power_reading(decoder.update(service_info(data))) == -850
+    assert int.from_bytes(decrypt(data)[11:], "little", signed=True) == -85000
+    update = BTHomeBluetoothDeviceData(bindkey=KEY).update(service_info(data))
+    assert power_reading(update) == -850
+    assert reading(update, "energy_1") == pytest.approx(4646.884)
+    assert reading(update, "energy_2") == pytest.approx(77.402)

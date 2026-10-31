@@ -59,9 +59,11 @@ static void capture(int32_t power, unsigned index = 0) {
 
 static uint32_t sequence() {
   const auto &p = testAdvertising.payload;
-  assert(p.size() == 30 && p[12] == 17 && p[13] == 0x16);
-  assert(p[14] == 0xD2 && p[15] == 0xFC && p[16] == 0x41);
-  return p[22] | uint32_t(p[23]) << 8 | uint32_t(p[24]) << 16 | uint32_t(p[25]) << 24;
+  const size_t ad = p.size() == 31 ? 27 : 17;   // with or without import/export
+  assert(p.size() == 4 + ad && p[3] == ad && p[4] == 0x16);
+  assert(p[5] == 0xD2 && p[6] == 0xFC && p[7] == 0x41);
+  const size_t c = 3 + ad - 7;
+  return p[c] | uint32_t(p[c + 1]) << 8 | uint32_t(p[c + 2]) << 16 | uint32_t(p[c + 3]) << 24;
 }
 
 int main(int argc, char **argv) {
@@ -69,6 +71,7 @@ int main(int argc, char **argv) {
   Reader &r = readers[0];
   r.used = r.assigned = r.haveData = true;
   r.flags = 1; r.handle[0] = 1; r.handle[1] = 2; r.handle[2] = 3;
+  r.import_ = 4646884; r.export_ = 77402;
   readers[1] = r; readers[1].handle[2] = 4;
 
   const bool bootsEnabled = strcmp(argv[1], "validation") != 0 &&
@@ -123,12 +126,32 @@ int main(int argc, char **argv) {
   capture(-850);
   assert(testAdvertising.isAdvertising());
   assert(testBleInitCalls == 1);
-  assert(!testAdvertising.scanResponse && testAdvertising.mode == BLE_GAP_CONN_MODE_NON);
+  assert(testAdvertising.scanResponse && testAdvertising.mode == BLE_GAP_CONN_MODE_NON);
+  assert(testAdvertising.scanPayload == std::vector<uint8_t>({8, 9, 'O', 'B', 'I', '-', 'P', 'W', 'R'}));
   assert(testAdvertising.minInterval == 160 && testAdvertising.maxInterval == 240);
   assert(testAdvertising.duration == 2000);
   assert(sequence() == 0);
 
+  if (!strcmp(argv[1], "energy_guard")) {
+    assert(testAdvertising.payload.size() == 21);              // first frame: power only
+    auto step = [&](uint32_t imp, uint32_t exp) {
+      testMillis += 3000; r.import_ = imp; r.export_ = exp; capture(-850);
+      return testAdvertising.payload.size();
+    };
+    assert(step(4646890, 77402) == 31);                        // two frames agree
+    assert(step(0, 77402) == 21);                              // zeroed counter
+    assert(step(4646891, 77402) == 21);                        // implausible vs. the 0
+    assert(step(4646892, 77402) == 31);
+    assert(step(4646880, 77402) == 21);                        // falling: dip never sent
+    assert(step(4646893, 77402) == 31);
+    assert(step(4600000, 77402) == 21);                        // implausible drop
+    assert(step(4646894, 77402) == 21);                        // implausible vs. the drop
+    assert(step(4646895, 77402) == 31);
+    assert(step(0x7FFFFFFF, 77402) == 21);                     // n/a
+    return 0;
+  }
   if (!strcmp(argv[1], "packet")) {
+    testMillis += 3000; capture(-850);                         // second frame confirms the counters
     for (auto b : testAdvertising.payload) printf("%02x", b);
     puts(""); return 0;
   }
