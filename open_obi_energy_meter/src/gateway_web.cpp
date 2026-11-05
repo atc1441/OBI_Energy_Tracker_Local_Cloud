@@ -455,7 +455,8 @@ static String statusJson() {
   uint8_t ot[3] = {0}; gw_ota_target(ot);
   j += ",\"ota\":{\"active\":" + String(gw_ota_active() ? "true" : "false");
   j += ",\"target\":\"" + hex(ot, 3) + "\",\"size\":" + String(gw_ota_size());
-  j += ",\"served\":" + String(gw_ota_progress()) + "}}";
+  j += ",\"served\":" + String(gw_ota_progress());
+  j += ",\"pos\":" + String(gw_ota_pos()) + ",\"pass\":" + String(gw_ota_pass()) + "}}";
   return j;
 }
 
@@ -888,6 +889,7 @@ static void handleLoraSF() {
 
 // ---- reader firmware OTA upload (multipart, .bin) --------------------------
 static bool s_otaOk = false;
+static bool s_otaNoHeap = false;   // last upload failed: no buffer for the image
 static void handleOtaUpload() {
   HTTPUpload &up = server.upload();
   if (up.status == UPLOAD_FILE_START) {
@@ -895,11 +897,12 @@ static void handleOtaUpload() {
     String id = server.arg("id");
     uint32_t size = server.arg("size").toInt();
     uint8_t ver = (uint8_t)server.arg("ver").toInt();
-    s_otaOk = false;
+    s_otaOk = false; s_otaNoHeap = false;
     if (id.length() == 6 && size) {
       uint8_t h[3];
       for (int i = 0; i < 3; i++) h[i] = (uint8_t)strtol(id.substring(i * 2, i * 2 + 2).c_str(), nullptr, 16);
       s_otaOk = gw_ota_begin(h, size, ver);
+      s_otaNoHeap = !s_otaOk && size > ESP.getMaxAllocHeap();   // the image needs one contiguous block
     }
   } else if (up.status == UPLOAD_FILE_WRITE) {
     if (s_otaOk) gw_ota_write(up.buf, up.currentSize);
@@ -907,7 +910,10 @@ static void handleOtaUpload() {
     if (s_otaOk) gw_ota_arm();
   }
 }
-static void handleOtaDone()   { server.send(200, "application/json", gw_ota_active() ? "{\"ok\":true}" : "{\"ok\":false}"); }
+static void handleOtaDone() {
+  if (gw_ota_active()) server.send(200, "application/json", "{\"ok\":true}");
+  else server.send(200, "application/json", s_otaNoHeap ? "{\"ok\":false,\"error\":\"heap\"}" : "{\"ok\":false}");
+}
 static void mqttCallback(char *topic, byte *payload, unsigned int len);   // fwd: <base>/<id>/set_interval
 static void handleRediscover();                                          // fwd: re-send HA discovery on demand
 static void handleDelete();                                              // fwd: drop a phantom reader from the list

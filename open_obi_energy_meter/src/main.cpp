@@ -536,11 +536,12 @@ static void sendLegacyAck(Reader *r, uint8_t rxcmd, uint8_t version, float rssi)
   if (!r->haveKey) return;                           // ack is TEA-encrypted with the reader's key
   uint8_t b[8] = {0};
   b[0] = version;
-  // b[1] = interval byte. The v38-family meter reader applies interval = 2 * b[1] seconds (sub_600C;
-  // byte 0 or 255 -> its 300 s default). The stock value here was 0xFF (=300 s); send the user-configured
-  // interval instead so the dashboard interval control also works for the cmd-24/25 readers. The old
-  // v1.0.1/v32 readers ignore b[1] (they only check version + crc), so this stays safe for them; the CRC
-  // below is recomputed over the new bytes either way.
+  // b[1] = interval byte. Both the v38-family reader (sub_600C) and the v1.0.1/v32 reader (ACK handler
+  // sub_AFA0 -> sub_5A00, repo numbering) apply interval = 2 * b[1] seconds; byte 0 or 255 selects their
+  // 300 s default. The stock value here was 0xFF (=300 s); send the user-configured interval instead so the
+  // dashboard interval control works for the cmd-24/25 readers too. "Live" (1 s) arrives as b[1] = 1, i.e.
+  // interval 2, which these readers treat as live mode: cmd-25 frames on every power change, a full cmd-24
+  // frame every 300 s. The CRC below is recomputed over the new bytes either way.
   uint16_t secs = r->setInterval ? r->setInterval : OBI_DEFAULT_INTERVAL;
   uint16_t half = secs / 2;                            // firmware doubles it: interval = 2 * byte
   if (half < 1)   half = 1;                            // 0/255 would select the reader's 300 s default
@@ -584,6 +585,8 @@ static void sendCompletedataRaw(Reader *r, uint8_t ackCmd, uint8_t version) {
 // serve is rejected — it doesn't run a corrupt image.
 static uint8_t *g_ota = nullptr;
 static uint32_t g_otaSize = 0, g_otaGot = 0, g_otaServed = 0;
+static uint32_t g_otaPos = 0;          // end of the last block served in the current pass
+static uint8_t  g_otaPass = 0;         // pull passes; a restart from a lower offset starts a new one
 static uint8_t  g_otaTarget[3] = {0};
 static uint8_t  g_otaVersion = 1;
 static bool     g_otaActive = false;
@@ -611,6 +614,7 @@ bool gw_ota_begin(const uint8_t handle[3], uint32_t total, uint8_t version) {
   g_ota = (uint8_t *)malloc(total);
   if (!g_ota) return false;
   g_otaSize = total; g_otaGot = 0; g_otaServed = 0; g_otaPulled = false;
+  g_otaPos = 0; g_otaPass = 0;
   memcpy(g_otaTarget, handle, 3); g_otaVersion = version ? version : 1; g_otaActive = false;
   Serial.printf("[ota] begin %u B -> %02X%02X%02X ver %u\n", total, handle[0], handle[1], handle[2], g_otaVersion);
   return true;
@@ -649,6 +653,18 @@ void gw_ota_cancel() {
 bool gw_ota_active() { return g_otaActive; }
 uint32_t gw_ota_size() { return g_otaSize; }
 uint32_t gw_ota_progress() { return g_otaServed > g_otaSize ? g_otaSize : g_otaServed; }
+uint32_t gw_ota_pos() { return g_otaPos; }
+uint8_t  gw_ota_pass() { return g_otaPass; }
+
+// Track one served block. A request below the current pass (not a retry of the same block) means the
+// reader started over: a legacy bootloader re-pulls the whole image when it rejects it (bad CRC, image too
+// large), so a second pass is a warning sign and a third almost certainly a loop.
+static void otaTrackBlock(uint32_t pos) {
+  if (pos >= g_otaSize) return;
+  if ((g_otaPass == 0 || pos + 64 < g_otaPos) && g_otaPass < 255) g_otaPass++;
+  g_otaPos = pos + 64 > g_otaSize ? g_otaSize : pos + 64;
+  if (g_otaPos > g_otaServed) g_otaServed = g_otaPos;
+}
 void gw_ota_target(uint8_t out[3]) { memcpy(out, g_otaTarget, 3); }
 
 // serve one cmd-33 request. request payload = [f0][deviceType][f2][offset:4 big-endian]
@@ -676,7 +692,7 @@ static void serveOtaRequest(const uint8_t handle[3], const uint8_t *req, size_t 
     uint8_t f[80]; size_t n = obi_build_frame(f, handle, 34, b, sizeof(b));
     char note[16]; snprintf(note, sizeof note, "b@%u", (unsigned)pos);
     txFrame(f, n, note);
-    if (pos < g_otaSize) { uint32_t s = pos + 64 > g_otaSize ? g_otaSize : pos + 64; if (s > g_otaServed) g_otaServed = s; }
+    otaTrackBlock(pos);
     if (g_otaServed >= g_otaSize) {                   // whole image served -> stop advertising the version
       g_otaActive = false;
       g_otaSfHoldMs = millis() + 3000;   // give the reader a few seconds to re-request a block if its own CRC check fails
@@ -731,7 +747,7 @@ static void serveOtaLegacy(const uint8_t handle[3], uint8_t reqCmd, const uint8_
     uint32_t lat = (uint32_t)(micros() - g_reqMicros);        // RxDone -> just before TX = our response latency
     char note[24]; snprintf(note, sizeof note, "b@%u %uus", (unsigned)pos, (unsigned)lat);
     txFrame(f, n, note);
-    if (pos < g_otaSize) { uint32_t s = pos + 64 > g_otaSize ? g_otaSize : pos + 64; if (s > g_otaServed) g_otaServed = s; }
+    otaTrackBlock(pos);
     Serial.printf("[ota%u] @%u  %u/%u\n", reqCmd, pos, g_otaServed, g_otaSize);
   }
 }

@@ -186,14 +186,14 @@ const T={
   uuidwait:'UUID noch unbekannt — Reader per Taste neu verbinden',
   irhint:'Noch keine Messwerte — Reader-Taste einmal kurz drücken, um die Infrarot-Lesung zu starten.',
   uptime:'Laufzeit',heapfree:'Speicher frei',histfs:'Rohdaten',dailyfs:'Tageswerte',
-  heapwarn:'⚠ Firmware (%s) ist größer als der aktuell freie zusammenhängende Speicherblock (%s) — der Flash-Vorgang wird vermutlich fehlschlagen.\n\nDeaktiviere kurz MQTT (weiter unten), das gibt genug Speicher frei — danach erneut versuchen.',
+  heapwarn:'⚠ Firmware (%s) ist größer als der aktuell freie zusammenhängende Speicherblock (%s) — der Flash-Vorgang wird vermutlich fehlschlagen.\n\nBTHome/MQTT abschalten, Gateway neu starten, dann erneut flashen.',
   mqcfg:'MQTT-Einstellungen',host:'Server',port:'Port',user:'Benutzer',pass:'Passwort',
   topic:'Basis-Topic',save:'Speichern',disc:'Discovery senden',discok:'Discovery gesendet ✓',discno:'MQTT nicht verbunden',con:'verbunden',dis:'getrennt',lastpub:'zuletzt gesendet',
   msgs:'Nachr.',never:'noch nichts',disabled:'deaktiviert',ago:'her',
   cmdhint:'Intervall per MQTT setzen (Sekunden als Payload):',
   boot:'Bootloader-Modus — bereit zum Flashen',
   flash:'Firmware flashen',pick:'Erst eine .bin auswählen',uploading:'lädt hoch…',armed:'bereit — Reader startet neu & zieht',
-  otarun:'OTA läuft',otawarn:'⚠ Reader-Firmware über LoRa flashen — nur mit gültiger .bin. Der Reader validiert vor dem Schreiben.',
+  otarun:'OTA läuft',otapass:'Durchgang %n',otaloop:'Reader verwirft das Image?',heapfail:'Zu wenig Speicher: BTHome/MQTT aus, neu starten.',otawarn:'⚠ Reader-Firmware über LoRa flashen — nur mit gültiger .bin. Der Reader validiert vor dem Schreiben.',
   vnote:'Die Firmware-Version MUSS im Dateinamen stehen, z.B. reader_v55.bin.',
   novers:'Keine Version im Dateinamen gefunden.\nBitte die richtige Firmware-Version in den Dateinamen schreiben, z.B. reader_v55.bin',
   vmiss:'Version fehlt im Dateinamen',
@@ -213,14 +213,14 @@ const T={
   uuidwait:'UUID unknown yet — reconnect the reader with its button',
   irhint:'No readings yet — tap the reader button once to start its infrared readout.',
   uptime:'uptime',heapfree:'free heap',histfs:'raw data',dailyfs:'daily values',
-  heapwarn:'⚠ Firmware (%s) is larger than the currently free contiguous memory block (%s) — flashing will likely fail.\n\nTemporarily disable MQTT (further down), that frees up enough memory — then try again.',
+  heapwarn:'⚠ Firmware (%s) is larger than the currently free contiguous memory block (%s) — flashing will likely fail.\n\nDisable BTHome/MQTT, reboot the gateway, then flash again.',
   mqcfg:'MQTT settings',host:'Server',port:'Port',user:'User',pass:'Password',
   topic:'Base topic',save:'Save',disc:'Send discovery',discok:'Discovery sent ✓',discno:'MQTT not connected',con:'connected',dis:'disconnected',lastpub:'last publish',
   msgs:'msgs',never:'nothing yet',disabled:'disabled',ago:'ago',
   cmdhint:'Set interval via MQTT (seconds as payload):',
   boot:'Bootloader mode — ready to flash',
   flash:'Flash firmware',pick:'Pick a .bin first',uploading:'uploading…',armed:'armed — reader will reset & pull',
-  otarun:'OTA in progress',otawarn:'⚠ Flash reader firmware over LoRa — use a valid .bin only. The reader validates before writing.',
+  otarun:'OTA in progress',otapass:'pass %n',otaloop:'reader rejecting the image?',heapfail:'Not enough memory: disable BTHome/MQTT, reboot.',otawarn:'⚠ Flash reader firmware over LoRa — use a valid .bin only. The reader validates before writing.',
   vnote:'The firmware version MUST be in the filename, e.g. reader_v55.bin.',
   novers:'No version found in the filename.\nPut the correct firmware version in the filename, e.g. reader_v55.bin',
   vmiss:'version missing in filename',
@@ -300,7 +300,9 @@ async function tick(){try{
  const ae=document.activeElement, editing=editId!==null||(ae&&/^(iv_|fw_)/.test(ae.id||''));
  if(!editing && !uploading){const vis=visRs(rs);
   $('#list').innerHTML=vis.length?vis.map(card).join(''):(rs.length?'':`<div class="card"><div class="hd"><span class="id">—</span></div><div class="uuid" style="border:0;background:0">${L.waiting}</div></div>`);}
- if(st.ota&&st.ota.active){const el=$('#op_'+st.ota.target);if(el){const p=st.ota.size?Math.min(100,Math.max(0,Math.round(st.ota.served/st.ota.size*100))):0;el.textContent=L.otarun+' '+p+'%';}}
+ if(st.ota&&st.ota.active){const el=$('#op_'+st.ota.target);if(el){const o=st.ota,at=o.pos!=null?o.pos:o.served,p=o.size?Math.min(100,Math.max(0,Math.round(at/o.size*100))):0;
+  // pass >1: reader re-pulls, it rejected the image
+  el.textContent=L.otarun+' '+p+'%'+(o.pass>1?' · '+L.otapass.replace('%n',o.pass):'')+(o.pass>2?' — '+L.otaloop:'');}}
 }catch(e){}}
 // ---- dashboard metric boxes: order + visibility, editable per reader, persisted server-side (NVS) ----
 let editId=null;                           // reader whose card is in the unified edit mode (name + boxes); only one at a time
@@ -434,7 +436,7 @@ async function doOta(id,cur){
  const f=$('#fw_'+id).files[0]; if(!f){$('#op_'+id).textContent=L.pick;return;}
  const hw=heapWarn(f.size); if(hw&&!confirm(hw))return;
  // version comes from the filename (…v55.bin); the reader needs it to decide whether to reflash.
- const vm=f.name.match(/v(\d+)/);
+ const vm=[...f.name.matchAll(/v(\d+)/g)].pop();   // last match: reader_v32x_v93 -> 93
  if(!vm){ alert(L.novers); $('#op_'+id).textContent=L.vmiss; return; }
  const ver=parseInt(vm[1])&255;
  const dl=lang=='de'?'Datei':'File';
@@ -444,7 +446,7 @@ async function doOta(id,cur){
  const buf=await f.arrayBuffer(); const fd=new FormData(); fd.append('fw',new Blob([buf]),f.name);
  uploading=true; $('#op_'+id).textContent=L.uploading;
  try{ const r=await (await fetch('/api/ota?id='+id+'&size='+buf.byteLength+'&ver='+ver,{method:'POST',body:fd})).json();
-   $('#op_'+id).textContent=r.ok?L.armed:'error'; }
+   $('#op_'+id).textContent=r.ok?L.armed:(r.error=='heap'?L.heapfail:'error'); }
  catch(e){ $('#op_'+id).textContent='error'; }
  uploading=false;
 }

@@ -143,6 +143,8 @@ void     gw_ota_cancel();
 bool     gw_ota_active();
 uint32_t gw_ota_size();
 uint32_t gw_ota_progress();   // bytes served so far
+uint32_t gw_ota_pos();        // end of last block, current pass
+uint8_t  gw_ota_pass();       // pull passes so far (>1: reader restarted)
 void     gw_ota_target(uint8_t out[3]);
 
 // obi_na() -- "is this energy field a no-reading sentinel?" -- and the counter plausibility rules are in
