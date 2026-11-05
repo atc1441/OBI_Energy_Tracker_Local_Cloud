@@ -9,6 +9,9 @@ FPU) und splicen das Ergebnis in die Firmware.
 
 ## Ordnerlayout
 
+- `legacy_v32/` — eigener Patch für den **Legacy-v32-Reader** (Cloud „1.0.1"): liest im
+  Live-Modus jedes Zähler-Telegramm (~1 s statt 3–4 s). Eigenes v32-Image mitbringen; siehe
+  [../legacy_v32/de/README.md](../legacy_v32/de/README.md).
 - `reader_stock_v57.bin` — unveränderte Original-Firmware (Quelle für
   `splice.py`/`splice_DWSB20_2TH.py`/`splice_EMHeHZP.py`).
 - `reader_modded_89mock_v90.bin` — fertiges Ergebnis: nur der int24-Fix
