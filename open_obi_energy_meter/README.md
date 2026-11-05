@@ -293,7 +293,7 @@ SML every second:
 | Reader | "Live" (1 s) in practice | Why |
 |---|---|---|
 | legacy v32 (cloud 1.0.1) | ~3–4 s stock, **~1 s** patched | arrives as interval 2; the reader pauses one interval between meter reads → [`../reader_firmware_mod/legacy_v32/`](../reader_firmware_mod/legacy_v32/) |
-| v57 / v90 mods | ~10 s (expected, not measured here) | the reader only transmits in a LoRa window ~10 s after the last beacon it heard |
+| v57 / v90 mods | ~10 s (expected, not measured here) | the reader only transmits in a LoRa window ~10 s after the last beacon it heard → experimental, untested [`../reader_firmware_mod/live_v57/`](../reader_firmware_mod/live_v57/) |
 
 For BTHome, the receiving Bluetooth proxy matters too: ESPHome's default passive scan window (30 ms of
 320 ms) dropped 25–45 % of 1-s values in a live test; a LAN proxy can scan almost continuously
@@ -758,7 +758,7 @@ einem Zähler mit sekündlichem SML-Push:
 | Reader | „Live" (1 s) in der Praxis | Warum |
 |---|---|---|
 | Legacy v32 (Cloud 1.0.1) | ~3–4 s original, **~1 s** gepatcht | kommt als Intervall 2 an; der Reader pausiert zwischen zwei Zähler-Lesungen ein Intervall → [`../reader_firmware_mod/legacy_v32/`](../reader_firmware_mod/legacy_v32/de/README.md) |
-| v57 / v90-Mods | ~10 s (erwartet, hier nicht gemessen) | der Reader sendet nur in einem LoRa-Fenster ~10 s nach dem letzten gehörten Beacon |
+| v57 / v90-Mods | ~10 s (erwartet, hier nicht gemessen) | der Reader sendet nur in einem LoRa-Fenster ~10 s nach dem letzten gehörten Beacon → experimentell, ungetestet [`../reader_firmware_mod/live_v57/`](../reader_firmware_mod/live_v57/de/README.md) |
 
 Bei BTHome zählt auch der empfangende Bluetooth-Proxy: ESPHomes Standard-Scanfenster (passiv, 30 ms von
 320 ms) hat im Live-Test 25–45 % der 1-s-Werte verloren; ein LAN-Proxy kann fast durchgehend scannen
