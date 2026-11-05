@@ -147,6 +147,13 @@ jobs:
       - name: Install arm-none-eabi-gcc
         run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
 
+      # Experimental, not staged: checks the hooks still apply.
+      - name: Build v57/v90 live variants
+        working-directory: reader_firmware_mod/live_v57
+        run: |
+          bash build.sh
+          python3 patch_live.py --all
+
       - name: Build + splice (plain int24 fix)
         working-directory: reader_firmware_mod
         run: |
