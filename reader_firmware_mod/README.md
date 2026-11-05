@@ -9,6 +9,9 @@ result into the firmware.
 
 ## Folder layout
 
+- `legacy_v32/` — separate patch for the **legacy v32 reader** (cloud "1.0.1"): reads every
+  meter telegram in live mode (~1 s instead of 3–4 s). Bring your own v32 image; see
+  [legacy_v32/README.md](legacy_v32/README.md).
 - `reader_stock_v57.bin` — unmodified original firmware (the source
   `splice.py`/`splice_DWSB20_2TH.py`/`splice_EMHeHZP.py` patch).
 - `reader_modded_89mock_v90.bin` — finished result: just the int24 fix

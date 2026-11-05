@@ -1,0 +1,3 @@
+# Build output and vendor-derived images stay local
+build/
+*.bin

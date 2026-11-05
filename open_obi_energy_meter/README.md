@@ -287,6 +287,18 @@ waits ~300 ms for after each report):
   `‹base›` is your configured base topic (default `obi/gateway`), `‹id›` the 6-hex reader id. The gateway
   logs `mqtt rx set_interval 238d4e -> 30 s` and applies it on the reader's next report.
 
+**How fast "Live" really is.** The interval is a floor, not a promise. Measured with a meter that pushes
+SML every second:
+
+| Reader | "Live" (1 s) in practice | Why |
+|---|---|---|
+| legacy v32 (cloud 1.0.1) | ~3–4 s stock, **~1 s** patched | arrives as interval 2; the reader pauses one interval between meter reads → [`../reader_firmware_mod/legacy_v32/`](../reader_firmware_mod/legacy_v32/) |
+| v57 / v90 mods | ~10 s (expected, not measured here) | the reader only transmits in a LoRa window ~10 s after the last beacon it heard |
+
+For BTHome, the receiving Bluetooth proxy matters too: ESPHome's default passive scan window (30 ms of
+320 ms) dropped 25–45 % of 1-s values in a live test; a LAN proxy can scan almost continuously
+(`window: 300ms`).
+
 ## MQTT integration
 
 - **Publish**: every reader is published as JSON to `‹base›/‹id›` (e.g. `obi/gateway/d70c9a`):
@@ -739,6 +751,18 @@ Reader nach jedem Bericht ohnehin ~300 ms wartet):
   ```
   `‹base›` ist dein konfiguriertes Basis-Topic (Standard `obi/gateway`), `‹id›` die 6-stellige Hex-Reader-ID.
   Das Gateway loggt `mqtt rx set_interval 238d4e -> 30 s` und wendet es beim nächsten Bericht des Readers an.
+
+**Wie schnell „Live" wirklich ist.** Das Intervall ist eine Untergrenze, kein Versprechen. Gemessen an
+einem Zähler mit sekündlichem SML-Push:
+
+| Reader | „Live" (1 s) in der Praxis | Warum |
+|---|---|---|
+| Legacy v32 (Cloud 1.0.1) | ~3–4 s original, **~1 s** gepatcht | kommt als Intervall 2 an; der Reader pausiert zwischen zwei Zähler-Lesungen ein Intervall → [`../reader_firmware_mod/legacy_v32/`](../reader_firmware_mod/legacy_v32/de/README.md) |
+| v57 / v90-Mods | ~10 s (erwartet, hier nicht gemessen) | der Reader sendet nur in einem LoRa-Fenster ~10 s nach dem letzten gehörten Beacon |
+
+Bei BTHome zählt auch der empfangende Bluetooth-Proxy: ESPHomes Standard-Scanfenster (passiv, 30 ms von
+320 ms) hat im Live-Test 25–45 % der 1-s-Werte verloren; ein LAN-Proxy kann fast durchgehend scannen
+(`window: 300ms`).
 
 ## MQTT-Anbindung
 

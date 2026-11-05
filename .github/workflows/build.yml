@@ -168,6 +168,13 @@ jobs:
           python3 splice_EMHeHZP.py
           python3 splice_EMHeHZP.py --sf9
 
+      # No stock v32 image in the repo: assemble and link only.
+      - name: Build legacy v32 live hook
+        working-directory: reader_firmware_mod/legacy_v32
+        run: |
+          bash build.sh
+          test "$(stat -c%s build/live.bin)" -le 136
+
       - name: Stage binaries
         working-directory: reader_firmware_mod
         run: |
