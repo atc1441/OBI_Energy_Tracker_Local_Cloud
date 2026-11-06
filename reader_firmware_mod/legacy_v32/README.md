@@ -82,4 +82,6 @@ interval to **Live** (or 2-3 s), which the gateway sends as `b[1] = 1` → inter
   readers transmit on their own clock, so several live readers on one gateway will occasionally
   collide. Lost ACKs make the reader retry after ~5 s (seen as rare 5–7 s gaps).
 - **Scope.** This is v32 only. The v57/v90 readers have the same cycle logic plus their own ~10 s
-  LoRa window, and they need a separate port.
+  LoRa window; see [../live_v57/](../live_v57/README.md). A hardver-6 legacy reader can also move to
+  v57 directly: one reader went v32 → `reader_modded_live_91mock_v92_EMHeHZP.bin` over the gateway's
+  legacy bootloader path without re-pairing, and back is the same path with a v32 file.

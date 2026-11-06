@@ -86,4 +86,7 @@ Intervall 2.
   v32-Reader senden nach eigenem Takt, mehrere Live-Reader an einem Gateway stoßen also gelegentlich
   zusammen. Nach einem verlorenen ACK sendet der Reader nach ~5 s erneut (seltene Lücken von 5–7 s).
 - **Geltungsbereich.** Nur v32. Die v57/v90-Reader haben dieselbe Zyklus-Logik plus ein eigenes
-  ~10-s-LoRa-Fenster und brauchen eine eigene Portierung.
+  ~10-s-LoRa-Fenster; siehe [../../live_v57/de/README.md](../../live_v57/de/README.md). Ein Legacy-Reader
+  mit hardver 6 kann auch direkt auf v57 wechseln: Ein Reader ging über den Legacy-Bootloader-Pfad des
+  Gateways ohne Neu-Kopplung von v32 auf `reader_modded_live_91mock_v92_EMHeHZP.bin`; zurück geht es auf
+  demselben Weg mit einer v32-Datei.
