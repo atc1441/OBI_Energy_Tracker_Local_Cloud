@@ -1,10 +1,12 @@
-# v57 / v90 reader: 1-second live readings (experimental, untested)
+# v57 / v90 reader: 1-second live readings (experimental)
 
 > ➡️ **Deutsche Version: [de/README.md](de/README.md)**
 
-> ⚠️ **Not verified on hardware.** The same fix is live-verified on the legacy v32 reader (median
-> report spacing 3.8 s → 1.00 s). This port to v57 is built from the disassembly only. Testers with a
-> **USB-powered** v57/v90 reader are welcome; please report results in the PR.
+> ✅ **Verified on one reader** (2026-11-06): `reader_modded_live_91mock_v92_EMHeHZP.bin` on a USB-powered
+> hardver-6 reader at a Landis+Gyr E320 (SML push every second). The reader had run the legacy v32 before,
+> and the gateway's legacy bootloader path flashed it straight to v57 without re-pairing. Measured over
+> 61 energy frames at the gateway: median spacing **1.00 s** (max 2.0 s, every frame ACKed); stock v57
+> manages ~10 s. The other six variants carry the same three patches but are not tested individually.
 
 A live variant of every v57-based image in this folder (`reader_stock_v57.bin` and the six
 `reader_modded_89mock_v90*.bin`). In live mode (interval 1–2 s) the reader should send about one reading
@@ -54,8 +56,8 @@ python3 patch_live.py ../reader_modded_89mock_v90_DWSB20_2TH.bin   # just one
 ```
 
 `patch_live.py` only accepts the exact committed images (SHA-256 list in the script). When the v90
-release files are rebuilt with different bytes, update that list. The live images are not committed and
-not released until someone has verified them on hardware.
+release files are rebuilt with different bytes, update that list. The live images are not committed;
+CI builds them, and `patch_live.py` recreates them byte-identically.
 
 Flash as usual (dashboard → reader card → **Flash firmware**), then set the reader's interval to
 **Live**.

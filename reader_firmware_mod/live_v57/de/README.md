@@ -1,11 +1,13 @@
-# v57/v90-Reader: Live-Werte im Sekundentakt (experimentell, ungetestet) (🇩🇪)
+# v57/v90-Reader: Live-Werte im Sekundentakt (experimentell) (🇩🇪)
 
 > ➡️ **English version: [../README.md](../README.md)**
 
-> ⚠️ **Nicht auf Hardware verifiziert.** Derselbe Fix ist am Legacy-v32-Reader live verifiziert
-> (Median-Abstand der Berichte 3,8 s → 1,00 s). Die Portierung auf v57 entstand nur aus der
-> Disassembly. Tester mit einem **per USB versorgten** v57/v90-Reader sind willkommen, Ergebnisse
-> bitte im PR melden.
+> ✅ **An einem Reader verifiziert** (06.11.2026): `reader_modded_live_91mock_v92_EMHeHZP.bin` an einem
+> per USB versorgten Reader (hardver 6) an einem Landis+Gyr E320 (SML-Push jede Sekunde). Der Reader lief
+> vorher mit der Legacy-v32, über den Legacy-Bootloader-Pfad des Gateways ging er ohne Neu-Kopplung direkt
+> auf v57. Gemessen über 61 Energie-Frames am Gateway: Median-Abstand **1,00 s** (max. 2,0 s, jeder Frame
+> bestätigt); Original-v57 schafft ~10 s. Die anderen sechs Varianten tragen dieselben drei Patches, sind
+> aber nicht einzeln getestet.
 
 Eine Live-Variante jedes v57-basierten Images in diesem Ordner (`reader_stock_v57.bin` und die sechs
 `reader_modded_89mock_v90*.bin`). Im Live-Modus (Intervall 1–2 s) sollte der Reader an einem Zähler mit
@@ -55,8 +57,8 @@ python3 patch_live.py ../reader_modded_89mock_v90_DWSB20_2TH.bin   # nur eins
 ```
 
 `patch_live.py` nimmt nur die exakt eingecheckten Images an (SHA-256-Liste im Skript). Werden die
-v90-Releases mit anderen Bytes neu gebaut, muss diese Liste angepasst werden. Die Live-Images werden
-erst eingecheckt und veröffentlicht, wenn jemand sie auf Hardware geprüft hat.
+v90-Releases mit anderen Bytes neu gebaut, muss diese Liste angepasst werden. Die Live-Images sind nicht
+eingecheckt; die CI baut sie, und `patch_live.py` erzeugt sie byte-gleich neu.
 
 Flashen wie gewohnt (Dashboard → Reader-Karte → **Firmware flashen**), danach das Intervall des
 Readers auf **Live** stellen.

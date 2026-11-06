@@ -12,7 +12,7 @@ result into the firmware.
 - `legacy_v32/` — separate patch for the **legacy v32 reader** (cloud "1.0.1"): reads every
   meter telegram in live mode (~1 s instead of 3–4 s). Bring your own v32 image; see
   [legacy_v32/README.md](legacy_v32/README.md).
-- `live_v57/` — **experimental, untested** live variants of the v57/v90 images (~1 s instead
+- `live_v57/` — **experimental** live variants (verified on one reader) of the v57/v90 images (~1 s instead
   of ~10 s); see [live_v57/README.md](live_v57/README.md).
 - `reader_stock_v57.bin` — unmodified original firmware (the source
   `splice.py`/`splice_DWSB20_2TH.py`/`splice_EMHeHZP.py` patch).
