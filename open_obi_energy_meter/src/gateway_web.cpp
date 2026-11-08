@@ -1900,15 +1900,17 @@ static bool lastDailyRow(const String &id, uint32_t &dayStart, uint32_t &imp, ui
 // Also captures impStart/expStart -- the reader's counters at the exact moment TODAY began -- wherever a
 // genuinely reliable one is available, so readerTodayStats() can report "today so far" without touching
 // flash on every MQTT publish. A reboot mid-day (the last stored sample is from TODAY, not a finished
-// previous day) has no opening value in the sample log -- but the persisted daily-summary file is only
-// ever written at a genuine rollover, so its last row is still the last *completed* day's close; fall back
-// to that (lastDailyRow()) so haveStart comes back true right after THIS reboot too, not just at the next
+// previous day), or an empty raw sample log (a firmware update reformats the OTA-slot store it lives in),
+// leaves no opening value in that log -- but the persisted daily-summary file is only ever written at a
+// genuine rollover, so its last row is still the last *completed* day's close; fall back to that
+// (lastDailyRow()) so haveStart comes back true right after THIS reboot too, not just at the next
 // midnight. Only a reader with no history at all (nothing in either file yet) still starts with
 // haveStart=false, same "nothing to backfill" gap the History page's own JS handles.
 static void beginDay(int slot, const String &id, uint32_t dayStart) {
   DailyState &d = hDaily[slot];
   if (d.day == 0) {
     uint32_t oldEp, oldImp, oldExp;
+    bool haveClose = false;
     if (lastSample(id, oldEp, oldImp, oldExp)) {
       uint32_t oldDay = localDayStart((time_t)oldEp);
       // no day/night or HT/ST/NT split recoverable across a reboot gap -- the live accumulator that would
@@ -1916,18 +1918,22 @@ static void beginDay(int slot, const String &id, uint32_t dayStart) {
       if (oldDay != dayStart) {
         persistDaily(id, oldDay, oldImp, oldExp, 0, 0, 0, 0, 0);
         d.impStart = oldImp; d.expStart = oldExp; d.haveStart = true;   // genuine previous-day close
-      } else {
-        // mid-day reboot -- the sample log's newest entry is already from today. Recover the last
-        // COMPLETED day's closing counters from the daily-summary file instead.
-        uint32_t pDay, pImp, pExp;
-        if (lastDailyRow(id, pDay, pImp, pExp) && pDay != dayStart) {
-          d.impStart = pImp; d.expStart = pExp; d.haveStart = true;
-        } else {
-          d.haveStart = false;   // no completed-day close on record either -- truly nothing to start from
-        }
+        haveClose = true;
       }
-    } else {
-      d.haveStart = false;     // no prior sample at all -- brand new reader
+    }
+    if (!haveClose) {
+      // No previous-day close in the raw sample log. Either its newest entry is already from TODAY (a
+      // mid-day reboot), or there is no usable entry at all -- the raw store lives in the spare OTA slot,
+      // so a firmware update reformats it and re-seeds it only from the tail snapshot, which can come
+      // back empty (issue #108; on boards without that store the log is simply short-retention). The
+      // daily-summary file is untouched in both cases and its last row is still the last COMPLETED day's
+      // close, so recover the baseline from there rather than reporting "no today" until midnight.
+      uint32_t pDay, pImp, pExp;
+      if (lastDailyRow(id, pDay, pImp, pExp) && pDay != dayStart) {
+        d.impStart = pImp; d.expStart = pExp; d.haveStart = true;
+      } else {
+        d.haveStart = false;   // no completed-day close on record either -- truly nothing to start from
+      }
     }
   } else {
     d.impStart = d.imp; d.expStart = d.exp; d.haveStart = true;   // yesterday's closing value, captured
