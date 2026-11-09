@@ -1103,20 +1103,18 @@ static void handleRx() {
                                         r->handle[0], r->handle[1], r->handle[2], (long)nPowerS);
           // Import/export: cumulative counters, should only crawl. Reject a single wild jump outright (see
           // plausibleEnergyStep(), energy_filter.h) -- keeps showing the last known-good reading, not a spike.
-          // Only checked once a real baseline exists (haveData) and both old/new counters are real readings,
-          // not the n/a sentinel -- a first-ever reading, or the first one after an n/a gap, has nothing
-          // sane to compare against.
+          // Compare each counter that has a baseline. Import-only meters report export as n/a.
           // A lone 0 from a reader whose counters were already non-zero is no reading at all (issue
           // #99) and has to be caught before the step filter, because it holds however much time has
           // passed since the last frame -- and, unlike a wild jump, it must never become a new baseline.
           bool zeroDrop = r->haveData && (zeroedOutCounter(r->import_, nImport) ||
                                           zeroedOutCounter(r->export_, nExport));
           bool plausible = !zeroDrop;
-          if (!zeroDrop && r->haveData && r->lastEnergyMs && !obi_na(r->import_) && !obi_na(nImport) &&
-              !obi_na(r->export_) && !obi_na(nExport)) {
+          if (!zeroDrop && r->haveData && r->lastEnergyMs) {
             uint32_t dtMs = nowMs - r->lastEnergyMs;
-            plausible = plausibleEnergyStep(r->import_, nImport, dtMs) &&
-                        plausibleEnergyStep(r->export_, nExport, dtMs);
+            bool importOk = obi_na(r->import_) || obi_na(nImport) || plausibleEnergyStep(r->import_, nImport, dtMs);
+            bool exportOk = obi_na(r->export_) || obi_na(nExport) || plausibleEnergyStep(r->export_, nExport, dtMs);
+            plausible = importOk && exportOk;
           }
           if (zeroDrop)
             Serial.printf("  [energy] %02X%02X%02X: counter fell to zero -- imp %lu->%lu exp %lu->%lu -- rejecting, keeping last known values\n",
@@ -1128,11 +1126,13 @@ static void handleRx() {
           // corrupted/mis-keyed frame by seeing the SAME new value repeat CONFIRM_STREAK times in a row,
           // each one plausible relative to the PREVIOUS candidate (not the old, now-obsolete baseline).
           bool newBaseline = false;
-          if (!plausible && !zeroDrop && !obi_na(nImport) && !obi_na(nExport)) {
+          if (!plausible && !zeroDrop && (!obi_na(nImport) || !obi_na(nExport))) {
             static const uint8_t CONFIRM_STREAK = 3;
+            uint32_t pendingDt = nowMs - r->pendingMs;
             bool matchesPending = r->havePendingJump &&
-                plausibleEnergyStep(r->pendingImport, nImport, nowMs - r->pendingMs) &&
-                plausibleEnergyStep(r->pendingExport, nExport, nowMs - r->pendingMs);
+                obi_na(r->pendingImport) == obi_na(nImport) && obi_na(r->pendingExport) == obi_na(nExport) &&
+                (obi_na(nImport) || plausibleEnergyStep(r->pendingImport, nImport, pendingDt)) &&
+                (obi_na(nExport) || plausibleEnergyStep(r->pendingExport, nExport, pendingDt));
             r->pendingStreak = matchesPending ? r->pendingStreak + 1 : 1;
             r->havePendingJump = true;
             r->pendingImport = nImport; r->pendingExport = nExport; r->pendingMs = nowMs;
