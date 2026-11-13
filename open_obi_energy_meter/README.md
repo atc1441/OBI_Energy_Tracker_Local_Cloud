@@ -319,6 +319,57 @@ For BTHome, the receiving Bluetooth proxy matters too: ESPHome's default passive
   dashboard MQTT panel.
 - All settings are configurable in the web UI and persisted in NVS.
 
+### MQTTS (TLS) — what is checked, and how to debug it
+
+The CA field holds a **trust anchor**, nothing else: the PEM you paste is handed to mbedTLS as the CA the
+*broker's* certificate must chain up to (`setCACert`). The gateway never sends a client certificate — mutual
+TLS is not implemented — so a broker log line like
+
+```
+OpenSSL Error[0]: error:0A000412:SSL routines::ssl/tls alert bad certificate
+Client <unknown> disconnected: Protocol error.
+```
+
+is **the gateway rejecting the broker**, not the broker rejecting the gateway. The alert is all the broker
+gets to see; the reason stays on the ESP32.
+
+Two things decide whether verification succeeds:
+
+- **The name you dialled must be in the certificate.** mbedTLS matches the exact string from the *Server*
+  field against the certificate's **`dNSName` SANs**, and falls back to the **CN** only when the certificate
+  carries no SAN extension at all. An **`iPAddress` SAN is not matched** by this build — so if you connect
+  by IP, the certificate needs that IP spelled out as a `dNSName` (or no SAN extension and `CN = <the IP>`).
+  Using a hostname that resolves on your LAN and putting it in the SAN is the clean route.
+- **The chain must be complete.** If the broker's certificate is signed by an intermediate, the broker has to
+  send that intermediate too (mosquitto: concatenate leaf + intermediate in `certfile`); pasting the root
+  alone is not enough.
+
+Validity dates are a separate story: ESP-IDF builds mbedTLS with `MBEDTLS_HAVE_TIME_DATE` **unset**, so
+`notBefore`/`notAfter` are **not** part of the verification — an expired broker certificate is accepted.
+
+**Debugging it:** *Settings → MQTT → Check TLS* (`POST /api/mqtt/tlsdiag`). It repeats the handshake with
+verification switched off, so it can show the chain the broker really sends — subject, issuer, validity,
+SANs — and then verifies that chain against the CA by hand and prints the decoded reason:
+
+```
+192.168.1.152:8883 — TLS handshake ok
+#1 CN=obi-broker.local
+   issued by: CN=My home CA
+   valid: 2026-11-11 08:39:10 UTC … 2026-12-13 08:39:10 UTC
+   SAN: obi-broker.local
+verification failed:
+   ! The certificate Common Name (CN) does not match with the expected CN
+```
+
+It takes whatever is currently typed into the host/port/CA fields, so a certificate can be tested before it
+is saved, and it also distinguishes *nothing listening there* from *TLS did not come up* (e.g. MQTTS ticked
+against a plaintext port) from *the certificate does not verify*. The date check in that output is done by
+the page itself, not by mbedTLS, and an expired certificate is flagged there.
+
+The last failed connect attempt is kept too: `/api/status` reports it as `mqtt.last_err` (PubSubClient's
+state plus the mbedTLS error behind it, e.g. `connect failed | TLS -9984: X509 - Certificate verification
+failed`), and the Settings page shows it next to the MQTT status.
+
 ### Home Assistant auto-discovery
 
 The gateway also publishes **retained MQTT discovery configs** under the `homeassistant/…/config` prefix, so
@@ -783,6 +834,59 @@ Bei BTHome zählt auch der empfangende Bluetooth-Proxy: ESPHomes Standard-Scanfe
 - **Status** liegt auf `/api/status` (`connected`, `state`, `pub_count`, `last_pub_s`) und wird im
   MQTT-Panel angezeigt.
 - Alle Einstellungen sind in der Web-UI konfigurierbar und im NVS persistiert.
+
+### MQTTS (TLS) — was geprüft wird und wie man es debuggt
+
+Das CA-Feld ist ein **Vertrauensanker**, nichts weiter: das eingefügte PEM geht an mbedTLS als die CA, auf
+die das Zertifikat des *Brokers* zurückführen muss (`setCACert`). Das Gateway schickt **kein**
+Client-Zertifikat — gegenseitiges TLS ist nicht implementiert. Eine Broker-Logzeile wie
+
+```
+OpenSSL Error[0]: error:0A000412:SSL routines::ssl/tls alert bad certificate
+Client <unknown> disconnected: Protocol error.
+```
+
+bedeutet also: **das Gateway lehnt den Broker ab**, nicht umgekehrt. Der Broker sieht nur das Alert, der
+Grund bleibt auf dem ESP32.
+
+Zwei Dinge entscheiden über das Ergebnis:
+
+- **Der eingetragene Name muss im Zertifikat stehen.** mbedTLS vergleicht genau die Zeichenkette aus dem
+  Feld *Server* mit den **`dNSName`-SANs** des Zertifikats und fällt nur dann auf den **CN** zurück, wenn das
+  Zertifikat überhaupt keine SAN-Erweiterung hat. Ein **`iPAddress`-SAN wird von diesem Build nicht
+  berücksichtigt** — wer per IP verbindet, braucht die IP als `dNSName` im Zertifikat (oder gar keine
+  SAN-Erweiterung und `CN = <die IP>`). Saubere Variante: einen im LAN auflösbaren Hostnamen verwenden und
+  genau den in den SAN schreiben.
+- **Die Kette muss vollständig sein.** Ist das Broker-Zertifikat von einem Intermediate signiert, muss der
+  Broker dieses Intermediate mitsenden (mosquitto: Leaf + Intermediate zusammen in `certfile`); nur das Root
+  einzufügen genügt nicht.
+
+Gültigkeitsdaten sind ein eigenes Thema: ESP-IDF baut mbedTLS **ohne** `MBEDTLS_HAVE_TIME_DATE`, damit sind
+`notBefore`/`notAfter` **nicht** Teil der Prüfung — ein abgelaufenes Broker-Zertifikat wird akzeptiert.
+
+**Debuggen:** *Einstellungen → MQTT → TLS prüfen* (`POST /api/mqtt/tlsdiag`). Der Handshake wird mit
+abgeschalteter Prüfung wiederholt, dadurch lässt sich die Kette zeigen, die der Broker wirklich sendet —
+Subject, Aussteller, Gültigkeit, SANs — und danach wird genau diese Kette von Hand gegen die CA geprüft und
+der dekodierte Grund ausgegeben:
+
+```
+192.168.1.152:8883 — TLS-Handshake ok
+#1 CN=obi-broker.local
+   ausgestellt von: CN=My home CA
+   gültig: 2026-11-11 08:39:10 UTC … 2026-12-13 08:39:10 UTC
+   SAN: obi-broker.local
+Prüfung fehlgeschlagen:
+   ! The certificate Common Name (CN) does not match with the expected CN
+```
+
+Dabei werden die aktuell eingetippten Werte für Server/Port/CA verwendet, ein Zertifikat lässt sich also vor
+dem Speichern testen. Die Ausgabe unterscheidet außerdem *da hört niemand zu* von *TLS kam nicht zustande*
+(z. B. MQTTS aktiviert gegen einen Klartext-Port) von *das Zertifikat prüft nicht durch*. Die Datumsprüfung
+in dieser Ausgabe macht die Seite selbst, nicht mbedTLS — ein abgelaufenes Zertifikat wird dort markiert.
+
+Der letzte fehlgeschlagene Verbindungsversuch wird ebenfalls gemerkt: `/api/status` liefert ihn als
+`mqtt.last_err` (Status von PubSubClient plus den mbedTLS-Fehler dahinter, z. B. `connect failed | TLS -9984:
+X509 - Certificate verification failed`), die Einstellungsseite zeigt ihn neben dem MQTT-Status.
 
 ### Home-Assistant-Auto-Discovery
 

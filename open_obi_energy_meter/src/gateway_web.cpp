@@ -14,6 +14,7 @@
 #include <Update.h>               // ESP32 self-OTA (reflash our own app into the other OTA slot)
 #include <HTTPClient.h>           // pull the latest release .bin from GitHub (settings -> firmware)
 #include <WiFiClientSecure.h>     // HTTPS to api.github.com / release asset host
+#include <mbedtls/x509_crt.h>     // /api/mqtt/tlsdiag: parse + verify the broker chain by hand
 #include <memory>                 // std::unique_ptr<WiFiClientSecure> -- see ghOtaTask()'s resolveAndGet()
 #include <esp_partition.h>        // partition list for the /debug hex editor
 #include <esp_ota_ops.h>           // running/inactive OTA partition -- /debug flash map
@@ -261,6 +262,11 @@ static uint32_t g_mqttLastPubMs = 0;
 static uint32_t g_mqttPubCount  = 0;
 static int      g_mqttState     = -1;
 static bool     g_mqttReconnect = false;   // set after a config change -> mqttService reconnects at once (skip the 8 s backoff)
+static String   g_mqttLastErr;             // why the last connect attempt failed: PubSubClient's state plus,
+                                            // for MQTTS, the mbedTLS error behind it. Shown in /api/status and
+                                            // the Settings page -- a broken TLS setup is otherwise invisible
+                                            // without a serial console, because the broker only ever logs its
+                                            // side of it ("bad certificate", issue #112).
 static uint32_t g_authFailCount = 0;        // wrong web logins since boot; sent as an MQTT event + in the gateway state
 static void publishAuthEvent(const String &user);   // fwd: emit a failed-login event on <base>/gateway/<gwid>/auth
 
@@ -448,6 +454,7 @@ static String statusJson() {
   j += ",\"enabled\":" + String(g_mqttHost[0] ? "true" : "false");
   j += ",\"connected\":" + String(con ? "true" : "false");
   j += ",\"state\":" + jstr(mqttStateText(g_mqttState));
+  j += ",\"last_err\":" + jstr(g_mqttLastErr.c_str());   // "" while it has never failed since boot
   j += ",\"pub_count\":" + String(g_mqttPubCount);
   j += ",\"last_pub_s\":" + String(lastPub) + "}";
   j += ",\"auth\":{\"enabled\":" + String(g_authUser[0] ? "true" : "false") + ",\"user\":" + jstr(g_authUser) + "}";
@@ -678,6 +685,172 @@ static void handleReaderPrice() {
                           h24(nt0s), h24(nt0e), h24(nt1s), h24(nt1e)))
     server.send(200, "application/json", "{\"ok\":true}");
   else server.send(400, "application/json", "{\"ok\":false}");
+}
+
+// ---- /api/mqtt/tlsdiag — why does MQTTS not come up? (issue #112) ---------------------------------
+// A broker's log of a failed MQTTS handshake only ever says "bad certificate": that alert is what mbedTLS
+// on THIS side sends after it rejected the broker's certificate, so the actual reason never leaves the
+// gateway. This probes the broker the way the MQTT client does, but with verification switched OFF, so the
+// chain the broker really sends can be read out -- and then verifies that chain against the configured CA
+// by hand, which yields the decoded reason (not trusted, name mismatch) instead of one opaque "connect
+// failed" -- plus the validity dates, which mbedTLS is built without checking here (see utcStampNow()).
+// Nothing here changes the stored config: host/port/ca may be posted to test values that are still being
+// typed in the form.
+static String x509TimeStr(const mbedtls_x509_time &tm) {
+  char b[28];
+  snprintf(b, sizeof b, "%04d-%02d-%02d %02d:%02d:%02d UTC", tm.year, tm.mon, tm.day, tm.hour, tm.min, tm.sec);
+  return String(b);
+}
+// YYYYMMDDhhmmss as one number, so a certificate's UTC validity window can be compared with the clock
+// without any timezone arithmetic.
+static uint64_t x509Stamp(int y, int mo, int d, int h, int mi, int s) {
+  return ((((((uint64_t)y * 100 + mo) * 100 + d) * 100 + h) * 100 + mi) * 100) + s;
+}
+static uint64_t x509Stamp(const mbedtls_x509_time &tm) {
+  return x509Stamp(tm.year, tm.mon, tm.day, tm.hour, tm.min, tm.sec);
+}
+// The date check mbedTLS itself skips: ESP-IDF builds its mbedTLS with MBEDTLS_HAVE_TIME_DATE unset, so
+// mbedtls_x509_crt_verify() ignores notBefore/notAfter entirely -- an expired broker certificate verifies
+// as good on this hardware. Doing it here keeps the diagnostic honest (and rules expiry in or out as the
+// cause of a failing MQTTS connection).
+static uint64_t utcStampNow() {
+  time_t now = time(nullptr);
+  struct tm g;
+  gmtime_r(&now, &g);
+  return x509Stamp(g.tm_year + 1900, g.tm_mon + 1, g.tm_mday, g.tm_hour, g.tm_min, g.tm_sec);
+}
+// The certificate's Subject Alternative Names, as a JSON array. This is the field that decides whether
+// connecting BY IP can ever work: mbedTLS matches the host string we dialled against the CN/SANs.
+static String x509SanJson(const mbedtls_x509_crt *c) {
+  String out = "[";
+  for (const mbedtls_x509_sequence *s = &c->subject_alt_names; s; s = s->next) {
+    if (!s->buf.p || !s->buf.len) continue;
+    int tag = s->buf.tag & MBEDTLS_ASN1_TAG_VALUE_MASK;
+    String v;
+    if (tag == MBEDTLS_X509_SAN_DNS_NAME || tag == MBEDTLS_X509_SAN_RFC822_NAME ||
+        tag == MBEDTLS_X509_SAN_UNIFORM_RESOURCE_IDENTIFIER) {
+      for (size_t i = 0; i < s->buf.len && i < 128; i++) {
+        char ch = (char)s->buf.p[i];
+        v += (ch >= 32 && ch < 127) ? ch : '?';
+      }
+    } else if (tag == MBEDTLS_X509_SAN_IP_ADDRESS && s->buf.len == 4) {
+      char b[20];
+      snprintf(b, sizeof b, "%u.%u.%u.%u", s->buf.p[0], s->buf.p[1], s->buf.p[2], s->buf.p[3]);
+      v = b;
+    } else continue;                      // other GeneralName kinds are not useful here
+    if (out.length() > 1) out += ",";
+    out += jstr(v.c_str());
+  }
+  return out + "]";
+}
+static void handleMqttTlsDiag() {
+  if (g_ghState == 1) { server.send(409, "application/json", "{\"ok\":false,\"error\":\"ota busy\"}"); return; }
+  // A second TLS session costs ~30 KB of contiguous heap while the handshake runs. Refuse up front rather
+  // than fail somewhere inside mbedTLS with an error that looks like a certificate problem.
+  if (ESP.getMaxAllocHeap() < 40 * 1024) {
+    server.send(503, "application/json", "{\"ok\":false,\"error\":\"low heap\"}");
+    return;
+  }
+  String host = server.hasArg("host") ? server.arg("host") : String(g_mqttHost);
+  host.trim();
+  int port = server.hasArg("port") ? server.arg("port").toInt() : (int)g_mqttPort;
+  String ca = (server.hasArg("ca") && server.arg("ca").length()) ? server.arg("ca") : g_mqttCa;
+  if (!host.length()) { server.send(400, "application/json", "{\"ok\":false,\"error\":\"nohost\"}"); return; }
+  if (port <= 0 || port > 65535) port = 8883;
+
+  // Plain TCP first, on its own socket: mbedTLS reports a refused connection and a timed-out handshake
+  // with the same -1, so without this step "nothing is listening there" would read like a TLS fault.
+  WiFiClient tcp;
+  tcp.setTimeout(3);
+  bool tcpOk = tcp.connect(host.c_str(), (uint16_t)port) == 1;
+  tcp.stop();
+
+  bool shook = false;
+  String why;
+  std::unique_ptr<WiFiClientSecure> probe;
+  if (tcpOk) {
+    probe.reset(new WiFiClientSecure());
+    probe->setInsecure();               // deliberately: we want the chain even when it does NOT verify
+    probe->setTimeout(5);
+    probe->setHandshakeTimeout(5);
+    shook = probe->connect(host.c_str(), (uint16_t)port) == 1;
+    if (!shook) {
+      char eb[128] = {0};
+      int le = probe->lastError(eb, sizeof eb);
+      why = le ? String(le) + ": " + eb : String("TLS handshake failed");
+      if (le == -1) why += " (handshake timed out -- is this really a TLS port?)";
+    }
+  } else {
+    why = "no TCP connection -- wrong host/port, or a firewall in between";
+  }
+
+  String j = String("{\"ok\":true,\"host\":") + jstr(host.c_str()) + ",\"port\":" + String(port) +
+             ",\"ca_set\":" + String(ca.length() ? "true" : "false") +
+             ",\"time_valid\":" + String(timeValid() ? "true" : "false") +
+             ",\"tcp\":" + String(tcpOk ? "true" : "false") +
+             ",\"handshake\":" + String(shook ? "true" : "false");
+  if (!shook) {
+    j += ",\"err\":" + jstr(why.c_str());
+    if (probe) probe->stop();
+    server.send(200, "application/json", j + "}");
+    return;
+  }
+
+  const mbedtls_x509_crt *chain = probe->getPeerCertificate();
+  j += ",\"chain\":[";
+  char buf[256];
+  int n = 0;
+  for (const mbedtls_x509_crt *c = chain; c && n < 4; c = c->next, n++) {   // a broker that sends more
+                                                                            // than four is not the problem
+    if (n) j += ",";
+    if (mbedtls_x509_dn_gets(buf, sizeof buf, &c->subject) < 0) buf[0] = 0;
+    j += String("{\"subject\":") + jstr(buf);
+    if (mbedtls_x509_dn_gets(buf, sizeof buf, &c->issuer) < 0) buf[0] = 0;
+    j += ",\"issuer\":" + jstr(buf);
+    j += ",\"from\":" + jstr(x509TimeStr(c->valid_from).c_str());
+    j += ",\"to\":" + jstr(x509TimeStr(c->valid_to).c_str());
+    if (timeValid()) {
+      uint64_t nowS = utcStampNow();
+      j += ",\"expired\":" + String(x509Stamp(c->valid_to) < nowS ? "true" : "false");
+      j += ",\"not_yet\":" + String(x509Stamp(c->valid_from) > nowS ? "true" : "false");
+    }
+    j += ",\"san\":" + x509SanJson(c) + "}";
+  }
+  j += "]";
+
+  if (!ca.length() || !chain) {
+    j += ",\"verify\":null";          // no CA stored: MQTTS would only encrypt, it would never verify
+  } else {
+    mbedtls_x509_crt trust;
+    mbedtls_x509_crt_init(&trust);
+    // +1: mbedtls_x509_crt_parse() only recognises PEM when the length includes the terminating NUL.
+    int pr = mbedtls_x509_crt_parse(&trust, (const unsigned char *)ca.c_str(), ca.length() + 1);
+    j += ",\"ca_parse\":" + String(pr);
+    if (pr != 0) {
+      j += ",\"verify\":null";        // the pasted CA is not a readable certificate at all
+    } else {
+      uint32_t flags = 0;
+      int vr = mbedtls_x509_crt_verify((mbedtls_x509_crt *)chain, &trust, nullptr, host.c_str(),
+                                       &flags, nullptr, nullptr);
+      j += ",\"verify\":{\"ok\":" + String(vr == 0 ? "true" : "false") + ",\"flags\":" + String(flags) +
+           ",\"reasons\":[";
+      char vi[320] = {0};
+      mbedtls_x509_crt_verify_info(vi, sizeof vi, "", flags);   // one reason per line
+      String cur;
+      bool first = true;
+      for (const char *q = vi; *q; q++) {
+        if (*q == '\n') {
+          if (cur.length()) { if (!first) j += ","; j += jstr(cur.c_str()); first = false; }
+          cur = "";
+        } else if (*q != '\r') cur += *q;
+      }
+      if (cur.length()) { if (!first) j += ","; j += jstr(cur.c_str()); }
+      j += "]}";
+    }
+    mbedtls_x509_crt_free(&trust);
+  }
+  probe->stop();
+  server.send(200, "application/json", j + "}");
 }
 
 static void handleMqttCfg() {
@@ -2657,6 +2830,7 @@ static void startServices() {
   server.on("/api/status", guard(handleStatus));
   server.on("/api/interval", HTTP_POST, guard(handleInterval));
   server.on("/api/mqtt", HTTP_POST, guard(handleMqttCfg));
+  server.on("/api/mqtt/tlsdiag", HTTP_POST, guard(handleMqttTlsDiag));
   server.on("/api/auth", HTTP_POST, guard(handleAuthCfg));   // set web Basic Auth user/pass
   server.on("/api/appass", HTTP_POST, guard(handleApPassword));  // set the setup-hotspot AP password
   server.on("/api/aplimit", HTTP_POST, guard(handleApLimit));    // setup AP only after boot / button tap
@@ -3228,6 +3402,19 @@ static void mqttService() {
       for (int i = 0; i < MAX_READERS; i++) { readers[i].mqttDiscovered = false;   // re-announce after (re)connect
                                               readers[i].mqttAvail = -1; }         // ...and re-assert online/offline
       Serial.printf("[mqtt] connected as %s, subscribed %s + reboot\n", cid.c_str(), sub.c_str());
+      g_mqttLastErr = "";
+    } else {
+      // One line that says what actually went wrong. For MQTTS the interesting part is mbedTLS's own
+      // error (negative code), because PubSubClient only ever reports "connect failed" for a rejected
+      // certificate, a name mismatch and an expired cert alike -- see /api/mqtt/tlsdiag for the detail.
+      g_mqttLastErr = mqttStateText(mqtt.state());
+      if (g_mqttTls) {
+        char eb[128] = {0};
+        int le = netTls.lastError(eb, sizeof eb);
+        if (le) g_mqttLastErr += String(" | TLS ") + le + ": " + eb;
+      }
+      Serial.printf("[mqtt] connect to %s:%u failed: %s\n", g_mqttHost, (unsigned)g_mqttPort,
+                    g_mqttLastErr.c_str());
     }
     g_mqttState = mqtt.state();
   }

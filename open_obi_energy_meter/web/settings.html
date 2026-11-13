@@ -79,7 +79,9 @@ button:disabled{opacity:.5;cursor:default}
   <textarea id=mca rows=3 placeholder="-----BEGIN CERTIFICATE-----" style="width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 10px;font-family:var(--mono);font-size:12px"></textarea>
   <div class=row><button onclick=saveMqtt()><span id=bmsave>Speichern</span></button>
    <button class=g onclick=disc()><span id=bdisc>Discovery senden</span></button>
+   <button class=g onclick=tlsDiag()><span id=btls>TLS prüfen</span></button>
    <span class=msg id=mqmsg></span></div>
+  <pre id=tlsout class=cap style="white-space:pre-wrap;word-break:break-word;margin:8px 0 0;font-family:var(--mono);font-size:12px"></pre>
  </div>
 
  <div class=card>
@@ -279,7 +281,7 @@ $('lstipd1').textContent=t('DNS 1','DNS 1');$('lstipd2').textContent=t('DNS 2 (o
 $('stipwarn').textContent=t('⚠️ Eine falsche IP/Gateway/Subnetzmaske kann das Dashboard über das Netzwerk unerreichbar machen — Wiederherstellung dann nur über den Werksreset-Taster am Gerät (setzt WLAN + alle Einstellungen zurück).','⚠️ A wrong IP/gateway/subnet mask can make the dashboard unreachable over the network — recovery then only via the device\'s factory-reset button (resets WiFi + all settings).');
 $('lhost').textContent=t('Server','Server');$('luser').textContent=t('Benutzer','User');$('lpass').textContent=t('Passwort','Password');
 $('ltopic').textContent=t('Basis-Topic','Base topic');$('bmsave').textContent=t('Speichern','Save');$('bdisc').textContent=t('Discovery senden','Send discovery');
-$('ltls').textContent=t('MQTTS (TLS-Verschlüsselung)','MQTTS (TLS encryption)');$('lca').textContent=t('CA-Zertifikat (PEM, optional)','CA certificate (PEM, optional)');
+$('btls').textContent=t('TLS prüfen','Check TLS');$('ltls').textContent=t('MQTTS (TLS-Verschlüsselung)','MQTTS (TLS encryption)');$('lca').textContent=t('CA-Zertifikat (PEM, optional)','CA certificate (PEM, optional)');
 $('hgwname').textContent=t('Gateway-Name','Gateway name');$('lgwname').textContent=t('Anzeigename (leer = Standard, auch in Home Assistant)','Display name (blank = default, also used in Home Assistant)');$('bgwname').textContent=t('Speichern','Save');
 $('hauth').textContent=t('Web-Zugang','Web access');$('lauser').textContent=t('Benutzer (leer = offen)','User (blank = open)');$('lapass').textContent=t('Passwort','Password');$('basave').textContent=t('Speichern','Save');$('blogout').textContent=t('Abmelden','Log out');
 $('lman2').textContent=t('Manuell flashen (.bin dieses Boards)','Manual flash (.bin for this board)');$('bflash').textContent=t('Flashen & neustart','Flash & reboot');
@@ -344,7 +346,7 @@ async function load(){try{
   if(s.ap)$('apstat').innerHTML=`<code>${s.ap.ssid}</code> — `+(s.ap.pass_set?`<span class="dot on"></span>${t('passwortgeschützt','password-protected')}`:`<span class="dot idle"></span>${t('offen — kein Passwort','open — no password')}`);
   const q=s.mqtt;
   const tls=q.tls?' · 🔒TLS':'';
-  $('mqstat').innerHTML=!q.enabled?`<span class="dot idle"></span>${t('deaktiviert','disabled')}`:q.connected?`<span class="dot on"></span>${t('verbunden','connected')} · ${q.host}${tls}`:`<span class="dot off"></span>${t('getrennt','disconnected')} — ${q.state}${tls}`;
+  $('mqstat').innerHTML=!q.enabled?`<span class="dot idle"></span>${t('deaktiviert','disabled')}`:q.connected?`<span class="dot on"></span>${t('verbunden','connected')} · ${q.host}${tls}`:`<span class="dot off"></span>${t('getrennt','disconnected')} — ${q.state}${tls}${q.last_err?' · '+esc(q.last_err):''}`;
   if(!cfg){cfg=true;$('mh').value=q.host||'';$('mp').value=q.port||1883;$('mu').value=q.user||'';$('mt').value=q.topic||'';
    $('mtls').checked=!!q.tls;if(q.ca_set)$('mca').placeholder=t('Zertifikat gespeichert — leer lassen zum Beibehalten','certificate saved — leave blank to keep');
    $('au').value=(s.auth&&s.auth.user)||'';$('night').checked=!!s.night_mode;$('aplim').checked=!!(s.ap&&s.ap.limit);$('numfmt').value=s.num_fmt||0;
@@ -587,6 +589,34 @@ async function saveAuth(){const u=$('au').value.trim(),p=$('ap').value;
  if(u){location.href='/login';return;}   // auth on -> (re)login with the new credentials
  $('aumsg').textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>$('aumsg').textContent='',4000);load();}
 async function logout(){await fetch('/api/logout',{method:'POST'});location.href='/login';}
+// Issue #112: a failing MQTTS connection is invisible from the outside -- the broker logs "bad
+// certificate", which is only the alert mbedTLS sends after WE rejected its certificate. /api/mqtt/tlsdiag
+// repeats the handshake without verification and verifies the received chain by hand, so the real reason
+// can be printed here. Uses whatever is currently typed in the form, so a config can be tested unsaved.
+async function tlsDiag(){const o=$('tlsout');o.textContent=t('prüfe …','checking …');
+ const b=new URLSearchParams();
+ if($('mh').value.trim())b.set('host',$('mh').value.trim());
+ if($('mp').value)b.set('port',$('mp').value);
+ if($('mca').value.trim())b.set('ca',$('mca').value.trim());   // blank = use the stored CA
+ let r;try{r=await(await fetch('/api/mqtt/tlsdiag',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b})).json();}
+ catch(e){o.textContent=t('Prüfung fehlgeschlagen','check failed');return;}
+ if(!r.ok){o.textContent=t('Prüfung nicht möglich: ','check not possible: ')+(r.error||'?');return;}
+ const L=[`${r.host}:${r.port} — `+(r.handshake?t('TLS-Handshake ok','TLS handshake ok')
+  :r.tcp===false?t('nicht erreichbar','unreachable'):t('kein TLS-Handshake','no TLS handshake'))];
+ if(!r.handshake){L.push('   '+(r.err||''));o.textContent=L.join('\n');return;}
+ (r.chain||[]).forEach((c,i)=>{L.push(`#${i+1} ${c.subject}`);
+  L.push('   '+t('ausgestellt von','issued by')+': '+c.issuer);
+  L.push('   '+t('gültig','valid')+': '+c.from+' … '+c.to);
+  if(c.expired)L.push('   ! '+t('Zertifikat ist abgelaufen — die TLS-Bibliothek dieser Firmware prüft das NICHT selbst','certificate has expired — this firmware\'s TLS library does NOT check that itself'));
+  if(c.not_yet)L.push('   ! '+t('Zertifikat ist noch nicht gültig (Uhr/Ausstellungsdatum prüfen)','certificate is not valid yet (check the clock / issue date)'));
+  if(c.san&&c.san.length)L.push('   SAN: '+c.san.join(', '));});
+ if(r.verify==null&&!r.ca_set)L.push(t('Kein CA-Zertifikat gespeichert — MQTTS verschlüsselt dann nur, ohne das Zertifikat zu prüfen.','No CA certificate stored — MQTTS then only encrypts, it does not verify the certificate.'));
+ else if(r.verify==null)L.push(t('CA-Zertifikat nicht lesbar (PEM?) — mbedTLS-Code ','CA certificate could not be parsed (PEM?) — mbedTLS code ')+r.ca_parse);
+ else if(r.verify.ok)L.push(t('Zertifikat gegen die CA geprüft ✓','certificate verified against the CA ✓'));
+ else{L.push(t('Prüfung fehlgeschlagen:','verification failed:'));(r.verify.reasons||[]).forEach(x=>L.push('   ! '+x));
+  L.push(t('Der Name oben (Host/IP) muss im CN oder in den SANs stehen — sonst nie erfolgreich.','The name dialled above (host/IP) must appear in the CN or the SANs — otherwise it can never succeed.'));}
+ if(!r.time_valid)L.push(t('Hinweis: Uhr nicht synchron — die Gültigkeitsdaten konnten nicht geprüft werden.','note: clock not synced — the validity dates could not be checked.'));
+ o.textContent=L.join('\n');}
 async function disc(){$('mqmsg').textContent='…';try{const r=await(await fetch('/api/rediscover',{method:'POST'})).json();$('mqmsg').textContent=r.ok?t('Discovery gesendet ✓','discovery sent ✓')+' ('+r.count+')':t('MQTT nicht verbunden','MQTT not connected');}catch(e){$('mqmsg').textContent='error';}setTimeout(()=>$('mqmsg').textContent='',4000);}
 async function ghCheck(){const box=$('ghbox');box.className='msg';box.textContent=t('GitHub wird geprüft…','checking GitHub…');
  try{const r=await(await fetch('/api/github/latest')).json();
