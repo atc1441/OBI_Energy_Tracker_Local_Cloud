@@ -17,6 +17,14 @@ struct Reader {
   float    lastRssi = -70;
   float    lastSnr  = 0;         // SX1262 packet SNR (dB) of the last frame from this reader
   uint8_t  key[16];
+  // A key RESTORED from NVS (loadKey() in main.cpp) has not yet proven that it is still the key the reader
+  // holds -- the reader may have been re-paired to another gateway or reset in the meantime, and nothing
+  // says so until a frame decodes. For the 1.2.x layout the payload's own CRC16 settles that. The legacy
+  // layout has no CRC (legacyValid() accepts ~11% of random plaintext, see energy_filter.h), so a restored
+  // key must additionally reproduce the softver/hardver bytes stored next to it before it is trusted.
+  bool     keyRestored = false;  // key came from NVS, no live ECDH behind it yet
+  uint8_t  keySoftver  = 0;      // reader versions seen when this key was last persisted (0 = unknown)
+  uint8_t  keyHardver  = 0;
   // identity (from the announce: cmd 17/35)
   bool     haveUuid = false;
   uint8_t  uuid[16];             // 16-byte device UUID

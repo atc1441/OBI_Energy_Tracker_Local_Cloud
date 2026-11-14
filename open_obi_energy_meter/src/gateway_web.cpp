@@ -3849,6 +3849,7 @@ void web_factory_reset() {
   { Preferences p; p.begin("obiuuid",   false); p.clear(); p.end(); }   // stored reader UUIDs
   { Preferences p; p.begin("obiassign", false); p.clear(); p.end(); }   // reader bindings (assigned/bound)
   { Preferences p; p.begin("obiival",   false); p.clear(); p.end(); }   // per-reader upload intervals
+  { Preferences p; p.begin("obikey",    false); p.clear(); p.end(); }   // per-reader TEA keys (ECDH result)
   if (g_fsOk) { LittleFS.format(); if (g_usingOtaHist) otaHist_format(); }  // wipe daily (always userdata) + raw
   Serial.println("[web] factory reset: WiFi + MQTT + login + bound readers + history cleared");
 }

@@ -96,6 +96,42 @@ static bool loadUuid(const uint8_t h[3], uint8_t uuid[16]) {
   return n == 16;
 }
 
+// The per-reader TEA key from the ECDH exchange, persisted in NVS keyed by handle like the UUID above.
+// Without this it lives in RAM only: after every reboot or firmware update haveKey is false for every
+// reader, and since both ack builders bail on !haveKey (see sendEnergyAck/sendLegacyAck) a bound 1.2.x
+// reader then gets no ack at all -- no interval push either -- until it announces again and redoes the
+// ECDH. That costs a battery-powered reader an extra pairing round on every restart and can need a manual
+// re-bind if its announce never lands in our window. Our own ECDH keypair is regenerated on each boot
+// (obi_ecdh_generate() in setup()), so the shared secret cannot be recomputed afterwards -- the derived
+// 16-byte key is the only thing that CAN be kept.
+// Stored as key[16] + softver + hardver: those two version bytes are what lets a restored key be checked
+// against a reader whose payload carries no CRC (see the legacy gate in handleFrame()).
+// NOTE: a stored key is readable by anyone who can reach the dashboard (NVS is not encrypted and /debug
+// offers a flash dump) and it authenticates our acks -- same class of secret as the WiFi/MQTT credentials
+// already in NVS, and the reason it is kept only for readers actually bound to this gateway.
+// Local Preferences per call for the same cross-core reason as saveAssigned() below.
+static void saveKey(const uint8_t h[3], const uint8_t key[16], uint8_t softver, uint8_t hardver) {
+  char k[8]; uuidKey(h, k);
+  uint8_t blob[18];
+  memcpy(blob, key, 16); blob[16] = softver; blob[17] = hardver;
+  Preferences p; p.begin("obikey", false);
+  p.putBytes(k, blob, sizeof blob);
+  p.end();
+}
+static bool loadKey(const uint8_t h[3], uint8_t key[16], uint8_t *softver, uint8_t *hardver) {
+  char k[8]; uuidKey(h, k);
+  uint8_t blob[18] = {0};
+  Preferences p; p.begin("obikey", true);
+  size_t n = p.getBytes(k, blob, sizeof blob); p.end();
+  if (n != sizeof blob) return false;
+  memcpy(key, blob, 16); *softver = blob[16]; *hardver = blob[17];
+  return true;
+}
+static void eraseKey(const uint8_t h[3]) {
+  char k[8]; uuidKey(h, k);
+  Preferences p; p.begin("obikey", false); p.remove(k); p.end();
+}
+
 // Which readers the user has accepted onto THIS gateway (persisted). Until a reader is assigned it is
 // only tracked/shown (greyed) and NOT bound or key-exchanged, so two gateways don't fight over it.
 // NOTE: use a LOCAL Preferences per call — saveAssigned runs on the web task (core 0) while loadAssigned
@@ -236,6 +272,12 @@ static Reader *addReader(const uint8_t h[3]) {
     x = Reader{}; x.used = true; x.lastSeenMs = millis(); memcpy(x.handle, h, 3);   // stamp now so a fresh entry isn't instantly pruned
     if (loadUuid(h, x.uuid)) x.haveUuid = true;     // restore a previously-seen UUID
     x.assigned = loadAssigned(h);                   // restore the accept flag (auto-binds on sight)
+    // Restore the persisted TEA key -- only for a reader actually bound to this gateway, so an unassigned
+    // reader is never keyed from flash and "Remove" really does drop everything.
+    if (x.assigned && loadKey(h, x.key, &x.keySoftver, &x.keyHardver)) {
+      x.haveKey = true; x.keyRestored = true;       // unconfirmed until a frame decodes with it
+      Serial.printf("[key] restored for %02X%02X%02X (sv %u hv %u)\n", h[0], h[1], h[2], x.keySoftver, x.keyHardver);
+    }
     uint16_t iv = loadInterval(h);                  // persisted upload interval (0 = never configured)
     x.setInterval = iv ? iv : OBI_DEFAULT_INTERVAL; // new/unconfigured reader -> default, so it's shown in UI/MQTT AND pushed in the ACK
     loadName(h, x.name, sizeof x.name);             // restore the friendly name (empty = none set)
@@ -394,6 +436,7 @@ void gw_request_interval(const uint8_t handle[3], uint16_t seconds) {
 bool gw_delete_reader(const uint8_t handle[3]) {
   saveAssigned(handle, false);        // remove the persisted binding
   saveInterval(handle, 0);            // forget the persisted upload interval too
+  eraseKey(handle);                   // and the persisted TEA key -- un-adopting must not leave it behind
   bool found = false;
   for (auto &r : readers)
     if (r.used && !memcmp(r.handle, handle, 3)) { r.assigned = false; r.haveKey = false; r.used = false; found = true; }
@@ -404,10 +447,11 @@ bool gw_delete_reader(const uint8_t handle[3]) {
 // after reboots. Dropping also forgets its key so it stops being maintained.
 bool gw_assign_reader(const uint8_t handle[3], bool on) {
   saveAssigned(handle, on);
+  if (!on) eraseKey(handle);   // drop the stored key too (also when the reader isn't in the live list)
   for (auto &r : readers)
     if (r.used && !memcmp(r.handle, handle, 3)) {
       r.assigned = on;
-      if (!on) { r.haveKey = false; r.decoded = false; bthome_forget(handle); }
+      if (!on) { r.haveKey = false; r.keyRestored = false; r.decoded = false; bthome_forget(handle); }
       return true;
     }
   return true;   // persisted even if the reader isn't currently in the live list
@@ -995,6 +1039,9 @@ static void handleRx() {
       if (obi_ecdh_compute(d + 4, secret)) {
         memcpy(r->key, secret, 16);                         // TEA key = first 16 of shared X
         r->haveKey = true;
+        r->keyRestored = false;                             // freshly negotiated -- nothing to prove
+        r->keySoftver = r->softver; r->keyHardver = r->hardver;   // 0/0 if this reader never decoded yet
+        saveKey(r->handle, r->key, r->keySoftver, r->keyHardver); // survive the next reboot / firmware update
         Serial.print("  ECDH ok, TEA key = "); hexdump(r->key, 16); Serial.println();
         sendEcdhReply(r);                                   // send our pubkey back
       } else {
@@ -1071,6 +1118,19 @@ static void handleRx() {
                                    if (energyValid(p, plen)) how = "plain/1.2.x"; }
         if (!how && !r->haveKey && legacyCmd) { memcpy(p, d + 4, plen);
                                    if (legacyValid(p, plen)) { how = "plain/legacy"; legacy = true; } }
+        // A key restored from NVS that only matched the LEGACY layout has proved nothing: that check has no
+        // CRC behind it and passes on ~11% of random plaintext, so a key the reader no longer holds could
+        // publish garbage counters -- which would then STICK, because a repeating implausible value is
+        // deliberately adopted as a new baseline (see energy_filter.h). Require the frame to reproduce the
+        // softver/hardver stored with the key as well: random plaintext manages that about once in 600k
+        // frames. Stored versions of 0 (ECDH done but no frame decoded before the reboot) never match, so
+        // such a key is dropped a few frames down and re-negotiated -- i.e. exactly the behaviour of every
+        // reboot before the key was persisted at all. A reader that updated its own firmware lands here
+        // once too, and re-pairs.
+        const char *held = nullptr;
+        if (how && legacy && r->keyRestored && (p[0] != r->keySoftver || p[1] != r->keyHardver)) {
+          held = how; how = nullptr;
+        }
         if (how) {
           Serial.printf("  energy [%s]: ", how); hexdump(p, plen); Serial.println();
           if (legacy) printEnergyOld(p, plen); else printEnergy(p, plen);
@@ -1078,6 +1138,17 @@ static void handleRx() {
           // still-TEA raw frame
           gw_radio_log_dec(rlogIdx, p, (int)plen, legacy ? describeEnergyOld(p, plen) : describeEnergy(p, plen));
           r->decoded = true; r->decFails = 0; r->inBootloader = false;   // back to normal app operation
+          // The key behind this frame is confirmed now (CRC16 for 1.2.x, softver/hardver match for legacy).
+          r->keyRestored = false;
+          // Keep the stored version bytes current -- first decode after an ECDH, or the reader updated its
+          // own firmware -- so the next restore can still check itself.
+          if (r->haveKey) {
+            uint8_t ksv = legacy ? p[0] : p[2], khv = legacy ? p[1] : p[3];
+            if (ksv != r->keySoftver || khv != r->keyHardver) {
+              r->keySoftver = ksv; r->keyHardver = khv;
+              saveKey(r->handle, r->key, ksv, khv);
+            }
+          }
           // OTA auto-finish: if THIS reader pulled our armed image (was in its bootloader for the OTA) and is
           // now decoding energy again, it has flashed + rebooted into the new firmware -> the update is done.
           // Disarm so the GUI/MQTT stop showing "OTA in progress" and we stop advertising the update version.
@@ -1203,10 +1274,14 @@ static void handleRx() {
             // else: window not full yet OR counters unchanged -- keep the previous calcPower and anchor
           }
         } else {
-          Serial.print("  energy undecoded. raw: "); hexdump(d + 4, plen); Serial.println();
+          if (held)
+            Serial.printf("  energy [%s] rejected: restored key unconfirmed (sv %u!=%u / hv %u!=%u)\n",
+                          held, p[0], r->keySoftver, p[1], r->keyHardver);
+          else { Serial.print("  energy undecoded. raw: "); hexdump(d + 4, plen); Serial.println(); }
           // a keyed reader whose frames stop decrypting was reset -> drop the stale key and re-pair
           if (r->haveKey && ++r->decFails >= 3) {
-            r->haveKey = false; r->decoded = false; r->decFails = 0;
+            r->haveKey = false; r->decoded = false; r->decFails = 0; r->keyRestored = false;
+            eraseKey(r->handle);   // and the persisted copy, or the next boot would restore the stale key
             Serial.println("  (key stale — reader was reset; will re-pair on next announce)");
           }
         }
