@@ -67,12 +67,12 @@ button:disabled{opacity:.5;cursor:default}
   <h3>⚙ MQTT</h3>
   <div class=stat id=mqstat>…</div>
   <div class=grid>
-   <div><label id=lhost>Server</label><input id=mh placeholder=192.168.1.10></div>
+   <div><label id=lhost>Server</label><input id=mh placeholder=192.168.1.10 maxlength=63></div>
    <div><label>Port</label><input id=mp type=number placeholder=1883></div>
-   <div><label id=luser>Benutzer</label><input id=mu></div>
-   <div><label id=lpass>Passwort</label><input id=mpw type=password placeholder=••••></div>
+   <div><label id=luser>Benutzer</label><input id=mu maxlength=63></div>
+   <div><label id=lpass>Passwort</label><input id=mpw type=password placeholder=•••• maxlength=127></div>
   </div>
-  <label id=ltopic>Basis-Topic</label><input id=mt placeholder=obi/gateway>
+  <label id=ltopic>Basis-Topic</label><input id=mt placeholder=obi/gateway maxlength=47>
   <label style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
    <input type=checkbox id=mtls style="width:auto;margin:0"><span id=ltls>MQTTS (TLS-Verschlüsselung)</span></label>
   <label id=lca>CA-Zertifikat (PEM, optional)</label>
@@ -338,6 +338,7 @@ $('lorasf').options[0].textContent=t('SF7 (Standard)','SF7 (default)');$('lorasf
 $('lorawarn').textContent=t('Nur ändern, wenn ALLE Reader bereits mit der passenden SF-Firmware geflasht sind — sonst verlieren sie sofort nach dem Neustart die Verbindung. Änderung wirkt erst nach einem Neustart des Gateways.','Only change this once ALL readers are already flashed with matching-SF firmware — otherwise they lose the connection the moment this reboots. Takes effect after a gateway reboot.');
 $('lorawarn9').textContent=t('⚠️ SF9 kostet deutlich mehr Sendezeit pro Übertragung (grob das 3,4-Fache) und damit spürbar mehr Akku beim Reader als SF7 — nur für Reader mit schwachem Empfang sinnvoll. Inoffizielle, ungetestete Anpassung der Reader-Firmware: Nutzung auf eigenes Risiko.','⚠️ SF9 costs noticeably more airtime per transmission (roughly 3.4×) and therefore meaningfully more reader battery than SF7 — only worth it for readers with a weak signal. An unofficial, off-label reader firmware patch: use at your own risk.');
 $('blorasave').textContent=t('Speichern','Save');
+let mqMax={host:63,user:63,pass:127,topic:47};   // firmware buffer limits; refreshed from /api/status
 let cfg=false,tzc=false,ghc=false,loraSfc=false,ftpc=false,ghBusy=false,ecoc=false,ecoSel='auto',ecoPairing=false,blec=false,bleSel='';
 function loraSfChanged(){$('lorawarn9').style.display=$('lorasf').value==='9'?'':'none';}
 async function load(){try{
@@ -347,6 +348,8 @@ async function load(){try{
   const q=s.mqtt;
   const tls=q.tls?' · 🔒TLS':'';
   $('mqstat').innerHTML=!q.enabled?`<span class="dot idle"></span>${t('deaktiviert','disabled')}`:q.connected?`<span class="dot on"></span>${t('verbunden','connected')} · ${q.host}${tls}`:`<span class="dot off"></span>${t('getrennt','disconnected')} — ${q.state}${tls}${q.last_err?' · '+esc(q.last_err):''}`;
+  // take the real buffer sizes from the firmware so the input limits can't drift away from it
+  if(q.max){mqMax=q.max;$('mh').maxLength=q.max.host;$('mu').maxLength=q.max.user;$('mpw').maxLength=q.max.pass;$('mt').maxLength=q.max.topic;}
   if(!cfg){cfg=true;$('mh').value=q.host||'';$('mp').value=q.port||1883;$('mu').value=q.user||'';$('mt').value=q.topic||'';
    $('mtls').checked=!!q.tls;if(q.ca_set)$('mca').placeholder=t('Zertifikat gespeichert — leer lassen zum Beibehalten','certificate saved — leave blank to keep');
    $('au').value=(s.auth&&s.auth.user)||'';$('night').checked=!!s.night_mode;$('aplim').checked=!!(s.ap&&s.ap.limit);$('numfmt').value=s.num_fmt||0;
@@ -578,9 +581,21 @@ async function saveStaticIp(){const on=$('stipon').checked;
   if(!r.ok){$('stipmsg').textContent=t('Speichern fehlgeschlagen: ','save failed: ')+(r.err||'?');return;}
  }catch(e){}   // the gateway reboots right after answering -- a dropped connection here is expected, not a failure
  $('stipmsg').textContent=t('gespeichert ✓ — Gateway startet neu… Dashboard ggf. unter neuer IP erneut öffnen.','saved ✓ — gateway restarting… reopen the dashboard at the new IP if it changed.');}
-async function saveMqtt(){const b=new URLSearchParams();b.set('host',$('mh').value);b.set('port',$('mp').value||1883);b.set('user',$('mu').value);b.set('topic',$('mt').value);if($('mpw').value)b.set('pass',$('mpw').value);
+async function saveMqtt(){
+ // Warn BEFORE saving: a value longer than the firmware buffer used to be truncated silently and the
+ // broker then refused the connection with nothing in the UI explaining it. maxlength= above stops normal
+ // typing/pasting; this catches anything that gets past it (and tells the user which field is the problem).
+ for(const f of [['mh',mqMax.host,t('Server','server')],['mu',mqMax.user,t('Benutzer','user')],
+                 ['mpw',mqMax.pass,t('Passwort','password')],['mt',mqMax.topic,t('Basis-Topic','base topic')]])
+  if($(f[0]).value.length>f[1]){$('mqmsg').textContent=f[2]+t(' zu lang: maximal ',' too long: max ')+f[1]+t(' Zeichen',' characters');return;}
+ const b=new URLSearchParams();b.set('host',$('mh').value);b.set('port',$('mp').value||1883);b.set('user',$('mu').value);b.set('topic',$('mt').value);if($('mpw').value)b.set('pass',$('mpw').value);
  b.set('tls',$('mtls').checked?'1':'0');if($('mca').value.trim())b.set('ca',$('mca').value.trim());  // blank CA = keep existing / encrypt-only
- $('mqmsg').textContent='…';await fetch('/api/mqtt',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b});$('mpw').value='';$('mqmsg').textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>$('mqmsg').textContent='',3000);load();}
+ $('mqmsg').textContent='…';
+ let ok=true,msg='';
+ try{const r=await(await fetch('/api/mqtt',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b})).json();
+     if(r&&r.ok===false){ok=false;msg=r.err||'?';}}catch(e){}
+ if(!ok){$('mqmsg').textContent=t('nicht gespeichert — ','not saved — ')+msg;return;}
+ $('mpw').value='';$('mqmsg').textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>$('mqmsg').textContent='',3000);load();}
 async function saveAuth(){const u=$('au').value.trim(),p=$('ap').value;
  if(u&&!p){$('aumsg').textContent=t('Benutzer und Passwort nötig','user and password required');return;}   // no user-without-password
  const b=new URLSearchParams();b.set('user',u);if(p)b.set('pass',p);

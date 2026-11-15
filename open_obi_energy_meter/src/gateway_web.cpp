@@ -103,8 +103,13 @@ static float gwTempC() {      // internal temperature sensor (°C); NAN on chips
 
 static char     g_mqttHost[64] = "";
 static uint16_t g_mqttPort = 1883;
-static char     g_mqttUser[32] = "";
-static char     g_mqttPass[32] = "";
+// MQTT 3.1.1 allows user/password up to 65535 bytes each and brokers happily issue long generated
+// passwords, so 31 usable characters was simply too small -- see handleMqttCfg(). The CONNECT packet
+// (client id + user + password + LWT topic) still fits the 1 KB PubSubClient buffer set in web_begin()
+// several times over -- which is also why a cap stays: PubSubClient::connect() assembles that packet with
+// no length check of its own (unlike publish(), which does bounds-check), so the limit has to live here.
+static char     g_mqttUser[64] = "";
+static char     g_mqttPass[128] = "";
 static char     g_mqttTopic[48] = "obi/gateway";
 static bool     g_mqttTls = false;   // MQTTS: wrap the MQTT socket in TLS (WiFiClientSecure). Broker side only.
 static String   g_mqttCa;            // optional PEM CA cert to verify the broker; empty = encrypt-only (setInsecure)
@@ -456,6 +461,13 @@ static String statusJson() {
   j += ",\"state\":" + jstr(mqttStateText(g_mqttState));
   j += ",\"last_err\":" + jstr(g_mqttLastErr.c_str());   // "" while it has never failed since boot
   j += ",\"pub_count\":" + String(g_mqttPubCount);
+  // What the fixed-size buffers above can actually hold (usable characters, excluding the NUL). The
+  // Settings page turns these into maxlength= and into its own warning, so the UI limit can never drift
+  // away from the firmware's.
+  j += ",\"max\":{\"host\":" + String((uint32_t)sizeof g_mqttHost - 1) +
+       ",\"user\":" + String((uint32_t)sizeof g_mqttUser - 1) +
+       ",\"pass\":" + String((uint32_t)sizeof g_mqttPass - 1) +
+       ",\"topic\":" + String((uint32_t)sizeof g_mqttTopic - 1) + "}";
   j += ",\"last_pub_s\":" + String(lastPub) + "}";
   j += ",\"auth\":{\"enabled\":" + String(g_authUser[0] ? "true" : "false") + ",\"user\":" + jstr(g_authUser) + "}";
   // reader OTA status
@@ -853,7 +865,30 @@ static void handleMqttTlsDiag() {
   server.send(200, "application/json", j + "}");
 }
 
+// Every text field here lands in a fixed-size buffer, and strlcpy() would cut it to fit WITHOUT saying
+// so. For a password that is the worst possible failure mode: the save reports success, the broker then
+// refuses the connection, and nothing in the UI connects the two (reported from the field: a password of
+// 32 characters or more failed "silently" -- the buffer held 31). So the lengths are checked first and an
+// over-long field rejects the whole save, naming the field and its limit; nothing is stored or applied.
+// The buffers are much larger now too, so this should only ever fire on a genuinely extreme value.
+static bool mqttArgFits(const char *name, size_t cap, const char *label, String &err) {
+  if (!server.hasArg(name)) return true;
+  size_t n = server.arg(name).length();
+  if (n < cap) return true;
+  err = String(label) + ": " + String((uint32_t)n) + " > " + String((uint32_t)cap - 1);
+  return false;
+}
+
 static void handleMqttCfg() {
+  String err;
+  if (!mqttArgFits("host",  sizeof g_mqttHost,  "host",     err) ||
+      !mqttArgFits("user",  sizeof g_mqttUser,  "user",     err) ||
+      !mqttArgFits("pass",  sizeof g_mqttPass,  "password", err) ||
+      !mqttArgFits("topic", sizeof g_mqttTopic, "topic",    err)) {
+    Serial.printf("[mqtt] config rejected — %s\n", err.c_str());
+    server.send(400, "application/json", "{\"ok\":false,\"err\":" + jstr(err.c_str()) + "}");
+    return;
+  }
   if (server.hasArg("host")) strlcpy(g_mqttHost, server.arg("host").c_str(), sizeof g_mqttHost);
   if (server.hasArg("port")) g_mqttPort = server.arg("port").toInt();
   if (server.hasArg("user")) strlcpy(g_mqttUser, server.arg("user").c_str(), sizeof g_mqttUser);
