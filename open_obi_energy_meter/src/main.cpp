@@ -201,7 +201,11 @@ static void loadBoxCfg(const uint8_t h[3], char *out, size_t outsz) {
 // Per-reader price override + day/night tariff + §14a HT/ST/NT tariff, packed as one CSV string (like
 // boxcfg) so the whole set stays atomic: "priceCent,exportCent,nightOn,nightStart,nightEnd,nightPriceCent,
 // tariffMode,htPriceCent,ntPriceCent,ht0s,ht0e,ht1s,ht1e,nt0s,nt0e,nt1s,nt1e" (17 fields; the first 6 are the
-// original day/night-only format). Survives reboot AND re-pair, same as name/boxcfg.
+// original day/night-only format), followed by the same 8 HT/NT window edges again as MINUTES since
+// midnight (25 fields in total). The windows are stored twice on purpose: minutes are what the firmware
+// actually uses, while the hour fields in slots 10-17 stay a rounded approximation purely so a DOWNGRADE to
+// a firmware that predates quarter-hour windows (issue #116) still finds a sane whole-hour config instead of
+// reading 645 as an hour. Survives reboot AND re-pair, same as name/boxcfg.
 // Backward/forward compat: loadPriceCfg() accepts any prefix of these fields (sscanf just stops matching
 // once the string runs out, and every field already has a sane default), so a blob written by an OLDER
 // firmware (only the first 6 fields) loads fine -- tariffMode defaults to 0 and gets derived from the old
@@ -210,11 +214,18 @@ static void loadBoxCfg(const uint8_t h[3], char *out, size_t outsz) {
 // HT/ST/NT exists in the first place).
 static void savePriceCfg(const uint8_t h[3], const Reader &r) {
   char k[8]; uuidKey(h, k);
-  char buf[140];
-  snprintf(buf, sizeof buf, "%.2f,%.2f,%d,%u,%u,%.2f,%u,%.2f,%.2f,%u,%u,%u,%u,%u,%u,%u,%u",
+  uint8_t hh[8];   // the rounded hour approximation for the legacy slots (see the note above)
+  obi_window_hours(r.htStart[0], r.htEnd[0], &hh[0], &hh[1]);
+  obi_window_hours(r.htStart[1], r.htEnd[1], &hh[2], &hh[3]);
+  obi_window_hours(r.ntStart[0], r.ntEnd[0], &hh[4], &hh[5]);
+  obi_window_hours(r.ntStart[1], r.ntEnd[1], &hh[6], &hh[7]);
+  char buf[220];
+  snprintf(buf, sizeof buf,
+           "%.2f,%.2f,%d,%u,%u,%.2f,%u,%.2f,%.2f,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u",
            r.priceCentOverride, r.exportCentOverride, r.nightTariffOn ? 1 : 0,
            r.nightStartHour, r.nightEndHour, r.nightPriceCent,
            r.tariffMode, r.htPriceCent, r.ntPriceCent,
+           hh[0], hh[1], hh[2], hh[3], hh[4], hh[5], hh[6], hh[7],
            r.htStart[0], r.htEnd[0], r.htStart[1], r.htEnd[1],
            r.ntStart[0], r.ntEnd[0], r.ntStart[1], r.ntEnd[1]);
   Preferences p; p.begin("obiprice", false); p.putString(k, buf); p.end();
@@ -222,7 +233,7 @@ static void savePriceCfg(const uint8_t h[3], const Reader &r) {
 static void loadPriceCfg(const uint8_t h[3], Reader &r) {
   char k[8]; uuidKey(h, k);
   Preferences p; p.begin("obiprice", true);
-  char buf[140]; buf[0] = 0;
+  char buf[220]; buf[0] = 0;
   p.getString(k, buf, sizeof buf);
   p.end();
   r.priceCentOverride = -1; r.exportCentOverride = -1; r.nightTariffOn = false;
@@ -234,9 +245,11 @@ static void loadPriceCfg(const uint8_t h[3], Reader &r) {
   float pc = -1, ec = -1, np = -1, hp = -1, ntp = -1;
   int on = 0, sh = 22, eh = 6, mode = 0;
   int h0s = 0, h0e = 0, h1s = 0, h1e = 0, n0s = 0, n0e = 0, n1s = 0, n1e = 0;
-  int got = sscanf(buf, "%f,%f,%d,%d,%d,%f,%d,%f,%f,%d,%d,%d,%d,%d,%d,%d,%d",
+  int m0s = 0, m0e = 0, m1s = 0, m1e = 0, q0s = 0, q0e = 0, q1s = 0, q1e = 0;
+  int got = sscanf(buf, "%f,%f,%d,%d,%d,%f,%d,%f,%f,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
                     &pc, &ec, &on, &sh, &eh, &np, &mode, &hp, &ntp,
-                    &h0s, &h0e, &h1s, &h1e, &n0s, &n0e, &n1s, &n1e);
+                    &h0s, &h0e, &h1s, &h1e, &n0s, &n0e, &n1s, &n1e,
+                    &m0s, &m0e, &m1s, &m1e, &q0s, &q0e, &q1s, &q1e);
   if (got < 2) return;
   r.priceCentOverride = pc; r.exportCentOverride = ec; r.nightTariffOn = on != 0;
   if (sh >= 0 && sh <= 23) r.nightStartHour = (uint8_t)sh;
@@ -248,10 +261,14 @@ static void loadPriceCfg(const uint8_t h[3], Reader &r) {
   } else {
     r.tariffMode = r.nightTariffOn ? 1 : 0;   // old blob -- derive from the day/night flag it does have
   }
-  if (got >= 17) {
-    auto h8 = [](int v) -> uint8_t { return (v >= 0 && v <= 23) ? (uint8_t)v : 0; };
-    r.htStart[0] = h8(h0s); r.htEnd[0] = h8(h0e); r.htStart[1] = h8(h1s); r.htEnd[1] = h8(h1e);
-    r.ntStart[0] = h8(n0s); r.ntEnd[0] = h8(n0e); r.ntStart[1] = h8(n1s); r.ntEnd[1] = h8(n1e);
+  if (got >= 25) {        // written by a firmware with minute-precise windows -- these are authoritative
+    auto m16 = [](int v) -> uint16_t { return (v >= 0 && v < OBI_DAY_MINUTES) ? (uint16_t)v : 0; };
+    r.htStart[0] = m16(m0s); r.htEnd[0] = m16(m0e); r.htStart[1] = m16(m1s); r.htEnd[1] = m16(m1e);
+    r.ntStart[0] = m16(q0s); r.ntEnd[0] = m16(q0e); r.ntStart[1] = m16(q1s); r.ntEnd[1] = m16(q1e);
+  } else if (got >= 17) {   // hour-only blob from an older firmware -- same windows, on the hour
+    auto h60 = [](int v) -> uint16_t { return (v >= 0 && v <= 23) ? (uint16_t)(v * 60) : 0; };
+    r.htStart[0] = h60(h0s); r.htEnd[0] = h60(h0e); r.htStart[1] = h60(h1s); r.htEnd[1] = h60(h1e);
+    r.ntStart[0] = h60(n0s); r.ntEnd[0] = h60(n0e); r.ntStart[1] = h60(n1s); r.ntEnd[1] = h60(n1e);
   }
   // Re-sync to whatever tariffMode was actually resolved above -- normally already consistent (savePriceCfg
   // always writes nightTariffOn = (tariffMode==1)), but this keeps a hand-edited or otherwise inconsistent
@@ -510,8 +527,8 @@ bool gw_set_reader_boxcfg(const uint8_t handle[3], const char *cfg) {
 bool gw_set_reader_price(const uint8_t handle[3], float priceCent, float exportCent,
                           bool nightOn, uint8_t nightStart, uint8_t nightEnd, float nightPriceCent,
                           uint8_t tariffMode, float htPriceCent, float ntPriceCent,
-                          uint8_t ht0s, uint8_t ht0e, uint8_t ht1s, uint8_t ht1e,
-                          uint8_t nt0s, uint8_t nt0e, uint8_t nt1s, uint8_t nt1e) {
+                          uint16_t ht0s, uint16_t ht0e, uint16_t ht1s, uint16_t ht1e,
+                          uint16_t nt0s, uint16_t nt0e, uint16_t nt1s, uint16_t nt1e) {
   (void)nightOn;   // superseded by the tariffMode-derived value below -- kept as a param for API stability
   for (auto &r : readers)
     if (r.used && !memcmp(r.handle, handle, 3)) {
@@ -525,10 +542,10 @@ bool gw_set_reader_price(const uint8_t handle[3], float priceCent, float exportC
       r.nightStartHour = (uint8_t)(nightStart % 24); r.nightEndHour = (uint8_t)(nightEnd % 24);
       r.nightPriceCent = nightPriceCent;
       r.htPriceCent = htPriceCent; r.ntPriceCent = ntPriceCent;
-      r.htStart[0] = (uint8_t)(ht0s % 24); r.htEnd[0] = (uint8_t)(ht0e % 24);
-      r.htStart[1] = (uint8_t)(ht1s % 24); r.htEnd[1] = (uint8_t)(ht1e % 24);
-      r.ntStart[0] = (uint8_t)(nt0s % 24); r.ntEnd[0] = (uint8_t)(nt0e % 24);
-      r.ntStart[1] = (uint8_t)(nt1s % 24); r.ntEnd[1] = (uint8_t)(nt1e % 24);
+      r.htStart[0] = (uint16_t)(ht0s % OBI_DAY_MINUTES); r.htEnd[0] = (uint16_t)(ht0e % OBI_DAY_MINUTES);
+      r.htStart[1] = (uint16_t)(ht1s % OBI_DAY_MINUTES); r.htEnd[1] = (uint16_t)(ht1e % OBI_DAY_MINUTES);
+      r.ntStart[0] = (uint16_t)(nt0s % OBI_DAY_MINUTES); r.ntEnd[0] = (uint16_t)(nt0e % OBI_DAY_MINUTES);
+      r.ntStart[1] = (uint16_t)(nt1s % OBI_DAY_MINUTES); r.ntEnd[1] = (uint16_t)(nt1e % OBI_DAY_MINUTES);
       savePriceCfg(handle, r);
       // A tariff-mode change alters which zone-breakdown sensors are relevant (day/night vs HT/ST/NT) --
       // re-announce so HA drops the no-longer-relevant ones and picks up the newly-relevant ones (see

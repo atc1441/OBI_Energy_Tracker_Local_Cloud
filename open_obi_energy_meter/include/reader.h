@@ -2,6 +2,7 @@
 #pragma once
 #include <Arduino.h>
 #include "energy_filter.h"   // obi_na() + the counter plausibility rules shared with the host tests
+#include "tariff_window.h"   // minute-of-day tariff windows + their wire format, also host-tested
 
 struct Reader {
   bool     used     = false;
@@ -94,8 +95,13 @@ struct Reader {
                                      // 2-zone-or-off config either way -- see savePriceCfg()/loadPriceCfg().
   float    htPriceCent = -1;        // Hochlast price ct/kWh; -1 = not set (falls back to priceCentOverride)
   float    ntPriceCent = -1;        // Niedriglast price ct/kWh; -1 = falls back to priceCentOverride
-  uint8_t  htStart[2] = {0, 0}, htEnd[2] = {0, 0};   // up to 2 HT windows
-  uint8_t  ntStart[2] = {0, 0}, ntEnd[2] = {0, 0};   // up to 2 NT windows
+  // Window edges are MINUTES SINCE LOCAL MIDNIGHT (0..1439), not whole hours: grid operators define §14a
+  // windows on quarter hours since metering moved to 15-minute intervals (e.g. HT 10:45-12:30). The two
+  // conventions are unchanged -- start == end means the slot is unused, start > end wraps past midnight.
+  // See tariff_window.h for the window/zone rules and obi_parse_minute() for the accepted spellings; a
+  // config stored by a firmware that only knew hours loads as hour*60 (loadPriceCfg() in main.cpp).
+  uint16_t htStart[2] = {0, 0}, htEnd[2] = {0, 0};   // up to 2 HT windows
+  uint16_t ntStart[2] = {0, 0}, ntEnd[2] = {0, 0};   // up to 2 NT windows
 };
 
 // defined in main.cpp
@@ -122,13 +128,14 @@ bool gw_assign_reader(const uint8_t handle[3], bool on);              // accept 
 bool gw_set_reader_name(const uint8_t handle[3], const char *name);   // set ("" clears) the friendly name; false = unknown reader
 bool gw_set_reader_boxcfg(const uint8_t handle[3], const char *cfg);  // set ("" clears) the dashboard box layout; false = unknown reader
 // set (or clear, with a negative price) a reader's price override / day-night tariff / §14a HT-ST-NT tariff;
-// false = unknown reader. nightStart/nightEnd and every htXs/htXe/ntXs/ntXe are hours 0-23 (a pair with
-// start==end means "unused"); the caller always sends the full set together (see /api/reader/price).
+// false = unknown reader. nightStart/nightEnd are hours 0-23; every htXs/htXe/ntXs/ntXe is a MINUTE OF DAY
+// 0-1439 (a pair with start==end means "unused", start>end wraps past midnight -- see tariff_window.h).
+// The caller always sends the full set together (see /api/reader/price).
 bool gw_set_reader_price(const uint8_t handle[3], float priceCent, float exportCent,
                           bool nightOn, uint8_t nightStart, uint8_t nightEnd, float nightPriceCent,
                           uint8_t tariffMode, float htPriceCent, float ntPriceCent,
-                          uint8_t ht0s, uint8_t ht0e, uint8_t ht1s, uint8_t ht1e,
-                          uint8_t nt0s, uint8_t nt0e, uint8_t nt1s, uint8_t nt1e);
+                          uint16_t ht0s, uint16_t ht0e, uint16_t ht1s, uint16_t ht1e,
+                          uint16_t nt0s, uint16_t nt0e, uint16_t nt1s, uint16_t nt1e);
 void gw_pair_all(uint16_t seconds);                                   // open a window that auto-assigns every reader
 uint32_t gw_pair_remaining_s();                                       // seconds left in the auto-pair window (0 = off)
 

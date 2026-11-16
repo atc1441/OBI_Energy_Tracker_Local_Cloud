@@ -350,10 +350,22 @@ static String readersJson() {
     j += ",\"tariff_mode\":" + String(r.tariffMode);
     j += ",\"ht_price_cent\":" + (r.htPriceCent >= 0 ? String(r.htPriceCent, 2) : String("null"));
     j += ",\"nt_price_cent\":" + (r.ntPriceCent >= 0 ? String(r.ntPriceCent, 2) : String("null"));
-    j += ",\"ht_win\":[" + String(r.htStart[0]) + "," + String(r.htEnd[0]) + "," +
-                            String(r.htStart[1]) + "," + String(r.htEnd[1]) + "]";
-    j += ",\"nt_win\":[" + String(r.ntStart[0]) + "," + String(r.ntEnd[0]) + "," +
-                            String(r.ntStart[1]) + "," + String(r.ntEnd[1]) + "]";
+    // ht_win/nt_win are the ORIGINAL whole-hour arrays, kept (rounded) for anything written against them;
+    // ht_win_min/nt_win_min carry the real minute-of-day edges the firmware works with and are what the
+    // History page prefills its HH:MM fields from. See tariff_window.h / issue #116.
+    { uint8_t hw[8];
+      obi_window_hours(r.htStart[0], r.htEnd[0], &hw[0], &hw[1]);
+      obi_window_hours(r.htStart[1], r.htEnd[1], &hw[2], &hw[3]);
+      obi_window_hours(r.ntStart[0], r.ntEnd[0], &hw[4], &hw[5]);
+      obi_window_hours(r.ntStart[1], r.ntEnd[1], &hw[6], &hw[7]);
+      j += ",\"ht_win\":[" + String(hw[0]) + "," + String(hw[1]) + "," +
+                              String(hw[2]) + "," + String(hw[3]) + "]";
+      j += ",\"nt_win\":[" + String(hw[4]) + "," + String(hw[5]) + "," +
+                              String(hw[6]) + "," + String(hw[7]) + "]"; }
+    j += ",\"ht_win_min\":[" + String(r.htStart[0]) + "," + String(r.htEnd[0]) + "," +
+                                String(r.htStart[1]) + "," + String(r.htEnd[1]) + "]";
+    j += ",\"nt_win_min\":[" + String(r.ntStart[0]) + "," + String(r.ntEnd[0]) + "," +
+                                String(r.ntStart[1]) + "," + String(r.ntEnd[1]) + "]";
     j += "}";
   }
   return j + "]";
@@ -647,6 +659,17 @@ static void handleBoxCfg() {
 // in main.cpp. The tariff card always sends its own scheme's fields together with `mode`, but the OTHER
 // scheme's fields are simply left as whatever this reader already had saved (read back below), so switching
 // from mode 1 to 2 and back doesn't lose a previously-entered night window or HT/NT setup.
+// The eight §14a window edges (ht0s/ht0e/ht1s/ht1e/nt0s/nt0e/nt1s/nt1e) accept "HH:MM", a bare hour 0-23
+// (what they meant before quarter-hour windows existed, so older clients keep working) or bare minutes
+// since midnight -- obi_parse_minute() in tariff_window.h, which also leaves the stored value alone if the
+// field is malformed. nstart/nend (day/night scheme) remain whole hours.
+// One §14a window edge off the wire, keeping whatever is already stored when the field is absent or
+// malformed. See obi_parse_minute() in tariff_window.h for the accepted spellings.
+static uint16_t winArg(const char *name, uint16_t cur) {
+  if (!server.hasArg(name)) return cur;
+  return obi_parse_minute(server.arg(name).c_str(), cur);
+}
+
 static void handleReaderPrice() {
   String id = server.arg("id");
   if (id.length() != 6) { server.send(400, "application/json", "{\"ok\":false}"); return; }
@@ -654,7 +677,7 @@ static void handleReaderPrice() {
   for (int i = 0; i < 3; i++) h[i] = (uint8_t)strtol(id.substring(i * 2, i * 2 + 2).c_str(), nullptr, 16);
   float cent = -1, ecent = -1, nprice = -1, htprice = -1, ntprice = -1;
   bool night = false; int nstart = 22, nend = 6, mode = 0;
-  int ht0s = 0, ht0e = 0, ht1s = 0, ht1e = 0, nt0s = 0, nt0e = 0, nt1s = 0, nt1e = 0;
+  uint16_t ht0s = 0, ht0e = 0, ht1s = 0, ht1e = 0, nt0s = 0, nt0e = 0, nt1s = 0, nt1e = 0;
   for (int i = 0; i < MAX_READERS; i++)
     if (readers[i].used && !memcmp(readers[i].handle, h, 3)) {
       Reader &r = readers[i];
@@ -674,14 +697,10 @@ static void handleReaderPrice() {
   if (server.hasArg("mode")) mode = server.arg("mode").toInt();
   if (server.hasArg("htp")) htprice = server.arg("htp").toFloat();
   if (server.hasArg("ntp")) ntprice = server.arg("ntp").toFloat();
-  if (server.hasArg("ht0s")) ht0s = server.arg("ht0s").toInt();
-  if (server.hasArg("ht0e")) ht0e = server.arg("ht0e").toInt();
-  if (server.hasArg("ht1s")) ht1s = server.arg("ht1s").toInt();
-  if (server.hasArg("ht1e")) ht1e = server.arg("ht1e").toInt();
-  if (server.hasArg("nt0s")) nt0s = server.arg("nt0s").toInt();
-  if (server.hasArg("nt0e")) nt0e = server.arg("nt0e").toInt();
-  if (server.hasArg("nt1s")) nt1s = server.arg("nt1s").toInt();
-  if (server.hasArg("nt1e")) nt1e = server.arg("nt1e").toInt();
+  ht0s = winArg("ht0s", ht0s); ht0e = winArg("ht0e", ht0e);
+  ht1s = winArg("ht1s", ht1s); ht1e = winArg("ht1e", ht1e);
+  nt0s = winArg("nt0s", nt0s); nt0e = winArg("nt0e", nt0e);
+  nt1s = winArg("nt1s", nt1s); nt1e = winArg("nt1e", nt1e);
   if (cent < 0) cent = -1; else if (cent > 1000) cent = 1000;
   if (ecent < 0) ecent = -1; else if (ecent > 1000) ecent = 1000;
   if (nprice < 0) nprice = -1; else if (nprice > 1000) nprice = 1000;
@@ -690,11 +709,9 @@ static void handleReaderPrice() {
   if (nstart < 0 || nstart > 23) nstart = 22;
   if (nend < 0 || nend > 23) nend = 6;
   if (mode < 0 || mode > 2) mode = 0;
-  auto h24 = [](int v) -> uint8_t { return (uint8_t)(((v % 24) + 24) % 24); };
   if (gw_set_reader_price(h, cent, ecent, night, (uint8_t)nstart, (uint8_t)nend, nprice,
                           (uint8_t)mode, htprice, ntprice,
-                          h24(ht0s), h24(ht0e), h24(ht1s), h24(ht1e),
-                          h24(nt0s), h24(nt0e), h24(nt1s), h24(nt1e)))
+                          ht0s, ht0e, ht1s, ht1e, nt0s, nt0e, nt1s, nt1e))
     server.send(200, "application/json", "{\"ok\":true}");
   else server.send(400, "application/json", "{\"ok\":false}");
 }
@@ -2154,32 +2171,30 @@ static void beginDay(int slot, const String &id, uint32_t dayStart) {
   d.htWh = 0; d.stWh = 0; d.ntWh = 0;      // ...and the live HT/ST/NT split fresh
 }
 
-// Is hour `h` (0-23) inside the [s,e) window? A degenerate window (s==e) is "unused"/always false -- shared
-// convention for every hour-window field in this file (nightStartHour/nightEndHour, htStart/htEnd,
-// ntStart/ntEnd). Wraps past midnight when s >= e (e.g. 22..6 means "22:00 through 05:59").
-static bool inHourWindow(uint8_t s, uint8_t e, int h) {
-  if (s == e) return false;
-  return s < e ? (h >= s && h < e) : (h >= s || h < e);
+// Minute of the local day (0..1439) for `now` -- the resolution every tariff window is evaluated at, so a
+// §14a window can start or end on a quarter hour (issue #116). The windows themselves and the [s,e)/wrap/
+// unused rules live in tariff_window.h, shared with the host tests.
+static uint16_t localMinuteOfDay(time_t now) {
+  struct tm lt; localtime_r(&now, &lt);
+  return (uint16_t)(lt.tm_hour * 60 + lt.tm_min);
 }
 
 // Is `now` inside reader `r`'s configured night window? Off (always "day") unless nightTariffOn.
+// The day/night window is still configured in whole hours -- only the §14a windows needed finer steps --
+// so its edges are scaled to minutes here rather than stored that way.
 static bool isNightNow(const Reader &r, time_t now) {
   if (!r.nightTariffOn) return false;
-  struct tm lt; localtime_r(&now, &lt);
-  return inHourWindow(r.nightStartHour, r.nightEndHour, lt.tm_hour);
+  return obi_in_window((uint16_t)(r.nightStartHour * 60), (uint16_t)(r.nightEndHour * 60),
+                        localMinuteOfDay(now));
 }
 
 // Which §14a Modul-3 zone `now` falls into for reader `r` (tariffMode==2 only -- caller checks that).
 // HT is checked before NT, so a misconfigured overlap resolves to the (usually pricier) HT zone rather than
 // silently favoring NT; ST is the fallback for "in neither window", exactly like the day rate is "not in the
 // night window" above.
-enum TariffZone : uint8_t { ZONE_ST = 0, ZONE_HT = 1, ZONE_NT = 2 };
+enum TariffZone : uint8_t { ZONE_ST = OBI_ZONE_ST, ZONE_HT = OBI_ZONE_HT, ZONE_NT = OBI_ZONE_NT };
 static TariffZone tariffZoneNow(const Reader &r, time_t now) {
-  struct tm lt; localtime_r(&now, &lt);
-  int h = lt.tm_hour;
-  for (int i = 0; i < 2; i++) if (inHourWindow(r.htStart[i], r.htEnd[i], h)) return ZONE_HT;
-  for (int i = 0; i < 2; i++) if (inHourWindow(r.ntStart[i], r.ntEnd[i], h)) return ZONE_NT;
-  return ZONE_ST;
+  return (TariffZone)obi_zone_at(r.htStart, r.htEnd, r.ntStart, r.ntEnd, localMinuteOfDay(now));
 }
 
 // Short machine-readable name for whatever zone reader `r` is in right now, across all three tariff

@@ -104,10 +104,10 @@ const T={
   cNight:'Zeitvariabler Tarif für diesen Reader',
   lMode:'Modus',mOff:'Aus (fester Preis)',mNight:'Tag-/Nacht-Tarif (2 Zonen)',mHtNt:'§14a Modul 3 – HT/ST/NT (3 Zonen)',
   lNightOn:'Tag-/Nacht-Tarif aktiv',capNight:'Wenn aktiv, wird der Verbrauch ab jetzt live nach Uhrzeit in Zonen aufgeteilt und getrennt bepreist. Gilt nur für neu erfasste Werte, nicht rückwirkend.',
-  capHtNt:'Hochlast (HT) und Niedriglast (NT) je bis zu 2 Zeitfenster (Std., 0–23, Ende exklusiv; über Mitternacht möglich, z. B. 22→6). Standardtarif (ST) gilt automatisch außerhalb dieser Fenster – kein eigenes Feld nötig. Ein Fenster mit gleichem Start/Ende ist deaktiviert. Preis oben rechts = ST-Preis.',
+  capHtNt:'Hochlast (HT) und Niedriglast (NT) je bis zu 2 Zeitfenster als Uhrzeit hh:mm, Ende exklusiv – Viertelstunden sind erlaubt (z. B. 10:45–12:30), über Mitternacht ebenfalls (z. B. 22:00–06:00). Standardtarif (ST) gilt automatisch außerhalb dieser Fenster – kein eigenes Feld nötig. Ein leeres oder gleich gesetztes Fenster ist deaktiviert. Preis oben rechts = ST-Preis.',
   lHtPrice:'HT-Preis (ct/kWh)',lNtPrice:'NT-Preis (ct/kWh)',
-  lHtWin1:'HT-Fenster 1 (von/bis Std.)',lHtWin2:'HT-Fenster 2 (von/bis Std.)',
-  lNtWin1:'NT-Fenster 1 (von/bis Std.)',lNtWin2:'NT-Fenster 2 (von/bis Std.)',
+  lHtWin1:'HT-Fenster 1 (von/bis, hh:mm)',lHtWin2:'HT-Fenster 2 (von/bis, hh:mm)',
+  lNtWin1:'NT-Fenster 1 (von/bis, hh:mm)',lNtWin2:'NT-Fenster 2 (von/bis, hh:mm)',
   lNightStart:'Nacht ab (Std.)',lNightEnd:'Nacht bis (Std.)',lNightPrice:'Nachtpreis (ct/kWh)',bSavePrice:'Speichern',
   cDay:'Verbrauch pro Tag',capDay:'kWh/Tag aus den Änderungen des Zählerstands (zuverlässig, unabhängig vom Watt-Wert).',
   cDayExp:'Einspeisung pro Tag',capDayExp:'kWh/Tag per Solar ins Netz eingespeist — aus den Änderungen des Export-Zählerstands.',
@@ -142,10 +142,10 @@ const T={
   cNight:'Time-variable tariff for this reader',
   lMode:'Mode',mOff:'Off (flat price)',mNight:'Day/night tariff (2 zones)',mHtNt:'§14a Module 3 – HT/ST/NT (3 zones)',
   lNightOn:'Day/night tariff active',capNight:'When on, consumption is split live by time of day into zones and billed separately from now on. Applies only to newly recorded values, not retroactively.',
-  capHtNt:'High-load (HT) and low-load (NT), each up to 2 time windows (hours, 0-23, end exclusive; can wrap past midnight, e.g. 22→6). Standard tariff (ST) automatically applies outside these windows -- no field of its own needed. A window with equal start/end is disabled. The price field top right is the ST price.',
+  capHtNt:'High-load (HT) and low-load (NT), each up to 2 time windows as hh:mm, end exclusive -- quarter hours are allowed (e.g. 10:45-12:30), and so is wrapping past midnight (e.g. 22:00-06:00). Standard tariff (ST) automatically applies outside these windows -- no field of its own needed. A window left empty, or with equal start/end, is disabled. The price field top right is the ST price.',
   lHtPrice:'HT price (ct/kWh)',lNtPrice:'NT price (ct/kWh)',
-  lHtWin1:'HT window 1 (from/to h)',lHtWin2:'HT window 2 (from/to h)',
-  lNtWin1:'NT window 1 (from/to h)',lNtWin2:'NT window 2 (from/to h)',
+  lHtWin1:'HT window 1 (from/to, hh:mm)',lHtWin2:'HT window 2 (from/to, hh:mm)',
+  lNtWin1:'NT window 1 (from/to, hh:mm)',lNtWin2:'NT window 2 (from/to, hh:mm)',
   lNightStart:'Night from (h)',lNightEnd:'Night until (h)',lNightPrice:'Night price (ct/kWh)',bSavePrice:'Save',
   cDay:'Consumption per day',capDay:'kWh/day from the meter-counter changes (reliable, independent of the Watt value).',
   cDayExp:'Feed-in per day',capDayExp:'kWh/day fed into the grid (solar) — from the export-counter changes.',
@@ -314,10 +314,11 @@ async function saveReaderPrice(){
  if($('rnprice').value)b.set('nprice',$('rnprice').value);
  if($('rhtp').value)b.set('htp',$('rhtp').value);
  if($('rntp').value)b.set('ntp',$('rntp').value);
- b.set('ht0s',$('rht0s').value||0);b.set('ht0e',$('rht0e').value||0);
- b.set('ht1s',$('rht1s').value||0);b.set('ht1e',$('rht1e').value||0);
- b.set('nt0s',$('rnt0s').value||0);b.set('nt0e',$('rnt0e').value||0);
- b.set('nt1s',$('rnt1s').value||0);b.set('nt1e',$('rnt1e').value||0);
+ // Windows go out as HH:MM. A half-filled pair would otherwise silently become a window starting (or
+ // ending) at midnight, so either both edges are sent or the slot is sent as unused (0 = start == end).
+ const sw=(from,to)=>{const x=$(from).value,y=$(to).value,on=x&&y;
+  b.set(from.slice(1),on?x:'0');b.set(to.slice(1),on?y:'0');};
+ sw('rht0s','rht0e');sw('rht1s','rht1e');sw('rnt0s','rnt0e');sw('rnt1s','rnt1e');
  $('rpricemsg').textContent='…';
  try{await fetch('/api/reader/price',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:b});}catch(e){}
  try{let d=await(await fetch('/api/readers')).json();readers=Array.isArray(d)?d:(d.readers||[]);}catch(e){}
@@ -543,8 +544,16 @@ async function load(silent){
  { const rdr=readers.find(x=>x.id===cur);
    if(rdr){
     const mode=rdr.tariff_mode||0;
-    const hw=rdr.ht_win||[0,0,0,0],nw=rdr.nt_win||[0,0,0,0];
-    const hi=(id,v)=>'<input id="'+id+'" type=number min=0 max=23 value="'+v+'">';
+    // minute-of-day edges (ht_win_min/nt_win_min); ht_win/nt_win are the rounded hour arrays kept for
+    // older API clients. An unused slot (start==end) renders as two empty fields rather than 0/0.
+    const hm=rdr.ht_win_min||[0,0,0,0],nm=rdr.nt_win_min||[0,0,0,0];
+    const hhmm=v=>String(Math.floor(v/60)).padStart(2,'0')+':'+String(v%60).padStart(2,'0');
+    const pair=(a,b)=>a===b?['','']:[hhmm(a),hhmm(b)];
+    const w=[pair(hm[0],hm[1]),pair(hm[2],hm[3]),pair(nm[0],nm[1]),pair(nm[2],nm[3])];
+    // type=time gives a real clock picker on phone and desktop; step=900 makes it offer quarter hours.
+    // Where the browser has no time input it degrades to a text field, and typing "10:45" works too --
+    // the gateway parses HH:MM, a bare hour and bare minutes alike (obi_parse_minute, tariff_window.h).
+    const hi=(id,v)=>'<input id="'+id+'" type=time step=900 value="'+v+'">';
     html+='<div class=card><h2>'+t('cNight')+'</h2>'+
      '<div><label>'+t('lMode')+'</label><select id=rmode onchange=tariffModeUi()>'+
       '<option value=0'+(mode===0?' selected':'')+'>'+t('mOff')+'</option>'+
@@ -566,12 +575,12 @@ async function load(silent){
        '<div><label>'+t('lNtPrice')+'</label><input id=rntp type=number step=1 min=0'+(rdr.nt_price_cent!=null?' value="'+rdr.nt_price_cent+'"':'')+'></div>'+
       '</div>'+
       '<div class=grid>'+
-       '<div><label>'+t('lHtWin1')+'</label>'+hi('rht0s',hw[0])+hi('rht0e',hw[1])+'</div>'+
-       '<div><label>'+t('lHtWin2')+'</label>'+hi('rht1s',hw[2])+hi('rht1e',hw[3])+'</div>'+
+       '<div><label>'+t('lHtWin1')+'</label>'+hi('rht0s',w[0][0])+hi('rht0e',w[0][1])+'</div>'+
+       '<div><label>'+t('lHtWin2')+'</label>'+hi('rht1s',w[1][0])+hi('rht1e',w[1][1])+'</div>'+
       '</div>'+
       '<div class=grid>'+
-       '<div><label>'+t('lNtWin1')+'</label>'+hi('rnt0s',nw[0])+hi('rnt0e',nw[1])+'</div>'+
-       '<div><label>'+t('lNtWin2')+'</label>'+hi('rnt1s',nw[2])+hi('rnt1e',nw[3])+'</div>'+
+       '<div><label>'+t('lNtWin1')+'</label>'+hi('rnt0s',w[2][0])+hi('rnt0e',w[2][1])+'</div>'+
+       '<div><label>'+t('lNtWin2')+'</label>'+hi('rnt1s',w[3][0])+hi('rnt1e',w[3][1])+'</div>'+
       '</div>'+
      '</div>'+
      '<div class=row><button onclick=saveReaderPrice()>'+t('bSavePrice')+'</button><span class=msg id=rpricemsg></span></div>'+
