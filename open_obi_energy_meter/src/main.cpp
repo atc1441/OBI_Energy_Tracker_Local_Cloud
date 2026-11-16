@@ -1461,6 +1461,9 @@ void setup() {
   // real reason the C3 was slow vs the dual-core S3). Below the WiFi driver (23) so WiFi stays healthy.
   xTaskCreatePinnedToCore(loraTask, "lora", 8192, nullptr, 20, nullptr, CONFIG_ARDUINO_RUNNING_CORE);
   web_setup();     // WiFi config portal + web dashboard + MQTT (non-fatal if WiFi is unavailable)
+  // web_setup() is what reads the night-mode flag out of NVS, so this is the first moment we know: drop
+  // the boot blink right here instead of letting it run on until loop()'s first LED tick.
+  if (web_night_mode()) led_set(LED_OFF);
 }
 
 // loop() is now just the low-priority housekeeping — the radio/LoRa lives in loraTask (high priority),
@@ -1473,7 +1476,8 @@ void loop() {
 #endif
   flash_dbg_uart_poll();   // service the UART flash console (non-blocking)
 
-  // status LED: pick the steady pattern (reset-arming > OTA > WiFi > setup-portal), then service it
+  // status LED: pick the steady pattern (reset-arming > OTA > night mode > WiFi > setup-portal), then
+  // service it.
   static uint32_t ledTick = 0;
   if (now - ledTick >= 100) {
     ledTick = now;
@@ -1481,9 +1485,17 @@ void loop() {
 #ifdef PIN_BUTTON
     arming = g_btnArming;
 #endif
+    // Night mode keeps the LED dark whether or not WiFi is up. It used to be consulted only in the
+    // "connected" branch, so losing the connection fell through to the setup-AP pattern and blinked all
+    // night -- exactly what happens when a router switches its WiFi off on an overnight schedule (reported
+    // from the field). The two surviving indications are both ones a person is standing in front of: the
+    // button held toward a factory reset, and a running OTA ("don't cut the power now"), which is over in
+    // seconds. A gateway that was never configured still blinks for attention, since night mode is off by
+    // default and a factory reset clears it along with the rest of the "obigw" settings.
     if      (arming)                led_set(LED_RESET_ARMED);
     else if (gw_ota_active())       led_set(LED_OTA);
-    else if (web_wifi_connected())  led_set(web_night_mode() ? LED_OFF : LED_WIFI);
+    else if (web_night_mode())      led_set(LED_OFF);
+    else if (web_wifi_connected())  led_set(LED_WIFI);
     else                            led_set(LED_PORTAL);
   }
   led_loop();

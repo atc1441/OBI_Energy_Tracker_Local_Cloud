@@ -210,7 +210,7 @@ running firmware kept (brick-safe dual-OTA). The build → flash → verify loop
 - **MQTT panel** (⚙): configure host/port/user/pass/base-topic and see live status (connected, last
   publish, message count); a **Send discovery** button re-publishes all Home Assistant discovery configs.
 - **DE/EN toggle**, remembered in the browser.
-- **Night mode** in Settings disables the WiFi heartbeat and LoRa receive flashes of the status LED; setup, OTA and error indications remain active.
+- **Night mode** in Settings keeps the status LED dark in normal operation: the WiFi heartbeat, the LoRa receive flashes *and* the no-WiFi / setup-AP pattern are all muted, so a router that switches its WiFi off overnight no longer leaves the LED blinking until morning. Two indications stay, both for someone standing at the device: a running OTA (over in seconds, and it means "don't cut the power") and the fast blink while the case button is held toward a factory reset. A gateway with no WiFi configured yet always blinks for attention — night mode is off by default and a factory reset clears it.
 - The web/MQTT stack runs on **core 0** while LoRa runs on **core 1**, so HTTP traffic never stutters the
   radio timing.
 
@@ -723,7 +723,7 @@ Build-→-Flash-→-Verify-Ablauf und die Endpoint-Details stehen in [`PROJECT_N
   (verbunden, zuletzt gesendet, Anzahl); ein **Discovery senden**-Button publiziert alle
   Home-Assistant-Discovery-Configs neu.
 - **DE/EN-Umschalter**, im Browser gemerkt.
-- **Nachtmodus** in den Einstellungen schaltet WLAN-Heartbeat und LoRa-Empfangsblitze der Status-LED ab; Setup-, OTA- und Fehleranzeigen bleiben aktiv.
+- **Nachtmodus** in den Einstellungen hält die Status-LED im Normalbetrieb dunkel: WLAN-Heartbeat, LoRa-Empfangsblitze **und** das Muster für „kein WLAN / Setup-AP" sind stumm — ein Router, der sein WLAN nachts abschaltet, lässt die LED damit nicht mehr bis zum Morgen blinken. Zwei Anzeigen bleiben, beide für jemanden, der direkt am Gerät steht: ein laufendes OTA (nach Sekunden vorbei, Bedeutung „jetzt nicht vom Strom trennen") und das schnelle Blinken, während die Gehäusetaste in Richtung Werksreset gehalten wird. Ein Gateway ohne konfiguriertes WLAN blinkt weiterhin — der Nachtmodus ist standardmäßig aus und wird vom Werksreset gelöscht.
 - Der Web-/MQTT-Stack läuft auf **Core 0**, LoRa auf **Core 1**, damit HTTP-Verkehr das Funk-Timing nie stört.
 
 ### On-Board-E-Ink-Display (Heltec Vision Master E290)
