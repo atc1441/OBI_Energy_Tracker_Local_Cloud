@@ -232,6 +232,21 @@ set once for all readers), and a raw Watt table with both the meter's own power 
 purely from the import/export counter deltas — useful when a meter's own Watt value is missing or wrong
 (e.g. a broken 24-bit sign extension on negative power some DWSB20-2TH units hit).
 
+- **How much is written is a setting.** *Settings → Misc → History storage* has three levels, for setups
+  that already archive every reading elsewhere (MQTT → InfluxDB, Home Assistant long-term statistics) and
+  would rather not have the gateway write a second copy:
+  **Full** (the default) keeps both logs as described below. **Daily rows only** drops the raw-sample log —
+  that is the only frequent writer, at most one sample per reader per 30 s, while a daily row is *one*
+  write per reader per day — and still keeps the daily bar charts plus the start-of-day baseline the MQTT
+  `today_*` fields recover from after a restart. **Off** writes nothing at all; be aware that without that
+  durable baseline the `today_*` fields stay `null` after a restart until the next midnight
+  ([#108](https://github.com/atc1441/OBI_Energy_Tracker_Local_Cloud/issues/108)), which is harmless when
+  the real archive lives elsewhere. In both reduced levels the `/history` page keeps working from an
+  in-RAM ring of the most recent ~512 samples (about 4 h for a single reader; ~10 KB of heap, allocated
+  only while the level is not *Full*), and the page's storage line says so instead of showing flash
+  figures that no longer move. Nothing already stored is ever deleted — switching only stops and resumes
+  the writes. `POST /api/histmode` with `mode=0|1|2` does the same from a script; `/api/status` reports it
+  as `hist_fs.mode` along with `hist_fs.ram`/`ram_cap`.
 - **Daily summaries** (one row per calendar day) always live in the small 128 KB "userdata" data partition
   every board ships — the one storage location that's never resized or reformatted, so long-term totals
   are never at risk. Retention isn't a fixed day count: the partition's capacity is split fairly across
@@ -745,6 +760,22 @@ dem Leistungswert des Zählers selbst als auch einem rein aus den Import/Export-
 — nützlich, wenn der eigene Watt-Wert eines Zählers fehlt oder falsch ist (z. B. eine fehlerhafte 24-Bit-
 Vorzeichenerweiterung bei negativer Leistung, die manche DWSB20-2TH-Einheiten betrifft).
 
+- **Wie viel geschrieben wird, ist einstellbar.** *Einstellungen → Sonstiges → Verlaufsspeicher* kennt drei
+  Stufen — gedacht für Setups, die jeden Messwert ohnehin anderswo archivieren (MQTT → InfluxDB,
+  Home-Assistant-Langzeitstatistik) und dem Gateway die zweite Kopie ersparen wollen:
+  **Vollständig** (Standard) schreibt beide Logs wie unten beschrieben. **Nur Tageswerte** lässt das
+  Rohdaten-Log weg — das ist der einzige häufige Schreiber, höchstens ein Messpunkt pro Reader und 30 s,
+  während eine Tageszeile *ein* Schreibvorgang pro Reader und Tag ist — und behält damit die Tagesbalken
+  und die Tagesbasis, aus der sich die MQTT-`today_*`-Felder nach einem Neustart wiederherstellen.
+  **Aus** schreibt gar nichts mehr; ohne diese Basis bleiben `today_*` nach einem Neustart bis zum
+  nächsten Mitternacht `null` ([#108](https://github.com/atc1441/OBI_Energy_Tracker_Local_Cloud/issues/108)) —
+  unkritisch, wenn das eigentliche Archiv woanders liegt. In beiden reduzierten Stufen arbeitet die
+  `/history`-Seite mit einem RAM-Ring der letzten ~512 Messpunkte weiter (bei einem einzelnen Reader etwa
+  4 h; ~10 KB Heap, nur belegt solange die Stufe nicht *Vollständig* ist), und die Speicherzeile der Seite
+  sagt das auch, statt Flash-Zahlen zu zeigen, die sich nicht mehr bewegen. Schon gespeicherte Daten werden
+  nie gelöscht — Umschalten stoppt bzw. setzt nur die Schreibvorgänge fort. Per Skript macht
+  `POST /api/histmode` mit `mode=0|1|2` dasselbe; `/api/status` liefert die Stufe als `hist_fs.mode`
+  zusammen mit `hist_fs.ram`/`ram_cap`.
 - **Tageswerte** (eine Zeile pro Kalendertag) liegen immer in der kleinen 128-KB-„userdata"-Datenpartition,
   die jedes Board mitbringt — der eine Speicherort, der nie in der Größe verändert oder neu formatiert wird,
   sodass Langzeit-Summen nie in Gefahr sind. Die Aufbewahrung ist keine feste Tagesanzahl: die Kapazität der

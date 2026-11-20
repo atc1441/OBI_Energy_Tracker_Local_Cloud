@@ -92,7 +92,7 @@ let lang=localStorage.getItem('obilang');if(lang!=='en'&&lang!=='de')lang=(navig
 // (a global gateway setting from the Settings page, not a per-page localStorage choice).
 let numFmt=0;
 const T={
- de:{reload:'neu laden',dlLabel:'Export:',dlRawT:'Rohdaten (Messpunkte) als CSV herunterladen',dlDailyT:'Tageswerte als CSV herunterladen',clearT:'Historie dieses Readers löschen',fsFreeT:'Freier Speicher für die Verlaufsdaten aller Reader (siehe /debug für Details)',fsRaw:'Rohdaten',fsDaily:'Tageswerte',priceT:'Strompreis – gilt nur für den gerade gewählten Reader',priceTexp:'Einspeisevergütung – gilt nur für den gerade gewählten Reader',
+ de:{reload:'neu laden',dlLabel:'Export:',dlRawT:'Rohdaten (Messpunkte) als CSV herunterladen',dlDailyT:'Tageswerte als CSV herunterladen',clearT:'Historie dieses Readers löschen',fsFreeT:'Freier Speicher für die Verlaufsdaten aller Reader (siehe /debug für Details)',fsRaw:'Rohdaten',fsDaily:'Tageswerte',fsModeDaily:'Verlauf: nur Tageswerte',fsModeOff:'Verlauf: Speichern aus',fsRamN:'Messpunkte im RAM',fsNoRam:'kein RAM-Puffer',priceT:'Strompreis – gilt nur für den gerade gewählten Reader',priceTexp:'Einspeisevergütung – gilt nur für den gerade gewählten Reader',
   loading:'lädt…',loadErr:'Fehler beim Laden.',
   noReaders:'Noch keine Reader bekannt.<br>Sobald ein Zähler empfangen wird, erscheint hier seine Historie.',
   offlineTag:'nicht in Reichweite',
@@ -130,7 +130,7 @@ const T={
   clearC:r=>'Gespeicherte Historie für '+r+' löschen?',
   expTogOn:'📤 Export sichtbar',expTogOff:'📤 Export ausgeblendet',
   expTogT:'Export-/Einspeisungsansichten für diesen Reader ein-/ausblenden — nur die Anzeige auf diesem Gerät, ändert nichts an der Erfassung oder anderen Anzeigen (z. B. MQTT).'},
- en:{reload:'reload',dlLabel:'Export:',dlRawT:'Download raw samples as CSV',dlDailyT:'Download daily values as CSV',clearT:"clear this reader's history",fsFreeT:'Free space for all readers\' history data (see /debug for details)',fsRaw:'raw data',fsDaily:'daily values',priceT:'Electricity price – applies only to the currently selected reader',priceTexp:'Feed-in tariff – applies only to the currently selected reader',
+ en:{reload:'reload',dlLabel:'Export:',dlRawT:'Download raw samples as CSV',dlDailyT:'Download daily values as CSV',clearT:"clear this reader's history",fsFreeT:'Free space for all readers\' history data (see /debug for details)',fsRaw:'raw data',fsDaily:'daily values',fsModeDaily:'history: daily rows only',fsModeOff:'history: storage off',fsRamN:'samples in RAM',fsNoRam:'no RAM buffer',priceT:'Electricity price – applies only to the currently selected reader',priceTexp:'Feed-in tariff – applies only to the currently selected reader',
   loading:'loading…',loadErr:'Failed to load.',
   noReaders:'No readers known yet.<br>As soon as a meter is received, its history appears here.',
   offlineTag:'out of range',
@@ -263,8 +263,13 @@ async function boot(){
  $('price').onchange=savePrice;$('eprice').onchange=saveEprice;
  try{let s=await (await fetch('/api/status')).json();numFmt=s.num_fmt||0;const hf=s.hist_fs;
   if(hf&&hf.ok){const kb=n=>(n/1024).toFixed(0)+' KB';
-   $('fsstat').textContent='💾 '+t('fsRaw')+' '+kb(hf.total-hf.used)+'/'+kb(hf.total)+(hf.backend==='ota'?' (OTA)':'')+
-    ' · '+t('fsDaily')+' '+kb(hf.daily_total-hf.daily_used)+'/'+kb(hf.daily_total);
+   // With storage reduced or off, the raw-store figures stop moving and would only mislead -- say what is
+   // actually being kept instead, and how much of it is the RAM ring (see hist_ram.h).
+   $('fsstat').textContent=hf.mode
+    ?'💾 '+t(hf.mode===1?'fsModeDaily':'fsModeOff')+' · '+(hf.ram_cap?hf.ram+'/'+hf.ram_cap+' '+t('fsRamN'):t('fsNoRam'))+
+      (hf.mode===1?' · '+t('fsDaily')+' '+kb(hf.daily_total-hf.daily_used)+'/'+kb(hf.daily_total):'')
+    :'💾 '+t('fsRaw')+' '+kb(hf.total-hf.used)+'/'+kb(hf.total)+(hf.backend==='ota'?' (OTA)':'')+
+      ' · '+t('fsDaily')+' '+kb(hf.daily_total-hf.daily_used)+'/'+kb(hf.daily_total);
    $('fsstat').title=t('fsFreeT');}
  }catch(e){}
  try{let d=await (await fetch('/api/readers')).json();readers=Array.isArray(d)?d:(d.readers||[]);}catch(e){readers=[];}

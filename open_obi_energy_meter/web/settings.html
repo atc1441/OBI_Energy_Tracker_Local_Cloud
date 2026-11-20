@@ -133,6 +133,14 @@ button:disabled{opacity:.5;cursor:default}
   <label id=lnumfmt style="margin-top:14px;display:block">Zahlenformat</label>
   <select id=numfmt><option value=0>Automatisch (nach Sprache)</option><option value=1>1.234,56 (EU)</option><option value=2>1,234.56 (US)</option></select>
   <div class=row><button type=button onclick=saveNumFmt()><span id=bnumfmt>Speichern</span></button><span class=msg id=numfmtmsg></span></div>
+  <label id=lhist style="margin-top:14px;display:block">Verlaufsspeicher</label>
+  <select id=histstore>
+   <option value=0 id=ohist0>Vollständig: Rohwerte + Tageswerte</option>
+   <option value=1 id=ohist1>Nur Tageswerte (kaum Schreibzugriffe)</option>
+   <option value=2 id=ohist2>Aus: nichts auf den Flash schreiben</option>
+  </select>
+  <p class=cap id=caphist></p>
+  <div class=row><button type=button onclick=saveHistMode()><span id=bhist>Speichern</span></button><span class=msg id=histmsg></span></div>
  </div>
 
  <div class=card>
@@ -294,6 +302,14 @@ $('htime').textContent=t('Zeit','Time');$('ltz').textContent=t('Zeitzone','Timez
 $('hmisc').textContent=t('Sonstiges','Misc');$('lnight').textContent=t('Nachtmodus (normale LED-Aktivität aus)','Night mode (mute normal LED activity)');
 $('bnsave').textContent=t('Speichern','Save');
 $('lnumfmt').textContent=t('Zahlenformat (kWh/W/€ im gesamten Web-UI)','Number format (kWh/W/€ across the whole web UI)');
+$('lhist').textContent=t('Verlaufsspeicher','History storage');
+$('bhist').textContent=t('Speichern','Save');
+$('ohist0').textContent=t('Vollständig: Rohwerte + Tageswerte','Full: raw samples + daily rows');
+$('ohist1').textContent=t('Nur Tageswerte (kaum Schreibzugriffe)','Daily rows only (almost no writes)');
+$('ohist2').textContent=t('Aus: nichts auf den Flash schreiben','Off: nothing written to flash');
+$('caphist').dataset.base=t('Die Rohwerte sind der einzige häufige Schreiber (pro Reader höchstens alle 30 s); eine Tageszeile ist EIN Schreibzugriff pro Reader und Tag. „Nur Tageswerte“ behält daher die Tagesbalken und die Tagesbasis für die MQTT-today_*-Felder nach einem Neustart. Bei „Aus“ bleiben today_* nach einem Neustart bis zum nächsten Mitternacht leer. Die Verlaufsseite zeigt in beiden Fällen die letzten Messpunkte aus dem RAM. Gespeicherte Daten werden nie gelöscht – Umschalten stoppt bzw. setzt nur die Schreibzugriffe fort.',
+ 'The raw samples are the only frequent writer (at most one per reader per 30 s); a daily row is ONE write per reader per day. "Daily rows only" therefore keeps the daily bars and the start-of-day baseline the MQTT today_* fields recover from after a restart. With "Off", today_* stays empty after a restart until the next midnight. In both cases the History page shows the most recent samples from RAM. Nothing stored is ever deleted — switching only stops or resumes the writes.');
+$('caphist').textContent=$('caphist').dataset.base;
 $('numfmt').options[0].textContent=t('Automatisch (nach Sprache)','Automatic (follows the text language)');
 $('numfmt').options[1].textContent=t('1.234,56 (europäisch)','1.234,56 (European)');
 $('numfmt').options[2].textContent=t('1,234.56 (US)','1,234.56 (US)');
@@ -350,7 +366,7 @@ async function load(){try{
   $('mqstat').innerHTML=!q.enabled?`<span class="dot idle"></span>${t('deaktiviert','disabled')}`:q.connected?`<span class="dot on"></span>${t('verbunden','connected')} · ${q.host}${tls}`:`<span class="dot off"></span>${t('getrennt','disconnected')} — ${q.state}${tls}${q.last_err?' · '+esc(q.last_err):''}`;
   // take the real buffer sizes from the firmware so the input limits can't drift away from it
   if(q.max){mqMax=q.max;$('mh').maxLength=q.max.host;$('mu').maxLength=q.max.user;$('mpw').maxLength=q.max.pass;$('mt').maxLength=q.max.topic;}
-  if(!cfg){cfg=true;$('mh').value=q.host||'';$('mp').value=q.port||1883;$('mu').value=q.user||'';$('mt').value=q.topic||'';
+  if(!cfg){cfg=true;$('histstore').value=String((s.hist_fs&&s.hist_fs.mode)||0);$('mh').value=q.host||'';$('mp').value=q.port||1883;$('mu').value=q.user||'';$('mt').value=q.topic||'';
    $('mtls').checked=!!q.tls;if(q.ca_set)$('mca').placeholder=t('Zertifikat gespeichert — leer lassen zum Beibehalten','certificate saved — leave blank to keep');
    $('au').value=(s.auth&&s.auth.user)||'';$('night').checked=!!s.night_mode;$('aplim').checked=!!(s.ap&&s.ap.limit);$('numfmt').value=s.num_fmt||0;
    $('gwname').value=s.gw_custom_name||'';
@@ -359,6 +375,10 @@ async function load(){try{
    // this on starts from "what already works" instead of blank fields the user has to look up themselves.
    $('stipip').value=si.on?si.ip:(si.cur_ip||'');$('stipsn').value=si.on?(si.sn||'255.255.255.0'):(si.cur_sn||'255.255.255.0');
    $('stipgw').value=si.on?si.gw:(si.cur_gw||'');$('stipd1').value=si.on?si.dns1:(si.cur_dns1||'');$('stipd2').value=si.on?si.dns2:(si.cur_dns2||'');}
+  { const hf=s.hist_fs||{};   // show how full the RAM ring is while flash storage is reduced/off
+    const extra=hf.mode?(' — '+(hf.ram_cap?hf.ram+'/'+hf.ram_cap+t(' Messpunkte im RAM',' samples in RAM')
+                                           :t('kein RAM-Puffer (zu wenig Heap)','no RAM buffer (not enough heap)'))):'';
+    $('caphist').textContent=($('caphist').dataset.base||'')+extra; }
   { const orig='OBI Gateway '+s.gw;
     $('gwnstat').innerHTML=s.gw_custom_name?`${t('aktiv als','active as')} <code>${esc(s.gw_custom_name)}</code> · ${t('original','original')}: <code>${orig}</code>`:`${t('Standardname aktiv','using the default name')}: <code>${orig}</code>`; }
   { const si=s.static_ip||{};
@@ -406,6 +426,10 @@ async function load(){try{
 }catch(e){}}
 function tzPick(){const v=$('tzsel').value;if(v)$('tztext').value=v;}
 async function saveNightMode(){const m=$('nmsg');m.textContent='…';try{const r=await(await fetch('/api/night_mode',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'enabled='+($('night').checked?'1':'0')})).json();if(!r.ok)throw Error();m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);}catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
+async function saveHistMode(){const m=$('histmsg');m.textContent='…';
+ try{const r=await(await fetch('/api/histmode',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'mode='+$('histstore').value})).json();
+  if(!r.ok)throw Error();m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);load();}
+ catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
 async function saveNumFmt(){const m=$('numfmtmsg');m.textContent='…';try{const r=await(await fetch('/api/numfmt',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'fmt='+$('numfmt').value})).json();if(!r.ok)throw Error();m.textContent=t('gespeichert ✓','saved ✓');setTimeout(()=>m.textContent='',3000);}catch(e){m.textContent=t('Speichern fehlgeschlagen','save failed');}}
 // One /api/readers round trip fills both reader pickers (EcoTracker and BTHome). Only assigned meters
 // are offered: neither feature can publish a reader the gateway is not bound to.

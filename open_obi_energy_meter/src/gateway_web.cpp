@@ -8,6 +8,7 @@
 #include "web_assets.h"
 #include "reader.h"
 #include "flash_dbg.h"
+#include "hist_ram.h"             // in-RAM sample ring for the reduced/off history storage modes
 #include <WiFi.h>
 #include <WiFiManager.h>          // tzapu/WiFiManager
 #include <WebServer.h>
@@ -117,6 +118,63 @@ static char     g_tz[48] = "CET-1CEST,M3.5.0,M10.5.0/3";   // POSIX TZ for the h
 static char     g_ntp[64] = "pool.ntp.org";                // NTP server for the wall clock (user-settable)
 static volatile bool g_nightMode = false;                    // disable normal-operation LED activity
 static bool g_hideUnbound = false;                           // dashboard: hide unbound (pending) reader cards (persisted, NVS "obigw"/"hideunb")
+
+// ---- how much of the history is written to flash (NVS "obigw"/"histmode") ----------------------------
+// Asked for by a user who already archives every reading in InfluxDB via MQTT and wants the gateway to
+// stop wearing its flash for a second copy:
+//   0 = full      raw samples + daily rows (the default; unchanged behaviour)
+//   1 = daily     no raw-sample log any more. That log is the only frequent writer -- one sample per
+//                 reader per 30 s at worst -- while a daily row is ONE write per reader per day, and it is
+//                 what keeps the permanent bar charts AND the "start of today" baseline that beginDay()
+//                 and the MQTT today_* fields recover from after a restart. The low-wear choice for most.
+//   2 = off       nothing is written at all. Worth knowing before picking it: with no durable previous-day
+//                 close on flash there is nothing to recover that baseline from, so after a restart the
+//                 MQTT today_* fields stay null until the next midnight (the gap GitHub issue #108 was
+//                 about) and the daily bar chart starts from the running day. Fine when the real archive
+//                 lives elsewhere, which is exactly the case this mode is for.
+// In both reduced modes the History page's sample charts come from an in-RAM ring (hist_ram.h) instead of
+// flash. The ring is allocated only while the mode is not 0, so a default gateway pays no heap for it.
+static uint8_t g_histMode = 0;
+static ObiRamHistory g_ramHist;
+#define HIST_RAM_CAP 512            // ~10 KB of heap; at the 30 s minimum spacing that is ~4 h for one reader
+#define HIST_RAM_HEAP_FLOOR 60000   // never take the ring's memory out of what TLS/OTA needs to stay healthy
+
+static void histRamEnable(bool on) {
+  if (on == g_ramHist.active()) return;
+  if (on) {
+    size_t want = (size_t)HIST_RAM_CAP * sizeof(ObiRamSample);
+    if (ESP.getFreeHeap() < want + HIST_RAM_HEAP_FLOOR) {
+      Serial.printf("[hist] RAM ring skipped: only %u B heap free, need %u + reserve\n",
+                    (unsigned)ESP.getFreeHeap(), (unsigned)want);
+      return;                      // the page then shows daily rows only -- no samples, but nothing breaks
+    }
+    ObiRamSample *mem = (ObiRamSample *)malloc(want);
+    if (!mem) { Serial.println("[hist] RAM ring allocation failed"); return; }
+    g_ramHist.attach(mem, HIST_RAM_CAP);
+    Serial.printf("[hist] RAM sample ring: %u entries (%u B)\n", (unsigned)HIST_RAM_CAP, (unsigned)want);
+  } else {
+    ObiRamSample *mem = g_ramHist.buf;
+    g_ramHist.detach();
+    free(mem);
+    Serial.println("[hist] RAM sample ring released");
+  }
+}
+
+// The ring's samples for one reader, as the same CSV the flash log holds -- see obi_ram_row().
+static String ramSamplesCsv(const String &id) {
+  String out;
+  if (!g_ramHist.active() || id.length() != 6) return out;
+  uint8_t h[3];
+  for (int i = 0; i < 3; i++) h[i] = (uint8_t)strtol(id.substring(i * 2, i * 2 + 2).c_str(), nullptr, 16);
+  out.reserve((size_t)g_ramHist.countFor(h) * 34u + 16u);
+  char line[80];
+  for (uint16_t i = 0; i < g_ramHist.count(); i++) {
+    const ObiRamSample *s = g_ramHist.at(i);
+    if (!s || !g_ramHist.isFor(*s, h)) continue;
+    if (obi_ram_row(*s, line, sizeof line) > 0) out += line;
+  }
+  return out;
+}
 // User-settable friendly display name for the GATEWAY itself (Tasmota-style: blank = fall back to the
 // technical default "OBI Gateway <gwId>"), mirroring the existing per-reader r.name. Used as the HA device
 // name in publishGatewayDiscovery(); the technical default stays available too (gateway state JSON "gw_name"
@@ -462,7 +520,10 @@ static String statusJson() {
     j += ",\"hist_fs\":{\"ok\":" + String(g_fsOk ? "true" : "false") +
          ",\"backend\":" + jstr(g_usingOtaHist ? "ota" : "userdata") +
          ",\"total\":" + String((uint32_t)ht) + ",\"used\":" + String((uint32_t)hu) +
-         ",\"daily_total\":" + String((uint32_t)dt) + ",\"daily_used\":" + String((uint32_t)du) + "}"; }
+         ",\"daily_total\":" + String((uint32_t)dt) + ",\"daily_used\":" + String((uint32_t)du) +
+         ",\"mode\":" + String(g_histMode) +                        // 0 full, 1 daily only, 2 off
+         ",\"ram\":" + String(g_ramHist.count()) +                  // samples currently held in RAM
+         ",\"ram_cap\":" + String(g_ramHist.active() ? HIST_RAM_CAP : 0) + "}"; }
   j += ",\"freq_mhz\":869.5,\"bw_khz\":500,\"sf\":" + String(g_liveSF);   // actually-active SF, not the boot-time default
   j += ",\"mqtt\":{\"host\":" + jstr(g_mqttHost) + ",\"port\":" + String(g_mqttPort);
   j += ",\"user\":" + jstr(g_mqttUser) + ",\"topic\":" + jstr(g_mqttTopic);
@@ -1082,6 +1143,23 @@ static void handleNumFmt() {
     } else { server.send(400, "application/json", "{\"ok\":false,\"err\":\"fmt\"}"); return; }
   }
   server.send(200, "application/json", String("{\"ok\":true,\"fmt\":") + g_numFmt + "}");
+}
+
+// How much of the history goes to flash: 0 = full, 1 = daily rows only, 2 = nothing (see g_histMode).
+// Takes effect immediately -- nothing is deleted either way, so switching back and forth just stops and
+// resumes the writes, and whatever is already stored stays readable.
+static void handleHistMode() {
+  if (server.hasArg("mode")) {
+    int m = server.arg("mode").toInt();
+    if (m < 0 || m > 2) { server.send(400, "application/json", "{\"ok\":false,\"err\":\"mode\"}"); return; }
+    g_histMode = (uint8_t)m;
+    prefs.begin("obigw", false); prefs.putUChar("histmode", g_histMode); prefs.end();
+    histRamEnable(g_histMode != 0);
+    Serial.printf("[hist] storage mode %u (%s)\n", g_histMode,
+                  g_histMode == 0 ? "full" : (g_histMode == 1 ? "daily rows only" : "off"));
+  }
+  server.send(200, "application/json", String("{\"ok\":true,\"mode\":") + g_histMode +
+                                        ",\"ram\":" + g_ramHist.count() + "}");
 }
 
 // Dashboard cosmetic: hide unbound (pending) reader cards. Global (not per-reader), persisted in NVS like
@@ -2058,8 +2136,12 @@ static String withDailyRow(String all, uint32_t dayStart, uint32_t imp, uint32_t
   return content;
 }
 
+// Writes one daily row (read-modify-write of the whole, tiny /d<id> file). Silenced in storage mode 2
+// -- the "nothing on flash" mode -- which is the only writer left once the raw-sample log is off; see
+// g_histMode for what skipping it costs. Mode 1 keeps writing: one row per reader per day.
 static void persistDaily(const String &id, uint32_t dayStart, uint32_t imp, uint32_t exp,
                           uint32_t dayWh, uint32_t nightWh, uint32_t htWh, uint32_t stWh, uint32_t ntWh) {
+  if (g_histMode >= 2 || !g_fsOk) return;
   String path = fpD(id);
   fsWrite(path, withDailyRow(fsRead(path), dayStart, imp, exp, dayWh, nightWh, htWh, stWh, ntWh, dailyCapBytes()));
 }
@@ -2261,8 +2343,11 @@ static bool readerTodayStats(int slot, const Reader &r, float &todayWh, float &t
 // pipeline that ever sees consumption tagged with a real time-of-day -- the raw sample log this could
 // otherwise be reconstructed from is short-retention, so this can't be done retroactively later.
 static void historyService() {
-  if (!g_fsOk || !timeValid() || otaHist_writesPaused()) return;   // paused around a firmware flash --
-                                                                     // see otaHist_prepareForFlash()
+  if (!timeValid()) return;
+  // The reduced storage modes still need this loop running -- it is what accumulates the day/zone split
+  // and feeds the RAM ring -- so only the flash-writing mode is gated on the stores being writable
+  // (paused around a firmware flash, see otaHist_prepareForFlash()).
+  if (g_histMode == 0 && (!g_fsOk || otaHist_writesPaused())) return;
   static uint32_t lastPoll = 0;
   uint32_t now = millis();
   if (now - lastPoll < 1000) return;
@@ -2298,8 +2383,9 @@ static void historyService() {
     if (!(firstLog || changed || heartbeat)) continue;
     if (!firstLog && (now - hLastMs[i] < 30000)) continue;   // min 30 s spacing between samples
     if (!id.length()) id = hex(r.handle, 3);
-    appendSample(id, (uint32_t)tnow, r.import_, exp, r.power);   // exp, not r.export_ -- a void export must
-                                                                  // never leak its raw sentinel into the log
+    // exp, not r.export_ -- a void export must never leak its raw sentinel into the log
+    if (g_histMode == 0) appendSample(id, (uint32_t)tnow, r.import_, exp, r.power);
+    else                 g_ramHist.push(r.handle, (uint32_t)tnow, r.import_, exp, r.power);
     hImp[i] = r.import_; hLastMs[i] = now;
   }
 }
@@ -2432,10 +2518,15 @@ static void handleHistoryApi() {
                      ",\"night_on\":" + (nightOn ? "true" : "false") +
                      ",\"night_start\":" + String(nightStart) + ",\"night_end\":" + String(nightEnd) +
                      ",\"night_price\":" + String(nightPriceCent, 2) +
+                     ",\"hist_mode\":" + String(g_histMode) +
                      ",\"tariff_mode\":" + String(tariffMode) +
                      ",\"ht_price\":" + String(htPriceCent, 2) +
                      ",\"nt_price\":" + String(ntPriceCent, 2) + ",\"samples\":[");
-  { String s = g_fsOk ? fsRead(fpS(id)) : String(); streamRows(s); }
+  // Whatever is on flash first (older), then the RAM ring (newer, collected since storage was turned
+  // down) -- the two never overlap, so the result stays in chronological order.
+  { String s = g_fsOk ? fsRead(fpS(id)) : String();
+    if (g_histMode != 0) s += ramSamplesCsv(id);
+    streamRows(s); }
   server.sendContent("],\"daily\":[");
   {
     String d = g_fsOk ? fsRead(fpD(id)) : String();
@@ -2807,9 +2898,9 @@ static void handleHistoryCsv() {
   server.sendHeader("Content-Disposition",
                      String("attachment; filename=\"obi_") + id + (daily ? "_daily.csv\"" : "_raw.csv\""));
   server.send(200, "text/csv", "");
-  if (g_fsOk) {
+  if (g_fsOk || g_histMode != 0) {
     if (daily) {
-      String d = fsRead(fpD(id));
+      String d = g_fsOk ? fsRead(fpD(id)) : String();
       for (int i = 0; i < MAX_READERS; i++)
         if (hDaily[i].day && readers[i].used && hex(readers[i].handle, 3) == id) {
           d = withDailyRow(d, hDaily[i].day, hDaily[i].imp, hDaily[i].exp, hDaily[i].dayWh, hDaily[i].nightWh,
@@ -2818,7 +2909,11 @@ static void handleHistoryCsv() {
         }
       sendCsvRows(d, "date,day_start_epoch,import_wh,export_wh,day_wh,night_wh,ht_wh,st_wh,nt_wh");
     } else {
-      sendCsvRows(fsRead(fpS(id)), "date,epoch,import_wh,export_wh,power_w");
+      // same two sources as /api/history: whatever is on flash, then the RAM ring, so an export never
+      // silently omits the samples the page is showing (see g_histMode / ramSamplesCsv()).
+      String s = g_fsOk ? fsRead(fpS(id)) : String();
+      if (g_histMode != 0) s += ramSamplesCsv(id);
+      sendCsvRows(s, "date,epoch,import_wh,export_wh,power_w");
     }
   }
   server.sendContent("");                                 // terminate the chunked response
@@ -2826,6 +2921,14 @@ static void handleHistoryCsv() {
 
 static void handleHistoryClear() {
   String id = server.arg("id");
+  if (id.length() == 6) {
+    // also drop this reader's samples from the RAM ring, or a cleared chart would immediately fill up
+    // again from memory (no-op when the ring isn't allocated)
+    String lid = id; lid.toLowerCase();
+    uint8_t rh[3];
+    for (int i = 0; i < 3; i++) rh[i] = (uint8_t)strtol(lid.substring(i * 2, i * 2 + 2).c_str(), nullptr, 16);
+    g_ramHist.forget(rh);
+  }
   if (id.length() == 6 && g_fsOk) {
     id.toLowerCase();
     remove(fpS(id).c_str());
@@ -2888,6 +2991,7 @@ static void startServices() {
   server.on("/api/tz",   HTTP_POST, guard(handleTz));       // set the timezone (history day-buckets)
   server.on("/api/night_mode", HTTP_POST, guard(handleNightMode)); // disable normal-operation LED activity
   server.on("/api/numfmt", HTTP_POST, guard(handleNumFmt));        // number format: 0=auto 1=EU 2=US
+  server.on("/api/histmode", HTTP_POST, guard(handleHistMode));    // history storage: 0=full 1=daily 2=off
   server.on("/api/hideunbound", HTTP_POST, guard(handleHideUnbound)); // dashboard: hide unbound reader cards
   server.on("/api/lora/sf", HTTP_POST, guard(handleLoraSF));          // LoRa spreading factor (7/9) -- reboot required
   server.on("/api/wifi", HTTP_POST, guard(handleWifiPortal));        // open the on-demand WiFiManager portal (AP)
@@ -3743,6 +3847,9 @@ static void webTask(void *) {
   g_nightMode = prefs.getBool("nightmode", false);
   g_hideUnbound = prefs.getBool("hideunb", false);
   g_numFmt = prefs.getUChar("numfmt", 0);
+  g_histMode = prefs.getUChar("histmode", 0);   // see g_histMode: 0 = everything on flash, as before
+  if (g_histMode > 2) g_histMode = 0;
+  histRamEnable(g_histMode != 0);   // the ring is RAM, so a stored non-zero mode has to re-create it here
   prefs.getString("gwname", "").toCharArray(g_gwName, sizeof g_gwName);
   g_staticIpOn = prefs.getBool("sipon", false);
   prefs.getString("sip",   "").toCharArray(g_staticIp,   sizeof g_staticIp);
