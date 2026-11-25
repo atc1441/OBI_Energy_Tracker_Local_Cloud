@@ -344,6 +344,14 @@ static String uuidStr(const uint8_t *u) {
   return hex(u, 4) + "-" + hex(u + 4, 2) + "-" + hex(u + 6, 2) + "-" + hex(u + 8, 2) + "-" + hex(u + 10, 6);
 }
 static const char *typeName(uint8_t t) { return t == 0x11 ? "outlet" : "meter"; }
+// Everything currently wrong with a live reader, by the shared rule in reader_status.h -- the one place
+// the dashboard, /api/readers and MQTT all take their verdict from. Note this is a different (slower,
+// calmer) question than readerOnline() further down, which drives Home Assistant's availability flag.
+static uint8_t readerProblems(const Reader &r) {
+  if (!r.assigned) return 0;        // an unbound reader is not ours to worry about
+  return obi_reader_problems((uint32_t)((millis() - r.lastSeenMs) / 1000),
+                              r.setInterval, (r.flags & 2) != 0, r.battery_mV, r.inBootloader);
+}
 static String jnum(uint32_t v) { return obi_na(v) ? String("null") : String((unsigned long)v); }
 // power is a SIGNED int32 on the wire — it goes negative on feed-in/export. 0x7FFFFFFF still means n/a.
 static String jnumS(uint32_t v) { return obi_na(v) ? String("null") : String((long)(int32_t)v); }
@@ -392,6 +400,13 @@ static String readersJson() {
     j += ",\"rssi\":" + String((int)r.lastRssi);
     j += ",\"snr\":" + String(r.lastSnr, 1);
     j += ",\"infrared\":" + String((r.flags & 1) ? "true" : "false");
+    // the reader's OWN low-battery flag (flags b1) -- more authoritative than a voltage threshold here,
+    // and what lets the dashboard warn before the battery dies rather than after it went quiet
+    j += ",\"lowpower\":" + String((r.flags & 2) ? "true" : "false");
+    // health, decided once in the firmware (reader_status.h): `problems` is the bit mask the dashboard
+    // turns into its banner rows, `status` the single worst one, exactly as published over MQTT.
+    { uint8_t pr = readerProblems(r);
+      j += ",\"problems\":" + String(pr) + ",\"status\":" + jstr(obi_status_name(pr)); }
     j += ",\"import\":" + jnum(r.import_) + ",\"export\":" + jnum(r.export_) + ",\"power\":" + jnumS(r.power);
     j += ",\"power_calc\":" + jnumS(r.calcPower);
     j += ",\"has_data\":" + String(r.haveData ? "true" : "false");
@@ -542,6 +557,27 @@ static String statusJson() {
        ",\"pass\":" + String((uint32_t)sizeof g_mqttPass - 1) +
        ",\"topic\":" + String((uint32_t)sizeof g_mqttTopic - 1) + "}";
   j += ",\"last_pub_s\":" + String(lastPub) + "}";
+  // Bound readers that have NOT transmitted since boot. A reader that went flat while the gateway was
+  // restarting (the hourly auto-update is enough) never gets a RAM slot, so without this it would simply
+  // be absent from the dashboard instead of raising an alert. Capped: more bound readers than this on one
+  // gateway is not a real setup, and the cap keeps it off the web task's stack.
+  { GwKnownReader known[24];
+    int nk = gw_known_readers(known, 24);
+    j += ",\"readers_missing\":[";
+    bool firstMissing = true;
+    for (int i = 0; i < nk; i++) {
+      bool live = false;
+      for (int k = 0; k < MAX_READERS; k++)
+        if (readers[k].used && !memcmp(readers[k].handle, known[i].handle, 3)) { live = true; break; }
+      if (live) continue;
+      // Not overdue yet (the gateway has only just started) -> not an alert, see obi_missing_overdue().
+      if (!obi_missing_overdue(gw_uptime_s(), known[i].interval)) continue;
+      j += String(firstMissing ? "" : ",") + "{\"id\":\"" + hex(known[i].handle, 3) +
+           "\",\"name\":" + jstr(known[i].name) +
+           ",\"iv\":" + String(known[i].interval) + "}";
+      firstMissing = false;
+    }
+    j += "]"; }
   j += ",\"auth\":{\"enabled\":" + String(g_authUser[0] ? "true" : "false") + ",\"user\":" + jstr(g_authUser) + "}";
   // reader OTA status
   uint8_t ot[3] = {0}; gw_ota_target(ot);
@@ -3178,6 +3214,11 @@ static String authTopic()    { return gwStateTopic() + "/auth"; }
 static String updTopic()     { return gwStateTopic() + "/update"; }
 static String installTopic() { return updTopic() + "/install"; }
 static String rdrAvtTopic(const String &id) { return String(g_mqttTopic) + "/" + id + "/status"; }
+// Health is its OWN topic rather than a field of the state JSON, because the state JSON is only published
+// when a fresh energy frame arrives -- which is exactly what stops happening when a reader dies. Retained,
+// so Home Assistant has the last word immediately after a restart. ("/status" was already taken by the
+// availability flag above.)
+static String rdrHealthTopic(const String &id) { return String(g_mqttTopic) + "/" + id + "/health"; }
 
 // State of the HA update entity, in the JSON format HA's MQTT update platform reads from its state topic.
 // latest_version is left out until a GitHub check has found a release for this board -- HA then keeps the
@@ -3370,6 +3411,14 @@ static void publishDiscovery(const Reader &r) {
     mqtt.publish(topic.c_str(), p.c_str(), true);
   }
 
+  // Health: its own topic (see rdrHealthTopic) rather than the state JSON, so it updates when the reader
+  // goes quiet. Deliberately NOT marked diagnostic -- this is the entity an automation watches.
+  { String t = "homeassistant/sensor/" + uid + "/health/config";
+    String p = "{\"name\":\"Status\",\"uniq_id\":\"" + uid + "_health\",\"stat_t\":\"" +
+               rdrHealthTopic(id) + "\",\"icon\":\"mdi:heart-pulse\""
+               ",\"avty_t\":\"" + avtTopic() + "\"," + dev + "}";   // gateway availability only: the reader's
+    mqtt.publish(t.c_str(), p.c_str(), true); }                      // own flag would hide the bad news
+
   // --- binary sensors (all diagnostic) ---
   struct BDef { const char *key, *name, *field; };
   static const BDef bdefs[] = {
@@ -3409,6 +3458,22 @@ static void publishDiscovery(const Reader &r) {
   mqtt.publish(stopic.c_str(), sp.c_str(), true);
 }
 
+// Bound readers that are overdue and have not been heard from at all since the gateway booted. Together
+// with the live readers' own problems this makes up readers_problem on the gateway's state topic, so a
+// single Home Assistant automation can watch the whole house instead of one entity per reader -- and so a
+// reader that vanished with the last restart (no live slot, hence no per-reader topic of its own) is still
+// counted somewhere.
+static int gwMissingCount() {
+  GwKnownReader known[24];
+  int nk = gw_known_readers(known, 24), n = 0;
+  for (int i = 0; i < nk; i++) {
+    bool live = false;
+    for (int k = 0; k < MAX_READERS; k++)
+      if (readers[k].used && !memcmp(readers[k].handle, known[i].handle, 3)) { live = true; break; }
+    if (!live && obi_missing_overdue(gw_uptime_s(), known[i].interval)) n++;
+  }
+  return n;
+}
 // HA discovery for the GATEWAY itself (temperature sensor + a restart button), keyed by MAC/gwid so
 // multiple gateways appear as separate devices.
 static void publishGatewayDiscovery() {
@@ -3426,6 +3491,12 @@ static void publishGatewayDiscovery() {
   { String t = "homeassistant/sensor/" + uid + "/fw/config";
     String p = "{\"name\":\"Firmware\",\"uniq_id\":\"" + uid + "_fw\",\"stat_t\":\"" + stt +
                "\",\"val_tpl\":\"{{ value_json.fw.version }} ({{ value_json.fw.target }})\",\"icon\":\"mdi:chip\",\"ent_cat\":\"diagnostic\"" + availa + "," + dev + "}";
+    mqtt.publish(t.c_str(), p.c_str(), true); }
+  // readers in trouble (the one entity to put an automation on)
+  { String t = "homeassistant/sensor/" + uid + "/rproblem/config";
+    String p = "{\"name\":\"Reader problems\",\"uniq_id\":\"" + uid + "_rproblem\",\"stat_t\":\"" + stt +
+               "\",\"val_tpl\":\"{{ value_json.readers_problem }}\",\"icon\":\"mdi:alert-circle-outline\""
+               ",\"stat_cla\":\"measurement\"" + availa + "," + dev + "}";
     mqtt.publish(t.c_str(), p.c_str(), true); }
   // temperature
   { String t = "homeassistant/sensor/" + uid + "/temp/config";
@@ -3505,6 +3576,7 @@ static void clearDiscovery(const String &id) {
   String t = "homeassistant/number/" + uid + "/interval/config"; mqtt.publish(t.c_str(), "", true);
   String ts = "homeassistant/select/" + uid + "/interval_preset/config"; mqtt.publish(ts.c_str(), "", true);
   mqtt.publish(rdrAvtTopic(id).c_str(), "", true);   // clear the retained online/offline flag as well
+  mqtt.publish(rdrHealthTopic(id).c_str(), "", true);   // ...and the retained health verdict
 }
 
 // Web button: drop a (phantom) reader from the list. Not a permanent block — the next valid
@@ -3554,7 +3626,8 @@ static void mqttService() {
       publishGatewayDiscovery();
       g_updPubDirty = true;                                     // (re)assert the update state, see below
       for (int i = 0; i < MAX_READERS; i++) { readers[i].mqttDiscovered = false;   // re-announce after (re)connect
-                                              readers[i].mqttAvail = -1; }         // ...and re-assert online/offline
+                                              readers[i].mqttAvail = -1;           // ...and re-assert online/offline
+                                              readers[i].mqttHealth = 0xFF; }      // ...and the health verdict
       Serial.printf("[mqtt] connected as %s, subscribed %s + reboot\n", cid.c_str(), sub.c_str());
       g_mqttLastErr = "";
     } else {
@@ -3605,6 +3678,9 @@ static void mqttService() {
       lastPub = now;
       { int rcAll = 0, rcBound = 0;
         for (int i = 0; i < MAX_READERS; i++) if (readers[i].used) { rcAll++; if (readers[i].assigned) rcBound++; }
+        int nMissing = gwMissingCount(), nProblem = nMissing;     // one pass, not one per JSON field
+        for (int i = 0; i < MAX_READERS; i++)
+          if (readers[i].used && readers[i].assigned && readerProblems(readers[i])) nProblem++;
         float t = gwTempC();
         String gp = "{\"mac\":\"" + String(gwMac()) + "\",\"gw\":\"" + String(gwId()) + "\""
                     ",\"gw_name\":\"OBI Gateway " + String(gwId()) + "\"" +   // original/technical name -- ALWAYS sent, even after a custom rename (see publishGatewayDiscovery's "dev.name")
@@ -3616,6 +3692,8 @@ static void mqttService() {
                     ",\"readers\":" + String(rcAll) +
                     ",\"readers_all\":" + String(rcAll) +
                     ",\"readers_bound\":" + String(rcBound) +
+                    ",\"readers_problem\":" + String(nProblem) +   // one number to alert on
+                    ",\"readers_missing\":" + String(nMissing) +   // bound, overdue, never seen
                     ",\"auth_fail_count\":" + String(g_authFailCount) + "," + fwJson() + "}";
         if (mqtt.publish(gwStateTopic().c_str(), gp.c_str(), true)) { g_mqttPubCount++; g_mqttLastPubMs = now; } }
     }
@@ -3626,6 +3704,18 @@ static void mqttService() {
     for (int i = 0; i < MAX_READERS; i++) {
       Reader &r = readers[i];
       if (!r.used || !r.haveData) continue;
+      // Health FIRST, ahead of the "nothing new to say" shortcuts below: "no signal" is precisely the
+      // case where no frame is coming, and after an MQTT reconnect a reader that went quiet in the
+      // meantime would otherwise keep its stale retained "ok" (no fresh frame, no re-announce).
+      // Only publishes when the verdict changes, so a healthy reader costs one message, not one per pass.
+      { uint8_t pr = readerProblems(r);
+        if (r.mqttHealth != pr) {
+          r.mqttHealth = pr;
+          String ht = rdrHealthTopic(hex(r.handle, 3));
+          if (mqtt.publish(ht.c_str(), obi_status_name(pr), true)) { g_mqttPubCount++; g_mqttLastPubMs = now; }
+          Serial.printf("[mqtt] reader %02X%02X%02X health -> %s\n", r.handle[0], r.handle[1], r.handle[2],
+                        obi_status_name(pr));
+        } }
       bool fresh = (r.lastEnergyMs != r.mqttPubEnergyMs);   // a new energy frame arrived since the last publish
       if (!r.mqttDiscovered && !fresh) continue;            // never announced and nothing new -> nothing to do
       if (!r.mqttDiscovered) { publishDiscovery(r); r.mqttDiscovered = true; r.mqttAvail = -1; }
@@ -3687,6 +3777,7 @@ static void mqttService() {
         "\"interval\":%u,\"age_s\":%lu,"
         "\"today_wh\":%s,\"today_exp_wh\":%s,\"today_cost\":%s,\"today_earn\":%s,"
         "\"tariff_mode\":%u,\"tariff_zone\":\"%s\",\"tariff_rate_cent\":%s,"
+        "\"status\":\"%s\","
         "\"day_wh\":%lu,\"night_wh\":%lu,\"ht_wh\":%lu,\"st_wh\":%lu,\"nt_wh\":%lu}",
         id.c_str(), uuidBuf, typeName(r.devType), r.battery_mV, (int)r.lastRssi, (double)r.lastSnr,
         (r.flags & 1) ? "true" : "false", impBuf, expBuf, pwBuf, pwcBuf,
@@ -3695,6 +3786,7 @@ static void mqttService() {
         r.setInterval, (unsigned long)((millis() - r.lastSeenMs) / 1000),
         todayWhBuf, todayExpBuf, todayCostBuf, todayEarnBuf,
         r.tariffMode, tv ? tariffZoneName(r, tnow) : "n/a", rateBuf,
+        obi_status_name(readerProblems(r)),
         (unsigned long)hDaily[i].dayWh, (unsigned long)hDaily[i].nightWh,
         (unsigned long)hDaily[i].htWh, (unsigned long)hDaily[i].stWh, (unsigned long)hDaily[i].ntWh);
       if (n > 0 && n < (int)sizeof p && mqtt.publish(topic.c_str(), p)) {

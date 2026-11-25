@@ -30,6 +30,7 @@
 #include "status_led.h"
 #include "bthome_ble.h"
 #include <Preferences.h>
+#include <nvs.h>                  // enumerate the "obiassign" keys -- see gw_known_readers()
 
 // ---- reversed OBI radio configuration --------------------------------------
 #define OBI_FREQ_MHZ   869.5f
@@ -137,8 +138,16 @@ static void eraseKey(const uint8_t h[3]) {
 // NOTE: use a LOCAL Preferences per call — saveAssigned runs on the web task (core 0) while loadAssigned
 // runs on the LoRa task (core 1); a shared Preferences object's begin() returns false when already open on
 // the other core, so the write would silently hit a read-only/closed handle and never persist.
+//
+// Separately: g_knownDirty below is set whenever something the bound-reader cache holds is written
+// (binding, name, interval). It is written from either core -- the LoRa task auto-assigns during a pair
+// window -- but it is only ever a plain bool, and the cache itself is read and refilled on the main/web
+// task alone (see gw_known_readers()).
+static volatile bool g_knownDirty = true;
+
 static void saveAssigned(const uint8_t h[3], bool on) {
   char k[8]; uuidKey(h, k);
+  g_knownDirty = true;
   Preferences p; p.begin("obiassign", false);
   if (on) p.putBool(k, true); else p.remove(k);
   p.end();
@@ -156,6 +165,7 @@ static bool loadAssigned(const uint8_t h[3]) {
 // Local Preferences per call for the same cross-core reason as saveAssigned (web task core 0 / LoRa core 1).
 static void saveInterval(const uint8_t h[3], uint16_t secs) {
   char k[8]; uuidKey(h, k);
+  g_knownDirty = true;
   Preferences p; p.begin("obiival", false);
   if (secs) p.putUShort(k, secs); else p.remove(k);
   p.end();
@@ -170,6 +180,7 @@ static uint16_t loadInterval(const uint8_t h[3]) {
 // Per-reader friendly name, persisted like the interval so it survives reboot AND re-pair.
 static void saveName(const uint8_t h[3], const char *name) {
   char k[8]; uuidKey(h, k);
+  g_knownDirty = true;
   Preferences p; p.begin("obiname", false);
   if (name && name[0]) p.putString(k, name); else p.remove(k);
   p.end();
@@ -556,6 +567,79 @@ bool gw_set_reader_price(const uint8_t handle[3], float priceCent, float exportC
     }
   return false;
 }
+// Enumerating an NVS namespace is the one place the IDF 4 / IDF 5 APIs differ (iterator by return value
+// vs. by out-parameter), so the difference is confined to these two wrappers.
+#if defined(ESP_IDF_VERSION_MAJOR) && ESP_IDF_VERSION_MAJOR >= 5
+static inline nvs_iterator_t nvsFirstKey(const char *ns) {
+  nvs_iterator_t it = nullptr;
+  return nvs_entry_find("nvs", ns, NVS_TYPE_ANY, &it) == ESP_OK ? it : nullptr;
+}
+static inline nvs_iterator_t nvsNextKey(nvs_iterator_t it) {
+  // on anything but ESP_OK (including "no more entries") the iterator is released and nulled for us
+  return nvs_entry_next(&it) == ESP_OK ? it : nullptr;
+}
+#else
+static inline nvs_iterator_t nvsFirstKey(const char *ns) { return nvs_entry_find("nvs", ns, NVS_TYPE_ANY); }
+static inline nvs_iterator_t nvsNextKey(nvs_iterator_t it) { return nvs_entry_next(it); }
+#endif
+
+// The "obiassign" namespace is the source of truth for which readers SHOULD be here, and its keys ARE the
+// handles (6 hex chars, see uuidKey()), so they are enumerated directly rather than mirrored into a second
+// list that could drift out of sync.
+// Two passes on purpose: collect the handles while the iterator is open, then read the stored flag and the
+// name through Preferences afterwards, so no NVS handle is ever opened underneath a live iterator.
+// This costs ~16 flash reads plus three Preferences handles per reader, so it runs only when the list has
+// actually changed (g_knownDirty) -- never per dashboard poll or MQTT publish.
+#define GW_KNOWN_MAX 32
+static GwKnownReader g_known[GW_KNOWN_MAX];
+static int g_knownN = 0;
+
+static void knownReadersRefresh() {
+  uint8_t handles[GW_KNOWN_MAX][3];
+  int found = 0;
+  const int cap = GW_KNOWN_MAX;
+  nvs_iterator_t it = nvsFirstKey("obiassign");
+  while (it && found < cap) {
+    nvs_entry_info_t info;
+    nvs_entry_info(it, &info);
+    if (strlen(info.key) == 6) {
+      uint8_t h[3];
+      bool ok = true;
+      for (int i = 0; i < 3 && ok; i++) {
+        char b[3] = {info.key[i * 2], info.key[i * 2 + 1], 0};
+        if (!isxdigit((unsigned char)b[0]) || !isxdigit((unsigned char)b[1])) ok = false;
+        else h[i] = (uint8_t)strtol(b, nullptr, 16);
+      }
+      if (ok && !isIgnoredHandle(h)) { memcpy(handles[found], h, 3); found++; }
+    }
+    it = nvsNextKey(it);
+  }
+  if (it) nvs_release_iterator(it);   // only reachable when we stopped at the cap
+  int n = 0;
+  for (int i = 0; i < found; i++) {
+    if (!loadAssigned(handles[i])) continue;      // a stale or false entry is not a bound reader
+    memcpy(g_known[n].handle, handles[i], 3);
+    g_known[n].name[0] = 0;
+    loadName(handles[i], g_known[n].name, sizeof g_known[n].name);
+    // the EFFECTIVE interval, like addReader() gives a live slot: 0 in NVS just means "never configured"
+    { uint16_t iv = loadInterval(handles[i]); g_known[n].interval = iv ? iv : OBI_DEFAULT_INTERVAL; }
+    n++;
+  }
+  g_knownN = n;
+}
+
+// Every reader PERSISTED as bound to this gateway, whether or not it currently has a live slot.
+// readers[] only ever holds readers that have transmitted since boot, so a reader whose battery died while
+// the gateway was restarting is not in it -- it would silently vanish from the dashboard instead of being
+// flagged, which is what this exists for. Served from the RAM cache above; call it from the main/web task.
+int gw_known_readers(GwKnownReader *out, int max) {
+  if (!out || max <= 0) return 0;
+  if (g_knownDirty) { g_knownDirty = false; knownReadersRefresh(); }
+  int n = 0;
+  for (int i = 0; i < g_knownN && n < max; i++) out[n++] = g_known[i];
+  return n;
+}
+
 // Open a window during which every announcing reader is auto-accepted (default 3 min from the web button).
 void gw_pair_all(uint16_t seconds) {
   g_pairUntil = millis() + (uint32_t)seconds * 1000;

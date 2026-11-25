@@ -38,6 +38,16 @@ card with its **import / export / power**, **battery** (with a charge bar), **op
 **last-seen** age. New readers show up greyed-out until you press **Bind** (or *Bind all for 3 min*); a
 bound reader also exposes a **Set interval** field and a **Flash firmware** picker right on its card.
 
+**Alerts.** A bound reader that stops reporting is called out in a red banner above the cards, naming the
+reader and what is wrong: *no signal* (after 15 minutes, or five missed reports for a longer interval),
+*battery low* (the reader's own low-power flag, or below 2.6 V), *stuck in bootloader mode*, and *not seen
+since the gateway started* — that last one matters because a reader whose battery died while the gateway
+was restarting has no live slot at all and would otherwise just be missing from the list without a word
+(the bound set comes straight out of NVS for exactly this, and the warning waits until a report from that
+reader is genuinely overdue, so a restart alone never raises it). Each message can be dismissed with ✕ when the
+outage is intentional; the dismissal covers that one episode, so the warning returns if the reader recovers
+and then fails again.
+
 ### History — daily kWh & cost
 ![Per-reader energy history](images/Overview_history.png)
 
@@ -329,6 +339,18 @@ For BTHome, the receiving Bluetooth proxy matters too: ESPHome's default passive
   `offline`, and `online` again on its next frame — so a reader with a flat battery or out of range shows up
   as *unavailable* in HA instead of freezing on its last value or dropping a bogus reading into the
   statistics. HA entities require **both** topics to be `online` (`availability_mode: all`).
+- **Reader health**: a retained `‹base›/‹id›/health` topic carries one word — `ok`, `no_signal`,
+  `battery_low` or `bootloader` — and is published whenever that verdict changes, *not* only when a frame
+  arrives (which is exactly what stops happening when a reader dies). Home Assistant gets it as a **Status**
+  sensor per reader. The same word is in the reader's JSON as `status`, and the mask behind it drives the
+  dashboard's alert banner, so web, API and MQTT can never disagree — the rule lives in one place
+  (`include/reader_status.h`): silent after five missed reports (floor 15 min, ceiling 1 h), battery low on
+  the reader's own low-power flag or below 2.6 V. This is a slower, calmer question than the per-reader
+  availability above, which answers "is this value still current?" and may flap on a weak link.
+- **Gateway summary**: the gateway's own state topic carries `readers_problem` (bound readers in trouble
+  right now) and `readers_missing` (bound, overdue, and not heard from at all since the gateway booted — a
+  reader that went flat while the gateway restarted has no live entity of its own to report it). HA gets
+  `readers_problem` as a **Reader problems** sensor, which is the single entity to put an automation on.
 - **Subscribe**: `‹base›/+/set_interval` (see above).
 - **Status** is exposed on `/api/status` (`connected`, `state`, `pub_count`, `last_pub_s`) and shown in the
   dashboard MQTT panel.
@@ -560,6 +582,16 @@ bekommt eine Karte mit **Bezug / Einspeisung / Leistung**, **Batterie** (mit Lad
 Status und **Zuletzt gesehen**. Neue Reader erscheinen ausgegraut, bis du **Bind** drückst (oder *Bind all
 for 3 min*); ein gekoppelter Reader zeigt zusätzlich ein **Intervall setzen**-Feld und einen **Firmware
 flashen**-Auswähler direkt auf der Karte.
+
+**Warnungen.** Meldet ein gebundener Reader nicht mehr, steht das in einem roten Banner über den Karten —
+mit Reader-Name und Problem: *kein Signal* (nach 15 Minuten, bei längerem Intervall nach fünf verpassten
+Meldungen), *Batterie schwach* (das Low-Power-Flag des Readers selbst oder unter 2,6 V), *steckt im
+Bootloader-Modus* und *seit dem Start des Gateways nicht gesehen*. Letzteres ist der wichtige Fall: ein
+Reader, dessen Batterie während eines Gateway-Neustarts leer wurde, hat gar keinen Live-Eintrag und
+würde sonst einfach kommentarlos in der Liste fehlen (die gebundene Menge kommt deshalb direkt aus dem
+NVS; die Warnung wartet, bis eine Meldung dieses Readers wirklich überfällig ist, ein Neustart allein
+löst sie also nie aus). Jede Meldung lässt sich mit ✕ ausblenden, wenn der Ausfall gewollt ist; das gilt für genau diesen
+Vorfall, die Warnung kommt also wieder, wenn der Reader sich erholt und später erneut ausfällt.
 
 ### History — kWh & Kosten pro Tag
 ![Energie-Verlauf je Reader](images/Overview_history.png)
@@ -861,6 +893,20 @@ Bei BTHome zählt auch der empfangende Bluetooth-Proxy: ESPHomes Standard-Scanfe
   publiziert, beim nächsten Frame wieder `online` — ein Reader mit leerer Batterie oder außer Reichweite steht
   in HA damit als *nicht verfügbar* da, statt auf dem letzten Wert einzufrieren oder einen falschen Wert in die
   Statistik zu schreiben. HA-Entities brauchen **beide** Topics auf `online` (`availability_mode: all`).
+- **Reader-Zustand**: ein retained Topic `‹base›/‹id›/health` trägt ein Wort — `ok`, `no_signal`,
+  `battery_low` oder `bootloader` — und wird immer dann publiziert, wenn sich dieses Urteil ändert, *nicht*
+  nur wenn ein Frame kommt (und genau das hört ja auf, wenn ein Reader stirbt). In Home Assistant kommt das
+  als **Status**-Sensor pro Reader an. Dasselbe Wort steht als `status` im JSON des Readers, und die
+  Bitmaske dahinter speist das Warnbanner des Dashboards — Web, API und MQTT können sich also nicht
+  widersprechen, die Regel steht an einer Stelle (`include/reader_status.h`): still nach fünf verpassten
+  Meldungen (min. 15 min, max. 1 h), Batterie schwach beim Low-Power-Flag des Readers oder unter 2,6 V.
+  Das ist die langsamere, ruhigere Frage als die Verfügbarkeit oben, die „ist dieser Wert noch aktuell?"
+  beantwortet und bei schwacher Funkstrecke auch mal pendelt.
+- **Gateway-Übersicht**: das Status-Topic des Gateways trägt `readers_problem` (gebundene Reader mit einem
+  Problem) und `readers_missing` (gebunden, überfällig und seit dem Start des Gateways überhaupt nicht
+  gehört — ein Reader, dessen Batterie während eines Neustarts leer wurde, hat gar keine eigene Entity
+  mehr, die das melden könnte). HA bekommt `readers_problem` als Sensor **Reader problems**; das ist die
+  eine Entity, auf die eine Automatisierung gehört.
 - **Subscribe**: `‹base›/+/set_interval` (siehe oben).
 - **Status** liegt auf `/api/status` (`connected`, `state`, `pub_count`, `last_pub_s`) und wird im
   MQTT-Panel angezeigt.
